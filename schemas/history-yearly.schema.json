@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frasermolyneux.com/schemas/status-pages/history-yearly.schema.json",
+  "title": "Per-site annual summary (blob: history/{site}-yearly.json)",
+  "description": "Written nightly alongside the daily history. Lightweight summary suitable for headline figures like 'Q1 2024: 99.97%' or 'last 12 months'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "site", "generatedAt", "componentsById"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "site": { "type": "string" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "componentsById": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["displayName", "years"],
+        "properties": {
+          "displayName": { "type": "string" },
+          "years": {
+            "type": "array",
+            "description": "Oldest first. Current year is recomputed each night.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["year"],
+              "properties": {
+                "year": { "type": "integer", "minimum": 2020, "maximum": 2100 },
+                "uptime": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+                "totalDays": { "type": "integer", "minimum": 0 },
+                "operationalDays": { "type": "integer", "minimum": 0 },
+                "degradedDays": { "type": "integer", "minimum": 0 },
+                "outageDays": { "type": "integer", "minimum": 0 },
+                "unknownDays": { "type": "integer", "minimum": 0 },
+                "maintenanceDays": { "type": "integer", "minimum": 0 },
+                "incidentCount": { "type": "integer", "minimum": 0, "description": "Distinct incident issues affecting this component that closed within the year." },
+                "quarters": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["q", "uptime"],
+                    "properties": {
+                      "q": { "type": "integer", "minimum": 1, "maximum": 4 },
+                      "uptime": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

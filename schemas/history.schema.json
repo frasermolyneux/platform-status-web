@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frasermolyneux.com/schemas/status-pages/history.schema.json",
+  "title": "Per-site daily history (blob: history/{site}.json)",
+  "description": "Written nightly by status-rollup. Source of truth for any day older than 'today'. 3-year horizon, no lifecycle policy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "site", "generatedAt", "componentsById"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "site": { "type": "string" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "rolledUpThrough": {
+      "type": "string",
+      "format": "date",
+      "description": "UTC date of the most recent fully-sealed day in this file."
+    },
+    "componentsById": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["displayName", "days"],
+        "properties": {
+          "displayName": { "type": "string" },
+          "kind": { "enum": ["leaf", "group"], "default": "leaf" },
+          "parentId": { "type": ["string", "null"] },
+          "days": {
+            "type": "array",
+            "description": "Oldest first. Each entry sealed once written; the last 3 entries may be re-written each night to absorb late-arriving data.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["d", "s"],
+              "properties": {
+                "d": { "type": "string", "format": "date", "description": "UTC date (YYYY-MM-DD)." },
+                "s": { "enum": ["operational", "degraded", "outage", "maintenance", "unknown"] },
+                "u": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Uptime ratio." },
+                "t": { "type": ["integer", "null"], "minimum": 0, "description": "Total samples (sum of itemCount)." },
+                "f": { "type": ["integer", "null"], "minimum": 0, "description": "Failed samples (sum of itemCount where success=false)." },
+                "p95": { "type": ["number", "null"], "description": "p95 duration in ms." },
+                "o": { "type": "boolean", "default": false, "description": "Overridden by sites/<id>/overrides.yaml." }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
