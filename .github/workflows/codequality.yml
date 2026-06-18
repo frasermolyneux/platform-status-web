@@ -38,6 +38,12 @@ jobs:
       id-token: write
       security-events: write
     uses: frasermolyneux/actions/.github/workflows/devops-secure-scanning.yml@main
+    with:
+      # Exclude eslint — the MSDO ESLint runner uses --no-config-lookup with the
+      # SDL flat config, which cannot discover the Astro client TS files (they are
+      # "not configured" per ESLint 9 flat-config rules and cause exit-code 2).
+      # SonarCloud covers JS/TS analysis for this repo.
+      tools: "templateanalyzer,checkov"
 
   dependency-review:
     permissions:

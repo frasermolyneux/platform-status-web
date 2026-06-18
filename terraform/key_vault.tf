@@ -22,6 +22,7 @@ resource "azurerm_key_vault_secret" "github_pat" {
   name         = "github-pat"
   value        = "placeholder"
   key_vault_id = azurerm_key_vault.kv.id
+  content_type = "text/plain"
 
   lifecycle {
     ignore_changes = [value]
@@ -32,6 +33,7 @@ resource "azurerm_key_vault_secret" "webhook_secret" {
   name         = "webhook-secret"
   value        = "placeholder"
   key_vault_id = azurerm_key_vault.kv.id
+  content_type = "text/plain"
 
   lifecycle {
     ignore_changes = [value]
