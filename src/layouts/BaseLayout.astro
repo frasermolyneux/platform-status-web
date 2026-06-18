@@ -1,0 +1,33 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  accent?: string;
+}
+
+const { title, accent } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+    {accent && <style is:inline define:vars={{ accent }}>{`:root { --color-accent: var(--accent); }`}</style>}
+  </head>
+  <body>
+    <header class="site-header">
+      <h1><a href="/">Platform Status</a></h1>
+      <nav><a href="/">All sites</a></nav>
+    </header>
+    <main class="container">
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <span>Powered by Application Insights + GitHub Issues</span>
+    </footer>
+  </body>
+</html>

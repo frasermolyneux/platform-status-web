@@ -1,0 +1,15 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { sites } from '../config/sites';
+---
+
+<BaseLayout title="Platform Status">
+  <h2>Status pages</h2>
+  <p class="component-desc">Select a platform to view its current status.</p>
+  {sites.map((site) => (
+    <a class="site-card" href={`/${site.slug}/`}>
+      <h2>{site.name}</h2>
+      <p>{site.description}</p>
+    </a>
+  ))}
+</BaseLayout>

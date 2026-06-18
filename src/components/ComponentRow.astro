@@ -1,0 +1,30 @@
+---
+import type { ComponentAvailability } from '../lib/types';
+import type { MonitoredComponent } from '../config/sites';
+
+interface Props {
+  component: MonitoredComponent;
+  availability: ComponentAvailability;
+}
+
+const { component, availability } = Astro.props;
+const uptimePct = (availability.uptime * 100).toFixed(2);
+---
+
+<li class="component">
+  <div>
+    <div class="component-name">
+      {component.url ? <a href={component.url} target="_blank" rel="noopener noreferrer">{component.name}</a> : component.name}
+    </div>
+    {component.description && <div class="component-desc">{component.description}</div>}
+  </div>
+  <div style="text-align:right">
+    <span class={`status-dot ${availability.current}`} aria-hidden="true"></span>
+    <div class="component-desc">{uptimePct}% uptime</div>
+  </div>
+  <div class="uptime-bar" aria-label={`Availability history for ${component.name}`}>
+    {availability.history.map((point) => (
+      <span class={point.status} title={`${point.timestamp} — ${(point.successRate * 100).toFixed(1)}%`}></span>
+    ))}
+  </div>
+</li>

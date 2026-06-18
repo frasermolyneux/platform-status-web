@@ -1,0 +1,60 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import ComponentRow from '../../components/ComponentRow.astro';
+import IncidentCard from '../../components/IncidentCard.astro';
+import { sites, getSite } from '../../config/sites';
+import { getAvailability } from '../../lib/adapters/appInsights';
+import { getIncidents } from '../../lib/adapters/githubIssues';
+import { overallStatus, statusLabel } from '../../lib/status';
+
+export function getStaticPaths() {
+  return sites.map((site) => ({ params: { site: site.slug } }));
+}
+
+const { site: slug } = Astro.params;
+const site = getSite(slug!);
+if (!site) {
+  throw new Error(`Unknown site: ${slug}`);
+}
+
+const [availability, incidents] = await Promise.all([
+  getAvailability(site),
+  getIncidents(site)
+]);
+const status = overallStatus(availability);
+const availabilityByComponent = new Map(availability.map((a) => [a.componentId, a]));
+const activeIncidents = incidents.filter((i) => i.status !== 'resolved');
+const resolvedIncidents = incidents.filter((i) => i.status === 'resolved');
+---
+
+<BaseLayout title={`${site.name} status`} accent={site.accentColor}>
+  <section class={`status-banner ${status}`} aria-live="polite">
+    <span class={`status-dot ${status}`} aria-hidden="true"></span>
+    <div>
+      <strong>{statusLabel(status)}</strong>
+      <div class="component-desc">{site.name} · {site.description}</div>
+    </div>
+  </section>
+
+  <h2 class="section-title">Components</h2>
+  <ul class="component-list">
+    {site.components.map((component) => {
+      const a = availabilityByComponent.get(component.id);
+      return a ? <ComponentRow component={component} availability={a} /> : null;
+    })}
+  </ul>
+
+  <h2 class="section-title">Active incidents</h2>
+  {activeIncidents.length === 0 ? (
+    <p class="component-desc">No active incidents.</p>
+  ) : (
+    activeIncidents.map((i) => <IncidentCard incident={i} />)
+  )}
+
+  <h2 class="section-title">Recently resolved</h2>
+  {resolvedIncidents.length === 0 ? (
+    <p class="component-desc">No recent incidents.</p>
+  ) : (
+    resolvedIncidents.map((i) => <IncidentCard incident={i} />)
+  )}
+</BaseLayout>

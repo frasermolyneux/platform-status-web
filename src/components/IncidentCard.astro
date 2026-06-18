@@ -1,0 +1,19 @@
+---
+import type { Incident } from '../lib/types';
+
+interface Props {
+  incident: Incident;
+}
+
+const { incident } = Astro.props;
+const updated = new Date(incident.updatedAt).toUTCString();
+---
+
+<article class={`incident ${incident.impact}`}>
+  <header>
+    <a href={incident.url} target="_blank" rel="noopener noreferrer"><strong>{incident.title}</strong></a>
+    <time datetime={incident.updatedAt}>{updated}</time>
+  </header>
+  <div class="component-desc">Status: {incident.status} · Impact: {incident.impact}</div>
+  {incident.body && <p>{incident.body}</p>}
+</article>
