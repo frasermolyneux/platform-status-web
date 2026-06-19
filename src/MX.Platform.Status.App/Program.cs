@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MX.Platform.Status.App.Caching;
 using MX.Platform.Status.App.Contracts;
+using MX.Platform.Status.App.Functions;
 using MX.Platform.Status.App.History;
 using MX.Platform.Status.App.Incidents;
 using MX.Platform.Status.App.Merging;
@@ -55,9 +56,9 @@ internal static class Program
                 services.AddSingleton<AvailabilityClient>();
                 services.AddSingleton<ComponentStatusCalculator>();
                 services.AddSingleton<IncidentFetcher>();
-                services.AddSingleton<IncidentRenderer>();
                 services.AddSingleton<MaintenanceFetcher>();
                 services.AddSingleton<HistoryReader>();
+                services.AddSingleton<StatusDependencies>();
                 services.AddSingleton(sp => new InMemoryCache<StatusApiResponse>(TimeSpan.FromSeconds(GetIntEnvironmentVariable("LIVE_CACHE_TTL_SECONDS", 30))));
                 services.AddSingleton<StaleCacheBlob>();
                 services.AddSingleton<StatusMerger>();

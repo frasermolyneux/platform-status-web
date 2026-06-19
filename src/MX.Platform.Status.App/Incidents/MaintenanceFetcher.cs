@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.App.Sites;
@@ -5,18 +6,14 @@ using Octokit;
 
 namespace MX.Platform.Status.App.Incidents;
 
-public sealed class MaintenanceFetcher
+public sealed partial class MaintenanceFetcher
 {
-    private static readonly Regex FrontMatterValue = new(@"^(?<key>[A-Za-z][A-Za-z0-9-]*):\s*(?<value>.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
-
     private readonly ContentRepoClient _contentRepoClient;
-    private readonly IncidentRenderer _incidentRenderer;
     private readonly string _repo;
 
-    public MaintenanceFetcher(ContentRepoClient contentRepoClient, IncidentRenderer incidentRenderer)
+    public MaintenanceFetcher(ContentRepoClient contentRepoClient)
     {
         _contentRepoClient = contentRepoClient;
-        _incidentRenderer = incidentRenderer;
         _repo = Environment.GetEnvironmentVariable("STATUS_CONTENT_REPO") ?? "frasermolyneux/status-pages";
     }
 
@@ -48,7 +45,20 @@ public sealed class MaintenanceFetcher
             return null;
         }
 
-        var state = now < scheduledStart ? "scheduled" : now <= scheduledEnd ? "in-progress" : "completed";
+        string state;
+        if (now < scheduledStart)
+        {
+            state = "scheduled";
+        }
+        else if (now <= scheduledEnd)
+        {
+            state = "in-progress";
+        }
+        else
+        {
+            state = "completed";
+        }
+
         return new MaintenanceWindow
         {
             Id = issue.Number,
@@ -58,7 +68,7 @@ public sealed class MaintenanceFetcher
             ScheduledStart = scheduledStart,
             ScheduledEnd = scheduledEnd,
             State = state,
-            Body = _incidentRenderer.Render(issue.Body ?? string.Empty)
+            Body = IncidentRenderer.Render(issue.Body ?? string.Empty)
         };
     }
 
@@ -83,13 +93,13 @@ public sealed class MaintenanceFetcher
         }
 
         var frontMatter = trimmed[4..endIndex];
-        return FrontMatterValue.Matches(frontMatter)
+        return FrontMatterValue().Matches(frontMatter)
             .ToDictionary(match => match.Groups["key"].Value, match => match.Groups["value"].Value.Trim(), StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool TryParseDate(IReadOnlyDictionary<string, string> metadata, string key, out DateTimeOffset value)
+    private static bool TryParseDate(Dictionary<string, string> metadata, string key, out DateTimeOffset value)
     {
-        if (metadata.TryGetValue(key, out var raw) && DateTimeOffset.TryParse(raw, out value))
+        if (metadata.TryGetValue(key, out var raw) && DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.None, out value))
         {
             return true;
         }
@@ -97,4 +107,7 @@ public sealed class MaintenanceFetcher
         value = default;
         return false;
     }
+
+    [GeneratedRegex(@"^(?<key>[A-Za-z][A-Za-z0-9-]*):\s*(?<value>.+)$", RegexOptions.Multiline)]
+    private static partial Regex FrontMatterValue();
 }

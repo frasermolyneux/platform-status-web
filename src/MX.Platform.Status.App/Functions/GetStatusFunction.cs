@@ -18,10 +18,7 @@ public sealed class GetStatusFunction
 {
     private readonly SiteResolver _siteResolver;
     private readonly SiteConfigLoader _siteConfigLoader;
-    private readonly AvailabilityClient _availabilityClient;
-    private readonly HistoryReader _historyReader;
-    private readonly IncidentFetcher _incidentFetcher;
-    private readonly MaintenanceFetcher _maintenanceFetcher;
+    private readonly StatusDependencies _statusDependencies;
     private readonly StatusMerger _statusMerger;
     private readonly InMemoryCache<StatusApiResponse> _cache;
     private readonly StaleCacheBlob _staleCacheBlob;
@@ -30,10 +27,7 @@ public sealed class GetStatusFunction
     public GetStatusFunction(
         SiteResolver siteResolver,
         SiteConfigLoader siteConfigLoader,
-        AvailabilityClient availabilityClient,
-        HistoryReader historyReader,
-        IncidentFetcher incidentFetcher,
-        MaintenanceFetcher maintenanceFetcher,
+        StatusDependencies statusDependencies,
         StatusMerger statusMerger,
         InMemoryCache<StatusApiResponse> cache,
         StaleCacheBlob staleCacheBlob,
@@ -41,10 +35,7 @@ public sealed class GetStatusFunction
     {
         _siteResolver = siteResolver;
         _siteConfigLoader = siteConfigLoader;
-        _availabilityClient = availabilityClient;
-        _historyReader = historyReader;
-        _incidentFetcher = incidentFetcher;
-        _maintenanceFetcher = maintenanceFetcher;
+        _statusDependencies = statusDependencies;
         _statusMerger = statusMerger;
         _cache = cache;
         _staleCacheBlob = staleCacheBlob;
@@ -73,9 +64,9 @@ public sealed class GetStatusFunction
         {
             var snapshot = await _siteConfigLoader.LoadSiteAsync(siteId).ConfigureAwait(false);
             var liveData = await QueryLiveDataAsync(snapshot).ConfigureAwait(false);
-            var history = await _historyReader.ReadDailyHistoryAsync(siteId).ConfigureAwait(false);
-            var incidents = await _incidentFetcher.FetchForSiteAsync(siteId).ConfigureAwait(false);
-            var maintenance = await _maintenanceFetcher.FetchForSiteAsync(siteId).ConfigureAwait(false);
+            var history = await _statusDependencies.HistoryReader.ReadDailyHistoryAsync(siteId).ConfigureAwait(false);
+            var incidents = await _statusDependencies.IncidentFetcher.FetchForSiteAsync(siteId).ConfigureAwait(false);
+            var maintenance = await _statusDependencies.MaintenanceFetcher.FetchForSiteAsync(siteId).ConfigureAwait(false);
             var response = _statusMerger.Merge(snapshot, liveData, history, incidents, maintenance);
 
             _cache.Set(siteId, response);
@@ -117,7 +108,7 @@ public sealed class GetStatusFunction
                 continue;
             }
 
-            results[component.Id] = await _availabilityClient.QueryLiveTodayAsync(resource.ResourceId, component.Source.Filter).ConfigureAwait(false);
+            results[component.Id] = await _statusDependencies.AvailabilityClient.QueryLiveTodayAsync(resource.ResourceId, component.Source.Filter).ConfigureAwait(false);
         }
 
         return results;
@@ -154,3 +145,9 @@ public sealed class GetStatusFunction
         }
     }
 }
+
+public sealed record StatusDependencies(
+    AvailabilityClient AvailabilityClient,
+    HistoryReader HistoryReader,
+    IncidentFetcher IncidentFetcher,
+    MaintenanceFetcher MaintenanceFetcher);

@@ -3,11 +3,9 @@ using System.Text.RegularExpressions;
 
 namespace MX.Platform.Status.App.Incidents;
 
-public sealed class IncidentRenderer
+public sealed partial class IncidentRenderer
 {
-    private static readonly Regex SingleLineComment = new(@"<!--\s*internal\s*-->.*?(?:-->)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    public string Render(string content)
+    public static string Render(string content)
     {
         if (string.IsNullOrEmpty(content))
         {
@@ -41,7 +39,7 @@ public sealed class IncidentRenderer
                 continue;
             }
 
-            line = SingleLineComment.Replace(line, string.Empty);
+            line = SingleLineComment().Replace(line, string.Empty);
             if (builder.Length > 0)
             {
                 builder.Append('\n');
@@ -52,4 +50,7 @@ public sealed class IncidentRenderer
 
         return builder.ToString().Trim();
     }
+
+    [GeneratedRegex(@"<!--\s*internal\s*-->.*?(?:-->)?", RegexOptions.IgnoreCase)]
+    private static partial Regex SingleLineComment();
 }

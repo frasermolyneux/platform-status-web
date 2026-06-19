@@ -66,49 +66,14 @@ public sealed class StatusMerger
         var windowDays = Math.Max(1, component.Sla.WindowDays);
         var historicalDays = BuildHistoricalWindow(component, history, incidents, today, windowDays);
         var todayHistory = historicalDays[^1];
-
-        ComponentStatus liveStatus;
-        DateTimeOffset? lastSampleAt = null;
-        if (component.Kind.Equals("group", StringComparison.OrdinalIgnoreCase))
-        {
-            liveStatus = children.Length == 0 ? ComponentStatus.Unknown : _componentStatusCalculator.WorstOf(children.Select(child => ParseStatus(child.Status)));
-            lastSampleAt = children.Select(child => child.LastSampleAt).Where(value => value.HasValue).Max();
-        }
-        else if (component.Source.Kind.Equals("static", StringComparison.OrdinalIgnoreCase))
-        {
-            liveStatus = ParseStaticStatus(component.Source.Status);
-        }
-        else if (liveData.TryGetValue(component.Id, out var telemetry))
-        {
-            liveStatus = _componentStatusCalculator.ClassifyLiveStatus(telemetry.Samples, telemetry.Failures, telemetry.LastSeen, component.Sla);
-            lastSampleAt = telemetry.LastSeen;
-            historicalDays[^1] = todayHistory with
-            {
-                Status = liveStatus,
-                Uptime = telemetry.Samples == 0 ? (double?)null : 1d - (double)telemetry.Failures / telemetry.Samples,
-                Total = telemetry.Samples,
-                Failed = telemetry.Failures
-            };
-        }
-        else
-        {
-            liveStatus = todayHistory.Status;
-        }
+        var (liveStatus, lastSampleAt) = ResolveLiveStatus(component, children, liveData, historicalDays, todayHistory);
 
         var incidentStatuses = incidents
             .Where(incident => incident.ResolvedAt is null && incident.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase))
             .Select(incident => incident.Severity.ToComponentStatus())
             .ToArray();
 
-        var mergedStatus = incidentStatuses.Length == 0
-            ? liveStatus
-            : _componentStatusCalculator.WorstOf([liveStatus, .. incidentStatuses.Where(status => status != ComponentStatus.Maintenance)]);
-
-        var maintenanceActive = maintenance.Any(item => item.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase) && item.State.Equals("in-progress", StringComparison.OrdinalIgnoreCase));
-        if (maintenanceActive)
-        {
-            mergedStatus = ComponentStatus.Maintenance;
-        }
+        var mergedStatus = ApplyMergedStatus(component.Id, liveStatus, incidentStatuses, maintenance);
 
         var uptimeValues = historicalDays.Where(day => day.Uptime.HasValue && day.Status != ComponentStatus.Maintenance).Select(day => day.Uptime!.Value).ToArray();
         var uptimeRatio = uptimeValues.Length == 0 ? (double?)null : uptimeValues.Average();
@@ -135,6 +100,58 @@ public sealed class StatusMerger
             OpenIncidentIds = incidents.Where(incident => incident.ResolvedAt is null && incident.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase)).Select(incident => incident.Id).Distinct().OrderBy(id => id).ToArray(),
             Children = children.Length == 0 ? null : children
         };
+    }
+
+    private (ComponentStatus LiveStatus, DateTimeOffset? LastSampleAt) ResolveLiveStatus(
+        Component component,
+        IReadOnlyList<ComponentDto> children,
+        IReadOnlyDictionary<string, ComponentLiveTelemetry> liveData,
+        IList<HistoryDay> historicalDays,
+        HistoryDay todayHistory)
+    {
+        if (component.Kind.Equals("group", StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                children.Count == 0 ? ComponentStatus.Unknown : _componentStatusCalculator.WorstOf(children.Select(child => ParseStatus(child.Status))),
+                children.Select(child => child.LastSampleAt).Where(value => value.HasValue).Max());
+        }
+
+        if (component.Source.Kind.Equals("static", StringComparison.OrdinalIgnoreCase))
+        {
+            return (ParseStaticStatus(component.Source.Status), null);
+        }
+
+        if (liveData.TryGetValue(component.Id, out var telemetry))
+        {
+            var liveStatus = _componentStatusCalculator.ClassifyLiveStatus(telemetry.Samples, telemetry.Failures, telemetry.LastSeen, component.Sla);
+            historicalDays[^1] = todayHistory with
+            {
+                Status = liveStatus,
+                Uptime = telemetry.Samples == 0 ? (double?)null : 1d - (double)telemetry.Failures / telemetry.Samples,
+                Total = telemetry.Samples,
+                Failed = telemetry.Failures
+            };
+
+            return (liveStatus, telemetry.LastSeen);
+        }
+
+        return (todayHistory.Status, null);
+    }
+
+    private ComponentStatus ApplyMergedStatus(
+        string componentId,
+        ComponentStatus liveStatus,
+        IReadOnlyList<ComponentStatus> incidentStatuses,
+        IReadOnlyList<MaintenanceWindow> maintenance)
+    {
+        if (maintenance.Any(item => item.Components.Contains(componentId, StringComparer.OrdinalIgnoreCase) && item.State.Equals("in-progress", StringComparison.OrdinalIgnoreCase)))
+        {
+            return ComponentStatus.Maintenance;
+        }
+
+        return incidentStatuses.Count == 0
+            ? liveStatus
+            : _componentStatusCalculator.WorstOf([liveStatus, .. incidentStatuses.Where(status => status != ComponentStatus.Maintenance)]);
     }
 
     private List<HistoryDay> BuildHistoricalWindow(Component component, HistoryDocument? history, IReadOnlyList<Incident> incidents, DateOnly today, int windowDays)

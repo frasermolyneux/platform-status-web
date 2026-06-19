@@ -7,13 +7,11 @@ namespace MX.Platform.Status.App.Incidents;
 public sealed class IncidentFetcher
 {
     private readonly ContentRepoClient _contentRepoClient;
-    private readonly IncidentRenderer _incidentRenderer;
     private readonly string _repo;
 
-    public IncidentFetcher(ContentRepoClient contentRepoClient, IncidentRenderer incidentRenderer)
+    public IncidentFetcher(ContentRepoClient contentRepoClient)
     {
         _contentRepoClient = contentRepoClient;
-        _incidentRenderer = incidentRenderer;
         _repo = Environment.GetEnvironmentVariable("STATUS_CONTENT_REPO") ?? "frasermolyneux/status-pages";
     }
 
@@ -40,7 +38,7 @@ public sealed class IncidentFetcher
                 {
                     At = issue.CreatedAt,
                     State = state,
-                    Body = _incidentRenderer.Render(issue.Body ?? string.Empty),
+                    Body = IncidentRenderer.Render(issue.Body ?? string.Empty),
                     Author = issue.User?.Login
                 }
             };
@@ -49,7 +47,7 @@ public sealed class IncidentFetcher
             {
                 At = comment.CreatedAt,
                 State = state,
-                Body = _incidentRenderer.Render(comment.Body ?? string.Empty),
+                Body = IncidentRenderer.Render(comment.Body ?? string.Empty),
                 Author = comment.User?.Login
             }));
 

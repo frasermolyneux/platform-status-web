@@ -49,7 +49,7 @@ public sealed class InvalidateCacheFunction
     private async Task<string> GetExpectedSecretAsync()
     {
         var secretUri = new Uri(Environment.GetEnvironmentVariable("WEBHOOK_SECRET_URI") ?? throw new InvalidOperationException("WEBHOOK_SECRET_URI is not configured."));
-        var secretName = secretUri.Segments.Last().Trim('/');
+        var secretName = secretUri.Segments[^1].Trim('/');
         Response<KeyVaultSecret> secret = await _secretClient.GetSecretAsync(secretName).ConfigureAwait(false);
         return secret.Value.Value;
     }
