@@ -1,5 +1,5 @@
 resource_group_name  = "rg-tf-platform-status-web-prd-uksouth-01"
-storage_account_name = "PLACEHOLDER_PRD_SA"
+storage_account_name = "sa163be00143b6"
 container_name       = "tfstate"
 key                  = "terraform.tfstate"
 use_oidc             = true

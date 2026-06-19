@@ -1,5 +1,5 @@
 resource_group_name  = "rg-tf-platform-status-web-dev-uksouth-01"
-storage_account_name = "PLACEHOLDER_DEV_SA"
+storage_account_name = "saeaa2fba3f38a"
 container_name       = "tfstate"
 key                  = "terraform.tfstate"
 use_oidc             = true
