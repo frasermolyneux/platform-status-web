@@ -36,6 +36,18 @@ skip-check:
   - CKV_AZURE_34   # Blob container private access — already private
   - CKV_AZURE_33   # Storage Queue logging — no queues used
 
+  # --- Key Vault composite checks ---
+  - CKV2_AZURE_32  # Key Vault private endpoint — MI access only, VNet/PE is Phase 2
+
+  # --- Storage composite checks ---
+  - CKV2_AZURE_1   # Storage CMK encryption — not required for non-sensitive cache/config blobs
+  - CKV2_AZURE_21  # Storage blob logging for read requests — internal cache blobs, audit not needed
+  - CKV2_AZURE_33  # Storage private endpoint — internal blobs accessed via MI, PE is Phase 2
+  - CKV2_AZURE_38  # Storage soft-delete — cache blobs are regenerated, soft-delete unnecessary
+  - CKV2_AZURE_40  # Storage SAS expiration policy — SAS not used, MI RBAC only
+  - CKV2_AZURE_41  # Storage shared key disabled — Terraform state ops require shared key
+
   # --- GitHub Actions (reusable workflow patterns, not injection-vulnerable) ---
   - CKV_GHA_2      # Shell injection — inputs are from trusted workflow dispatch/labels
   - CKV_GHA_5      # Artifact cosign — not required for internal deployments
+  - CKV_GHA_7      # Workflow dispatch inputs — destroy workflow needs environment input by design
