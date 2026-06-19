@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => resolve());
 
 // Auto-refresh every 30s
 setInterval(() => {
-  if (document.visibilityState === 'visible' && location.pathname === '/') {
-    loadAndRender(renderOverview);
+  if (document.visibilityState === 'visible') {
+    resolve();
   }
 }, 30_000);

@@ -1,14 +1,17 @@
 using MX.Platform.Status.App.Models;
+using Microsoft.Extensions.Logging;
 
 namespace MX.Platform.Status.App.Sites;
 
 public sealed class SiteResolver
 {
     private readonly SiteConfigLoader _siteConfigLoader;
+    private readonly ILogger<SiteResolver> _logger;
 
-    public SiteResolver(SiteConfigLoader siteConfigLoader)
+    public SiteResolver(SiteConfigLoader siteConfigLoader, ILogger<SiteResolver> logger)
     {
         _siteConfigLoader = siteConfigLoader;
+        _logger = logger;
     }
 
     public async Task<string?> ResolveSiteIdAsync(string? hostHeader, CancellationToken cancellationToken = default)
@@ -42,8 +45,9 @@ public sealed class SiteResolver
                     domains[domain] = snapshot.Site.Id;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning(ex, "Failed to load site configuration for '{SiteId}' during domain resolution.", siteId);
             }
         }
 

@@ -3,6 +3,15 @@ import { getStatusInfo, getStatusDotHtml } from './status-colors';
 import { formatRelative, formatDate, formatDateTime } from './time';
 import { navigate } from './router';
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 export function renderOverview(data: StatusResponse): void {
   const app = document.getElementById('app');
   if (!app) return;
@@ -22,7 +31,7 @@ export function renderOverview(data: StatusResponse): void {
     ${staleWarning}
     <div class="summary-banner ${summaryInfo.className}">
       <span class="summary-icon">${getStatusDotHtml(data.summary.status)}</span>
-      <span class="summary-text">${data.summary.message || summaryInfo.label}</span>
+      <span class="summary-text">${data.summary.message ? escapeHtml(data.summary.message) : summaryInfo.label}</span>
     </div>
     <div class="updated-at">Updated ${formatRelative(data.generatedAt)}</div>
   `;
@@ -49,9 +58,9 @@ export function renderOverview(data: StatusResponse): void {
     html += '<section class="maintenance-section"><h2>Scheduled Maintenance</h2>';
     for (const m of data.maintenance) {
       html += `<div class="maintenance-card">
-        <h3>${m.title}</h3>
+        <h3>${escapeHtml(m.title)}</h3>
         <p>${formatDateTime(m.scheduledStart)} — ${formatDateTime(m.scheduledEnd)}</p>
-        <span class="badge badge-maintenance">${m.state}</span>
+        <span class="badge badge-maintenance">${escapeHtml(m.state)}</span>
       </div>`;
     }
     html += '</section>';
@@ -81,8 +90,8 @@ function renderComponentRow(c: ComponentDto): string {
   const info = getStatusInfo(c.status);
   const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}%` : '—';
   return `<div class="component-row">
-    <a href="/component/${c.id}" data-component-id="${c.id}" class="component-name">${c.name}</a>
-    <span class="component-uptime">${uptime}</span>
+    <a href="/component/${escapeHtml(c.id)}" data-component-id="${escapeHtml(c.id)}" class="component-name">${escapeHtml(c.name)}</a>
+    <span class="component-uptime">${escapeHtml(uptime)}</span>
     <span class="component-status ${info.className}">${info.label}</span>
   </div>`;
 }
@@ -90,24 +99,28 @@ function renderComponentRow(c: ComponentDto): string {
 function renderIncidentCard(inc: IncidentDto): string {
   const info = getStatusInfo(inc.severity);
   return `<div class="incident-card ${info.className}">
-    <h3><a href="/incident/${inc.id}">${inc.title}</a></h3>
+    <h3><a href="/incident/${escapeHtml(String(inc.id))}">${escapeHtml(inc.title)}</a></h3>
     <div class="incident-meta">
-      <span class="badge badge-${inc.severity}">${inc.severity}</span>
-      <span class="badge badge-state">${inc.state}</span>
+      <span class="badge badge-${escapeHtml(inc.severity)}">${escapeHtml(inc.severity)}</span>
+      <span class="badge badge-state">${escapeHtml(inc.state)}</span>
       <span>${formatRelative(inc.createdAt)}</span>
     </div>
-    ${inc.updates.length > 0 ? `<p class="incident-latest">${inc.updates[inc.updates.length - 1].body.slice(0, 200)}</p>` : ''}
+    ${inc.updates.length > 0
+      // Server-rendered incident HTML is trusted and intentionally rendered without escaping.
+      ? `<p class="incident-latest">${inc.updates[inc.updates.length - 1].body.slice(0, 200)}</p>`
+      : ''}
   </div>`;
 }
 
 function renderHistoryBars(c: ComponentDto): string {
   const bars = c.history.map(d => {
     const info = getStatusInfo(d.status);
-    return `<div class="history-bar ${info.className}" title="${d.date}: ${info.label}${d.uptime != null ? ` (${(d.uptime * 100).toFixed(1)}%)` : ''}"></div>`;
+    const uptime = d.uptime != null ? ` (${(d.uptime * 100).toFixed(1)}%)` : '';
+    return `<div class="history-bar ${info.className}" title="${escapeHtml(d.date)}: ${info.label}${escapeHtml(uptime)}"></div>`;
   }).join('');
   const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}% uptime` : '';
   return `<div class="history-component">
-    <div class="history-label">${c.name} <span class="history-uptime">${uptime}</span></div>
+    <div class="history-label">${escapeHtml(c.name)} <span class="history-uptime">${escapeHtml(uptime)}</span></div>
     <div class="history-bars">${bars}</div>
     <div class="history-range"><span>${c.history.length > 0 ? formatDate(c.history[0].date) : ''}</span><span>${c.history.length > 0 ? formatDate(c.history[c.history.length - 1].date) : ''}</span></div>
   </div>`;
@@ -124,10 +137,10 @@ export function renderComponent(data: StatusResponse, componentId: string): void
   const info = getStatusInfo(component.status);
   app.innerHTML = `
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
-    <h2>${component.name}</h2>
-    ${component.description ? `<p>${component.description}</p>` : ''}
+    <h2>${escapeHtml(component.name)}</h2>
+    ${component.description ? `<p>${escapeHtml(component.description)}</p>` : ''}
     <div class="component-detail-status ${info.className}">${info.label}</div>
-    ${component.link ? `<p><a href="${component.link}" target="_blank">${component.link}</a></p>` : ''}
+    ${component.link ? `<p><a href="${escapeHtml(component.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(component.link)}</a></p>` : ''}
     ${renderHistoryBars(component)}
   `;
 }
@@ -143,10 +156,10 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
   const info = getStatusInfo(incident.severity);
   let html = `
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
-    <h2>${incident.title}</h2>
+    <h2>${escapeHtml(incident.title)}</h2>
     <div class="incident-meta">
-      <span class="badge badge-${incident.severity}">${incident.severity}</span>
-      <span class="badge badge-state">${incident.state}</span>
+      <span class="badge badge-${escapeHtml(incident.severity)}">${escapeHtml(incident.severity)}</span>
+      <span class="badge badge-state">${escapeHtml(incident.state)}</span>
       <span>Opened ${formatDateTime(incident.createdAt)}</span>
       ${incident.resolvedAt ? `<span>Resolved ${formatDateTime(incident.resolvedAt)}</span>` : ''}
     </div>
@@ -154,7 +167,8 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
   `;
   for (const update of incident.updates) {
     html += `<div class="timeline-entry">
-      <div class="timeline-meta">${formatDateTime(update.at)} — <strong>${update.state}</strong></div>
+      <div class="timeline-meta">${formatDateTime(update.at)} — <strong>${escapeHtml(update.state)}</strong></div>
+      <!-- Server-rendered incident HTML is trusted and intentionally rendered without escaping. -->
       <div class="timeline-body">${update.body}</div>
     </div>`;
   }

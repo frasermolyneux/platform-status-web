@@ -50,8 +50,7 @@ public sealed class GetStatusFunction
         if (siteId is null)
         {
             var response = req.CreateResponse(HttpStatusCode.NotFound);
-            var configuredDomains = await _siteResolver.GetConfiguredDomainsAsync().ConfigureAwait(false);
-            await response.WriteStringAsync($"Unconfigured host. Configured domains: {string.Join(", ", configuredDomains)}").ConfigureAwait(false);
+            await response.WriteStringAsync("Host not configured for this status service.").ConfigureAwait(false);
             return response;
         }
 
@@ -95,23 +94,23 @@ public sealed class GetStatusFunction
 
     private async Task<Dictionary<string, ComponentLiveTelemetry>> QueryLiveDataAsync(SiteConfigurationSnapshot snapshot)
     {
-        var results = new Dictionary<string, ComponentLiveTelemetry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var component in Flatten(snapshot.Components.Components))
+        var components = Flatten(snapshot.Components.Components)
+            .Where(c => c.Kind.Equals("leaf", StringComparison.OrdinalIgnoreCase)
+                && c.Source.Kind.Equals("appInsights", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(c.Source.Resource)
+                && snapshot.Site.AppInsights.ContainsKey(c.Source.Resource))
+            .ToList();
+
+        var tasks = components.Select(async component =>
         {
-            if (!component.Kind.Equals("leaf", StringComparison.OrdinalIgnoreCase) || !component.Source.Kind.Equals("appInsights", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(component.Source.Resource))
-            {
-                continue;
-            }
+            var resourceKey = component.Source.Resource!;
+            var resource = snapshot.Site.AppInsights[resourceKey];
+            var telemetry = await _statusDependencies.AvailabilityClient.QueryLiveTodayAsync(resource.ResourceId, component.Source.Filter).ConfigureAwait(false);
+            return (component.Id, telemetry);
+        });
 
-            if (!snapshot.Site.AppInsights.TryGetValue(component.Source.Resource, out var resource))
-            {
-                continue;
-            }
-
-            results[component.Id] = await _statusDependencies.AvailabilityClient.QueryLiveTodayAsync(resource.ResourceId, component.Source.Filter).ConfigureAwait(false);
-        }
-
-        return results;
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results.ToDictionary(result => result.Id, result => result.telemetry, StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<string?> ResolveSiteAsync(HttpRequestData req)

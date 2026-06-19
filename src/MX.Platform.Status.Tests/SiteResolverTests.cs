@@ -1,4 +1,5 @@
 using Azure.Storage.Blobs;
+using Microsoft.Extensions.Logging.Abstractions;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.App.Sites;
 using MX.Platform.Status.App.Yaml;
@@ -57,7 +58,7 @@ components:
     private static SiteResolver CreateSubject()
     {
         var loader = new SiteConfigLoader(new StubContentRepoClient(SiteYaml, ComponentsYaml), new StubSnapshotStore(), new YamlParser());
-        return new SiteResolver(loader);
+        return new SiteResolver(loader, NullLogger<SiteResolver>.Instance);
     }
 
     private sealed class StubContentRepoClient : ContentRepoClient

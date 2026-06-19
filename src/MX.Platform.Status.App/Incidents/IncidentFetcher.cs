@@ -26,9 +26,13 @@ public sealed class IncidentFetcher
         };
 
         var issues = await client.Issue.GetAllForRepository(owner, name, request).ConfigureAwait(false);
+        var relevantIssues = issues
+            .Where(issue => issue.PullRequest is null && !HasSeverityLabel(issue, "maintenance"))
+            .Take(10)
+            .ToList();
         var incidents = new List<Incident>();
 
-        foreach (var issue in issues.Where(issue => issue.PullRequest is null && !HasSeverityLabel(issue, "maintenance")))
+        foreach (var issue in relevantIssues)
         {
             var comments = await client.Issue.Comment.GetAllForIssue(owner, name, issue.Number).ConfigureAwait(false);
             var state = ParseState(issue.Labels.Select(label => label.Name));

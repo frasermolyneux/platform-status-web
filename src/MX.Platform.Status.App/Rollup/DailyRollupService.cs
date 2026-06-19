@@ -77,7 +77,7 @@ public sealed class DailyRollupService
                     Status = status,
                     Uptime = status == ComponentStatus.Operational ? 1d : status == ComponentStatus.Unknown ? null : 0d,
                     Total = status == ComponentStatus.Unknown ? 0 : 1,
-                    Failed = status == ComponentStatus.Operational ? 0 : 1
+                    Failed = status == ComponentStatus.Operational ? 0 : (status == ComponentStatus.Unknown ? 0 : 1)
                 });
             }
 
@@ -131,10 +131,14 @@ public sealed class DailyRollupService
             {
                 Date = grouping.Key,
                 Status = MergeStatuses(grouping.Select(item => item.Status)),
-                Uptime = grouping.Where(item => item.Uptime.HasValue).Select(item => item.Uptime!.Value).DefaultIfEmpty().Average(),
+                Uptime = grouping.Any(item => item.Uptime.HasValue)
+                    ? grouping.Where(item => item.Uptime.HasValue).Average(item => item.Uptime!.Value)
+                    : null,
                 Total = grouping.Sum(item => item.Total ?? 0),
                 Failed = grouping.Sum(item => item.Failed ?? 0),
-                P95 = grouping.Where(item => item.P95.HasValue).Select(item => item.P95!.Value).DefaultIfEmpty().Max()
+                P95 = grouping.Any(item => item.P95.HasValue)
+                    ? grouping.Where(item => item.P95.HasValue).Max(item => item.P95!.Value)
+                    : null
             }).ToList();
 
         return new ComponentHistoryRecord
