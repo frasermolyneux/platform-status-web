@@ -159,7 +159,6 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
     app.innerHTML = safeHtml('<p>Incident not found.</p>');
     return;
   }
-  const info = getStatusInfo(incident.severity);
   let html = `
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(incident.title)}</h2>

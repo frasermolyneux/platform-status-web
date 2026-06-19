@@ -64,7 +64,7 @@ public sealed class StatusMerger
     {
         var children = component.Children.Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today)).ToArray();
         var windowDays = Math.Max(1, component.Sla.WindowDays);
-        var historicalDays = BuildHistoricalWindow(component, history, incidents, today, windowDays);
+        var historicalDays = BuildHistoricalWindow(component, history, today, windowDays);
         var todayHistory = historicalDays[^1];
         var (liveStatus, lastSampleAt) = ResolveLiveStatus(component, children, liveData, historicalDays, todayHistory);
 
@@ -154,7 +154,7 @@ public sealed class StatusMerger
             : _componentStatusCalculator.WorstOf([liveStatus, .. incidentStatuses.Where(status => status != ComponentStatus.Maintenance)]);
     }
 
-    private List<HistoryDay> BuildHistoricalWindow(Component component, HistoryDocument? history, IReadOnlyList<Incident> incidents, DateOnly today, int windowDays)
+    private List<HistoryDay> BuildHistoricalWindow(Component component, HistoryDocument? history, DateOnly today, int windowDays)
     {
         var startDate = today.AddDays(-(windowDays - 1));
         var historicMap = history?.ComponentsById.TryGetValue(component.Id, out var record) == true

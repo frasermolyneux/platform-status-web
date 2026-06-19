@@ -92,7 +92,7 @@ public class ContentRepoClient
             if (!string.IsNullOrWhiteSpace(secretUriRaw))
             {
                 var secretUri = new Uri(secretUriRaw);
-                var secretName = secretUri.Segments.Last().Trim('/');
+                var secretName = secretUri.Segments[^1].Trim('/');
                 Response<KeyVaultSecret> secret = await _secretClient.GetSecretAsync(secretName, cancellationToken: cancellationToken).ConfigureAwait(false);
                 _token = secret.Value.Value;
             }

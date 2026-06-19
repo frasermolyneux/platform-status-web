@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace MX.Platform.Status.App.Incidents;
 
-public sealed partial class IncidentRenderer
+public static partial class IncidentRenderer
 {
     public static string Render(string content)
     {

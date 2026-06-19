@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
 
 namespace MX.Platform.Status.App.Models;
 
@@ -63,7 +64,7 @@ public static class StatusJson
         private const string Format = "yyyy-MM-dd";
 
         public override DateOnly Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-            DateOnly.ParseExact(reader.GetString() ?? throw new JsonException("Date value missing."), Format);
+            DateOnly.ParseExact(reader.GetString() ?? throw new JsonException("Date value missing."), Format, CultureInfo.InvariantCulture);
 
         public override void Write(Utf8JsonWriter writer, DateOnly value, JsonSerializerOptions options) =>
             writer.WriteStringValue(value.ToString(Format));

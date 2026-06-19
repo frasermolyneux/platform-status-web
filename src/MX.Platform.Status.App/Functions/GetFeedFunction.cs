@@ -35,6 +35,13 @@ public sealed class GetFeedFunction
         }
 
         var snapshot = await _siteConfigLoader.LoadSiteAsync(siteId).ConfigureAwait(false);
+        if (!snapshot.Site.Feed.RssEnabled)
+        {
+            var response = req.CreateResponse(HttpStatusCode.NotFound);
+            await response.WriteStringAsync("RSS feed is disabled for this site.").ConfigureAwait(false);
+            return response;
+        }
+
         var incidents = await _incidentFetcher.FetchForSiteAsync(siteId).ConfigureAwait(false);
         var feed = new SyndicationFeed(
             snapshot.Site.DisplayName,
@@ -43,7 +50,7 @@ public sealed class GetFeedFunction
             incidents.Take(Math.Max(1, snapshot.Site.Feed.MaxItems)).Select(incident =>
                 new SyndicationItem(
                     incident.Title,
-                    incident.Updates.Count == 0 ? string.Empty : incident.Updates[0].Body,
+                    incident.Updates.Count == 0 ? string.Empty : incident.Updates[^1].Body,
                     new Uri(incident.Url),
                     incident.Id.ToString(),
                     incident.CreatedAt)));

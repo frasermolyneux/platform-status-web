@@ -84,13 +84,16 @@ availabilityResults
             throw new ArgumentException("Custom dimension name cannot be empty.", nameof(key));
         }
 
-        var filterValue = ConvertToFilterValue(value);
-        foreach (var token in ForbiddenTokens)
+        if (dimensionName.Any(static character => !char.IsLetterOrDigit(character) && character != '_'))
         {
-            if (filterValue.Contains(token, StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"Filter value contains forbidden KQL metacharacters: '{filterValue}'.", nameof(value));
-            }
+            throw new ArgumentException($"Custom dimension name contains invalid characters: '{dimensionName}'.", nameof(key));
+        }
+
+        var filterValue = ConvertToFilterValue(value);
+        var forbiddenToken = ForbiddenTokens.FirstOrDefault(token => filterValue.Contains(token, StringComparison.Ordinal));
+        if (forbiddenToken is not null)
+        {
+            throw new ArgumentException($"Filter value contains forbidden KQL metacharacters: '{filterValue}'.", nameof(value));
         }
 
         var dynamicArray = $"dynamic({JsonSerializer.Serialize(new[] { filterValue })})";

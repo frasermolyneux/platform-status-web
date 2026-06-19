@@ -5,7 +5,9 @@ using Microsoft.Azure.Functions.Worker.Http;
 using MX.Platform.Status.App.Caching;
 using MX.Platform.Status.App.Contracts;
 using MX.Platform.Status.App.Sites;
+using System.Security.Cryptography;
 using System.Net;
+using System.Text;
 
 namespace MX.Platform.Status.App.Functions;
 
@@ -27,7 +29,7 @@ public sealed class InvalidateCacheFunction
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "internal/invalidate")] HttpRequestData req)
     {
         var expectedSecret = await GetExpectedSecretAsync().ConfigureAwait(false);
-        if (!req.Headers.TryGetValues("X-Status-Webhook-Secret", out var providedHeader) || !string.Equals(providedHeader.FirstOrDefault(), expectedSecret, StringComparison.Ordinal))
+        if (!req.Headers.TryGetValues("X-Status-Webhook-Secret", out var providedHeader) || !SecretsMatch(providedHeader.FirstOrDefault(), expectedSecret))
         {
             return req.CreateResponse(HttpStatusCode.Unauthorized);
         }
@@ -79,4 +81,9 @@ public sealed class InvalidateCacheFunction
 
         return null;
     }
+
+    private static bool SecretsMatch(string? providedSecret, string expectedSecret) =>
+        CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(providedSecret ?? string.Empty),
+            Encoding.UTF8.GetBytes(expectedSecret));
 }

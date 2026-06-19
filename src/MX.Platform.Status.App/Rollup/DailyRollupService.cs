@@ -67,21 +67,7 @@ public sealed class DailyRollupService
     {
         if (component.Source.Kind.Equals("static", StringComparison.OrdinalIgnoreCase))
         {
-            var status = ParseStaticStatus(component.Source.Status);
-            var results = new List<HistoryDay>();
-            for (var date = startDate; date <= endDate; date = date.AddDays(1))
-            {
-                results.Add(new HistoryDay
-                {
-                    Date = date,
-                    Status = status,
-                    Uptime = status == ComponentStatus.Operational ? 1d : status == ComponentStatus.Unknown ? null : 0d,
-                    Total = status == ComponentStatus.Unknown ? 0 : 1,
-                    Failed = status == ComponentStatus.Operational ? 0 : (status == ComponentStatus.Unknown ? 0 : 1)
-                });
-            }
-
-            return results;
+            return BuildStaticHistoryDays(ParseStaticStatus(component.Source.Status), startDate, endDate);
         }
 
         if (!component.Source.Kind.Equals("appInsights", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(component.Source.Resource))
@@ -94,7 +80,23 @@ public sealed class DailyRollupService
             return [];
         }
 
-        var queryResults = await _availabilityClient.QueryDailyRollupAsync(resource.ResourceId, component.Source.Filter, startDate, endDate, cancellationToken).ConfigureAwait(false);
+        return await BuildAIHistoryDays(resource.ResourceId, component, startDate, endDate, cancellationToken).ConfigureAwait(false);
+    }
+
+    private List<HistoryDay> BuildStaticHistoryDays(ComponentStatus status, DateOnly startDate, DateOnly endDate)
+    {
+        var results = new List<HistoryDay>();
+        for (var date = startDate; date <= endDate; date = date.AddDays(1))
+        {
+            results.Add(BuildStaticHistoryDay(date, status));
+        }
+
+        return results;
+    }
+
+    private async Task<List<HistoryDay>> BuildAIHistoryDays(string resourceId, Component component, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
+    {
+        var queryResults = await _availabilityClient.QueryDailyRollupAsync(resourceId, component.Source.Filter, startDate, endDate, cancellationToken).ConfigureAwait(false);
         var byDate = queryResults.ToDictionary(result => result.Date, result => result);
         var days = new List<HistoryDay>();
         for (var date = startDate; date <= endDate; date = date.AddDays(1))
@@ -157,6 +159,41 @@ public sealed class DailyRollupService
         "maintenance" => ComponentStatus.Maintenance,
         _ => ComponentStatus.Unknown
     };
+
+    private static HistoryDay BuildStaticHistoryDay(DateOnly date, ComponentStatus status)
+    {
+        double? uptime;
+        int total;
+        int failed;
+
+        if (status == ComponentStatus.Operational)
+        {
+            uptime = 1d;
+            total = 1;
+            failed = 0;
+        }
+        else if (status == ComponentStatus.Unknown)
+        {
+            uptime = null;
+            total = 0;
+            failed = 0;
+        }
+        else
+        {
+            uptime = 0d;
+            total = 1;
+            failed = 1;
+        }
+
+        return new HistoryDay
+        {
+            Date = date,
+            Status = status,
+            Uptime = uptime,
+            Total = total,
+            Failed = failed
+        };
+    }
 
     private static ComponentStatus MergeStatuses(IEnumerable<ComponentStatus> statuses)
     {

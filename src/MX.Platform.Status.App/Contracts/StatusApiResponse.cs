@@ -85,7 +85,6 @@ public sealed record ComponentDto
     public int UptimeWindowDays { get; init; }
 
     [JsonPropertyName("uptimeRatio")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? UptimeRatio { get; init; }
 
     [JsonPropertyName("history")]

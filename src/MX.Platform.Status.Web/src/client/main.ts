@@ -3,12 +3,9 @@ import type { StatusResponse } from './api';
 import { addRoute, resolve } from './router';
 import { renderOverview, renderComponent, renderIncident } from './render';
 
-let cachedData: StatusResponse | null = null;
-
 async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<void> {
   try {
-    cachedData = await fetchStatus();
-    renderer(cachedData);
+    renderer(await fetchStatus());
   } catch (err) {
     const app = document.getElementById('app');
     if (app) app.textContent = 'Unable to load status data. Please try again later.';
