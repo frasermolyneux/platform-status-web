@@ -112,7 +112,6 @@ function renderIncidentCard(inc: IncidentDto): string {
       <span>${formatRelative(inc.createdAt)}</span>
     </div>
     ${inc.updates.length > 0
-      // Server-rendered incident HTML is trusted and intentionally rendered without escaping.
       ? `<p class="incident-latest">${inc.updates[inc.updates.length - 1].body.slice(0, 200)}</p>`
       : ''}
   </div>`;
@@ -173,7 +172,6 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
   for (const update of incident.updates) {
     html += `<div class="timeline-entry">
       <div class="timeline-meta">${formatDateTime(update.at)} — <strong>${escapeHtml(update.state)}</strong></div>
-      <!-- Server-rendered incident HTML is trusted and intentionally rendered without escaping. -->
       <div class="timeline-body">${update.body}</div>
     </div>`;
   }

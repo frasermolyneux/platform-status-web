@@ -82,8 +82,18 @@ public sealed class InvalidateCacheFunction
         return null;
     }
 
-    private static bool SecretsMatch(string? providedSecret, string expectedSecret) =>
-        CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(providedSecret ?? string.Empty),
-            Encoding.UTF8.GetBytes(expectedSecret));
+    private static bool SecretsMatch(string? providedSecret, string expectedSecret)
+    {
+        var provided = Encoding.UTF8.GetBytes(providedSecret ?? string.Empty);
+        var expected = Encoding.UTF8.GetBytes(expectedSecret);
+
+        if (provided.Length != expected.Length)
+        {
+            // Compare against expected to consume constant time even on length mismatch
+            CryptographicOperations.FixedTimeEquals(expected, expected);
+            return false;
+        }
+
+        return CryptographicOperations.FixedTimeEquals(provided, expected);
+    }
 }

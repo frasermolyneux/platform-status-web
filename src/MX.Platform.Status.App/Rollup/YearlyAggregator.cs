@@ -63,6 +63,7 @@ public sealed class YearlyAggregator
             OutageDays = days.Count(day => day.Status == ComponentStatus.Outage),
             UnknownDays = days.Count(day => day.Status == ComponentStatus.Unknown),
             MaintenanceDays = days.Count(day => day.Status == ComponentStatus.Maintenance),
+            // TODO: Phase 2 — derive incident count from incident data once available in rollup context
             IncidentCount = 0,
             Quarters = quarters
         };

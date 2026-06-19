@@ -46,7 +46,7 @@ public sealed class GetFeedFunction
         var feed = new SyndicationFeed(
             snapshot.Site.DisplayName,
             snapshot.Site.Tagline,
-            new Uri($"https://{snapshot.Site.Domains[0]}/api/feed.xml"),
+            new Uri($"https://{(snapshot.Site.Domains.Count > 0 ? snapshot.Site.Domains[0] : host ?? "localhost")}/api/feed.xml"),
             incidents.Take(Math.Max(1, snapshot.Site.Feed.MaxItems)).Select(incident =>
                 new SyndicationItem(
                     incident.Title,
