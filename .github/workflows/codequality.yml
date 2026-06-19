@@ -2,7 +2,7 @@ name: Code Quality
 
 on:
   schedule:
-    - cron: "15 5 * * 1"
+    - cron: "15 8 * * 1"
   push:
     branches:
       - main
@@ -13,8 +13,13 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     permissions:
       contents: read
       actions: read
@@ -22,16 +27,15 @@ jobs:
     uses: frasermolyneux/actions/.github/workflows/codequality.yml@main
     with:
       sonar-project-key: frasermolyneux_platform-status-web
-      sonar-organization: frasermolyneux
-      sonar-host-url: https://sonarcloud.io
       build-target: dotnet-func-ci
       dotnet-project: MX.Platform.Status.App
-      dotnet-version: 9.0.x
+      dotnet-version: "9.0.x"
       src-folder: src
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   devops-secure-scanning:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     permissions:
       contents: read
       actions: read
@@ -39,22 +43,15 @@ jobs:
       security-events: write
     uses: frasermolyneux/actions/.github/workflows/devops-secure-scanning.yml@main
     with:
-      # Exclude eslint — the MSDO ESLint runner uses --no-config-lookup with the
-      # SDL flat config, which cannot discover the Astro client TS files (they are
-      # "not configured" per ESLint 9 flat-config rules and cause exit-code 2).
-      # SonarCloud covers JS/TS analysis for this repo.
       tools: "templateanalyzer,checkov"
 
   dependency-review:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     permissions:
       contents: read
       pull-requests: write
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Dependency Review
-        uses: actions/dependency-review-action@v5
+      - uses: actions/dependency-review-action@v4
         with:
           comment-summary-in-pr: always

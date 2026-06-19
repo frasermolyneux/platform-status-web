@@ -6,10 +6,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "05:15"
-      timezone: "Etc/UTC"
+      time: "08:15"
     groups:
-      nuget:
+      all-updates:
         patterns:
           - "*"
 
@@ -19,10 +18,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "05:15"
-      timezone: "Etc/UTC"
+      time: "08:15"
     groups:
-      npm:
+      all-updates:
         patterns:
           - "*"
 
@@ -32,10 +30,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "05:15"
-      timezone: "Etc/UTC"
+      time: "08:15"
     groups:
-      terraform:
+      all-updates:
         patterns:
           - "*"
 
@@ -45,9 +42,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "sunday"
-      time: "05:15"
-      timezone: "Etc/UTC"
+      time: "08:15"
     groups:
-      github-actions:
+      all-updates:
         patterns:
           - "*"

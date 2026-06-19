@@ -10,24 +10,7 @@ on:
 permissions: {}
 
 jobs:
-  detect-changes:
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    outputs:
-      src: ${{ steps.changes.outputs.src }}
-      terraform: ${{ steps.changes.outputs.terraform }}
-    steps:
-      - id: changes
-        uses: frasermolyneux/actions/detect-changes@detect-changes/v1.0
-        with:
-          filters: |
-            src:src/**
-            terraform:terraform/**
-
   build-and-test:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.src == 'true'
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -35,29 +18,24 @@ jobs:
       - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v1.4
         with:
           dotnet-project: "MX.Platform.Status.App"
-          dotnet-version: 9.0.x
+          dotnet-version: "9.0.x"
           src-folder: "src"
-          skip-nuget-artifact-upload: "true"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: "20.x"
 
       - name: Install frontend dependencies
-        shell: bash
-        run: |
-          cd src/MX.Platform.Status.Web
-          npm install
+        run: npm install
+        working-directory: src/MX.Platform.Status.Web
 
       - name: Build frontend
-        shell: bash
-        run: |
-          cd src/MX.Platform.Status.Web
-          npm run build
+        run: npm run build
+        working-directory: src/MX.Platform.Status.Web
 
   terraform-plan-dev:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.terraform == 'true'
     permissions:
       contents: read
       id-token: write
