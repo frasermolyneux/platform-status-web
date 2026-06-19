@@ -11,7 +11,7 @@ async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<
     renderer(cachedData);
   } catch (err) {
     const app = document.getElementById('app');
-    if (app) app.innerHTML = '<div class="error">Unable to load status data. Please try again later.</div>';
+    if (app) app.textContent = 'Unable to load status data. Please try again later.';
   }
 }
 

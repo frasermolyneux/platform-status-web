@@ -2,6 +2,7 @@ import type { StatusResponse, ComponentDto, IncidentDto } from './api';
 import { getStatusInfo, getStatusDotHtml } from './status-colors';
 import { formatRelative, formatDate, formatDateTime } from './time';
 import { navigate } from './router';
+import DOMPurify from 'dompurify';
 
 function escapeHtml(str: string): string {
   return str
@@ -10,6 +11,11 @@ function escapeHtml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+/** Sanitize assembled HTML before injection into the DOM. */
+function safeHtml(html: string): string {
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
 }
 
 export function renderOverview(data: StatusResponse): void {
@@ -75,7 +81,7 @@ export function renderOverview(data: StatusResponse): void {
     html += '</section>';
   }
 
-  app.innerHTML = html;
+  app.innerHTML = safeHtml(html);
 
   // Bind click handlers for component links
   app.querySelectorAll('[data-component-id]').forEach(el => {
@@ -131,18 +137,18 @@ export function renderComponent(data: StatusResponse, componentId: string): void
   if (!app) return;
   const component = data.components.find(c => c.id === componentId);
   if (!component) {
-    app.innerHTML = '<p>Component not found.</p>';
+    app.innerHTML = safeHtml('<p>Component not found.</p>');
     return;
   }
   const info = getStatusInfo(component.status);
-  app.innerHTML = `
+  app.innerHTML = safeHtml(`
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(component.name)}</h2>
     ${component.description ? `<p>${escapeHtml(component.description)}</p>` : ''}
     <div class="component-detail-status ${info.className}">${info.label}</div>
     ${component.link ? `<p><a href="${escapeHtml(component.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(component.link)}</a></p>` : ''}
     ${renderHistoryBars(component)}
-  `;
+  `);
 }
 
 export function renderIncident(data: StatusResponse, incidentId: string): void {
@@ -150,7 +156,7 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
   if (!app) return;
   const incident = data.incidents.find(i => i.id === parseInt(incidentId));
   if (!incident) {
-    app.innerHTML = '<p>Incident not found.</p>';
+    app.innerHTML = safeHtml('<p>Incident not found.</p>');
     return;
   }
   const info = getStatusInfo(incident.severity);
@@ -173,5 +179,5 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
     </div>`;
   }
   html += '</div>';
-  app.innerHTML = html;
+  app.innerHTML = safeHtml(html);
 }
