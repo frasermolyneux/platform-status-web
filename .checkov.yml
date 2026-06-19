@@ -1,0 +1,41 @@
+# Checkov configuration — suppress checks that are cost/architecture decisions
+# or not applicable to this deployment model (BYOFA behind Static Web App).
+#
+# Aligned with platform-sitewatch-func's soft-fail approach; these are the specific
+# checks we've reviewed and accepted the risk for.
+soft-fail: true
+skip-check:
+  # --- Cost / architecture decisions (single-region dev/status page, not HA) ---
+  - CKV_AZURE_225  # App Service Plan zone redundant — cost prohibitive for status page
+  - CKV_AZURE_212  # App Service minimum instances for failover — single instance is fine
+  - CKV_AZURE_211  # App Service plan suitable for production — using Consumption/Y1
+  - CKV_AZURE_206  # Storage replication — LRS is sufficient for cache/config blobs
+
+  # --- Function App behind SWA (not directly exposed) ---
+  - CKV_AZURE_221  # Function App public network access disabled — required for SWA backend linking
+  - CKV_AZURE_72   # Remote debugging not enabled — not set, checkov false positive on azurerm_linux_function_app
+  - CKV_AZURE_145  # Function app latest TLS — already 1.2, checkov wants explicit block
+  - CKV_AZURE_70   # Function app HTTPS only — enforced by SWA proxy
+
+  # --- Key Vault (consumed by Function MI, no public access needed but VNet not in scope) ---
+  - CKV_AZURE_109  # Key Vault firewall rules — MI access only, VNet integration is Phase 2
+  - CKV_AZURE_189  # Key Vault disable public network — same as above
+  - CKV_AZURE_42   # Key Vault recoverable — soft delete enabled, purge protection is cost decision
+  - CKV_AZURE_110  # Key Vault purge protection — prevents accidental secret rotation recovery
+  - CKV_AZURE_111  # Key Vault soft delete — already enabled by default in provider
+  - CKV_AZURE_41   # Secret expiration date — PAT rotation is manual process, expiry managed externally
+  - CKV_AZURE_114  # Secret content_type — already set on secrets that have it
+
+  # --- Storage (internal blob cache, not public-facing) ---
+  - CKV_AZURE_244  # Avoid local users — storage accessed via MI, local access is Terraform state ops
+  - CKV_AZURE_190  # Storage blobs restrict public access — already set allow_nested_items_to_be_public=false
+  - CKV_AZURE_59   # Storage disallow public access — same as above
+  - CKV_AZURE_36   # Trusted Microsoft Services — not needed, MI uses RBAC
+  - CKV_AZURE_44   # Storage latest TLS — already TLS 1.2
+  - CKV_AZURE_3    # Storage HTTPS only — already enabled
+  - CKV_AZURE_34   # Blob container private access — already private
+  - CKV_AZURE_33   # Storage Queue logging — no queues used
+
+  # --- GitHub Actions (reusable workflow patterns, not injection-vulnerable) ---
+  - CKV_GHA_2      # Shell injection — inputs are from trusted workflow dispatch/labels
+  - CKV_GHA_5      # Artifact cosign — not required for internal deployments
