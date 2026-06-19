@@ -1,14 +1,13 @@
 # platform-status-web
 
-Multi-site public status page that combines Azure Application Insights availability data with GitHub Issues-backed incident content to publish a customer-facing status experience for multiple platforms.
+[![Build and Test](https://github.com/frasermolyneux/platform-status-web/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/frasermolyneux/platform-status-web/actions/workflows/build-and-test.yml)
+[![Code Quality](https://github.com/frasermolyneux/platform-status-web/actions/workflows/codequality.yml/badge.svg)](https://github.com/frasermolyneux/platform-status-web/actions/workflows/codequality.yml)
+[![Deploy Development](https://github.com/frasermolyneux/platform-status-web/actions/workflows/deploy-dev.yml/badge.svg)](https://github.com/frasermolyneux/platform-status-web/actions/workflows/deploy-dev.yml)
+[![Deploy Production](https://github.com/frasermolyneux/platform-status-web/actions/workflows/deploy-prd.yml/badge.svg)](https://github.com/frasermolyneux/platform-status-web/actions/workflows/deploy-prd.yml)
 
-## Architecture overview
+## Overview
 
-The project has two deployable application parts plus Terraform-managed infrastructure:
-
-- `MX.Platform.Status.App` is a .NET 9 isolated Azure Functions app that reads availability telemetry from Application Insights, merges that with incident and history content from GitHub, and exposes the API/runtime endpoints used by the status site.
-- `MX.Platform.Status.Web` is an Astro static frontend deployed to Azure Static Web Apps and configured to use the Function App as its API backend.
-- `terraform` provisions the shared resource group integration, Function App, service plan, storage, key vault, Application Insights access, Static Web App, and supporting role assignments.
+Multi-site public status page that combines Azure Application Insights availability data with GitHub Issues-backed incident content to publish a customer-facing status experience for multiple platforms. Built as an Astro static frontend on Azure Static Web Apps with a .NET Function App backend.
 
 ## Supported sites
 
@@ -65,3 +64,15 @@ Terraform creates and configures:
 - Create and store any webhook/shared secrets required by the Function App.
 - Configure Azure Static Web App custom domains and DNS validation records.
 - Confirm any production hostname mappings and certificates after the first successful deployment.
+
+## Documentation
+
+Additional documentation is available in the [docs](docs/) folder.
+
+## Contributing
+
+Please refer to the [CONTRIBUTING](CONTRIBUTING.md) file for information on how to contribute to this project.
+
+## Security
+
+Please refer to the [SECURITY](SECURITY.md) file for information on how to report security vulnerabilities.
