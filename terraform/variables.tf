@@ -1,20 +1,28 @@
 variable "environment" {
-  default = "dev"
+  description = "Deployment environment (dev or prd)"
+  type        = string
+  default     = "dev"
 }
 
 variable "workload_name" {
-  type    = string
-  default = "platform-status-web"
+  description = "Workload name used for resource naming and remote-state lookups"
+  type        = string
+  default     = "platform-status-web"
 }
 
 variable "location" {
-  type    = string
-  default = "swedencentral"
+  description = "Azure region for all resources"
+  type        = string
+  default     = "swedencentral"
 }
 
-variable "subscription_id" {}
+variable "subscription_id" {
+  description = "Azure subscription ID for the target environment"
+  type        = string
+}
 
 variable "platform_workloads_state" {
+  description = "Backend coordinates for the platform-workloads remote state"
   type = object({
     resource_group_name  = string
     storage_account_name = string
@@ -26,6 +34,7 @@ variable "platform_workloads_state" {
 }
 
 variable "platform_monitoring_state" {
+  description = "Backend coordinates for the platform-monitoring remote state"
   type = object({
     resource_group_name  = string
     storage_account_name = string
@@ -37,7 +46,9 @@ variable "platform_monitoring_state" {
 }
 
 variable "tags" {
-  default = {}
+  description = "Resource tags applied to all taggable resources"
+  type        = map(string)
+  default     = {}
 }
 
 variable "app_insights_resources" {

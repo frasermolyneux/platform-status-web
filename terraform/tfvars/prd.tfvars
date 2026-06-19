@@ -41,8 +41,8 @@ platform_monitoring_state = {
 }
 
 tags = {
-  Environment = "prd",
-  Workload    = "platform-status-web",
-  DeployedBy  = "GitHub-Terraform",
-  Git         = "https://github.com/frasermolyneux/platform-status-web"
+  Environment = "prd"
+  Workload    = "platform-status-web"
+  Owner       = "frasermolyneux"
+  Source      = "https://github.com/frasermolyneux/platform-status-web"
 }
