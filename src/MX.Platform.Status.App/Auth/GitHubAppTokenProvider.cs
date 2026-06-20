@@ -50,7 +50,7 @@ public sealed class GitHubAppTokenProvider : IGitHubAppTokenProvider
                 });
             var jwt = generator.CreateEncodedJwtToken();
 
-            var appClient = new GitHubClient(new ProductHeaderValue("platform-status-web"))
+            var appClient = new GitHubClient(new ProductHeaderValue("MX.Platform.Status.App"))
             {
                 Credentials = new Credentials(jwt, AuthenticationType.Bearer)
             };
