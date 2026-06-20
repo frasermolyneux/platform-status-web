@@ -17,7 +17,7 @@
     "dompurify": "^3.4.11"
   },
   "devDependencies": {
-    "@types/dompurify": "^3.0.5",
-    "typescript": "^5.8.0"
+    "@types/dompurify": "^3.2.0",
+    "typescript": "^6.0.3"
   }
 }
