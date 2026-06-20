@@ -1,0 +1,215 @@
+name: PR Verify
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v1.4
+        with:
+          dotnet-project: "MX.Platform.Status.App"
+          dotnet-version: "9.0.x"
+          src-folder: "src"
+          skip-nuget-artifact-upload: "true"
+
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: src/MX.Platform.Status.Web
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/MX.Platform.Status.Web
+
+  terraform-plan-dev:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    if: |
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.labels.*.name, 'deploy-dev')
+    needs:
+      - build-and-test
+    environment: Development
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-dev
+    steps:
+      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v1.4
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/dev.tfvars"
+          terraform-backend-file: "backends/dev.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  terraform-plan-and-apply-dev:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'deploy-dev')
+    needs:
+      - build-and-test
+    environment: Development
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-dev
+    outputs:
+      func_apps: ${{ steps.terraform-output.outputs.func_apps }}
+      static_web_app: ${{ steps.terraform-output.outputs.static_web_app }}
+      static_web_app_name: ${{ steps.terraform-output.outputs.static_web_app_name }}
+    steps:
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v1.4
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/dev.tfvars"
+          terraform-backend-file: "backends/dev.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - id: terraform-output
+        shell: bash
+        run: |
+          cd terraform
+          echo "func_apps=$(terraform output -json func_apps)" >> "$GITHUB_OUTPUT"
+          echo "static_web_app=$(terraform output -json static_web_app)" >> "$GITHUB_OUTPUT"
+          echo "static_web_app_name=$(terraform output -raw static_web_app_name)" >> "$GITHUB_OUTPUT"
+        env:
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_USE_AZUREAD: true
+          ARM_USE_OIDC: true
+
+  function-app-deploy-dev:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'deploy-dev')
+    environment: Development
+    needs:
+      - build-and-test
+      - terraform-plan-and-apply-dev
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-dev
+    strategy:
+      matrix:
+        func_app: ${{ fromJSON(needs.terraform-plan-and-apply-dev.outputs.func_apps) }}
+    steps:
+      - uses: frasermolyneux/actions/deploy-function-app@deploy-function-app/v1.2
+        with:
+          function-app-artifact-name: "MX.Platform.Status.App"
+          function-app-name: ${{ matrix.func_app.name }}
+          function-app-resource-group: ${{ matrix.func_app.resource_group_name }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  static-web-app-deploy-dev:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'deploy-dev')
+    environment: Development
+    needs:
+      - terraform-plan-and-apply-dev
+      - function-app-deploy-dev
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: src/MX.Platform.Status.Web
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/MX.Platform.Status.Web
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - id: static-web-app-api-key
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            static_web_app_api_key=$(az staticwebapp secrets list -n ${{ needs.terraform-plan-and-apply-dev.outputs.static_web_app_name }} -o tsv --query properties.apiKey)
+            echo "::add-mask::$static_web_app_api_key"
+            echo static_web_app_api_key=$static_web_app_api_key >> $GITHUB_ENV
+
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ env.static_web_app_api_key }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: "src/MX.Platform.Status.Web"
+          output_location: "dist"
+          skip_app_build: true
+
+  terraform-plan-prd:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    if: |
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'run-prd-plan')
+    needs:
+      - build-and-test
+    environment: Production
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.repository }}-prd
+    steps:
+      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v1.4
+        with:
+          terraform-folder: "terraform"
+          terraform-var-file: "tfvars/prd.tfvars"
+          terraform-backend-file: "backends/prd.backend.hcl"
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}

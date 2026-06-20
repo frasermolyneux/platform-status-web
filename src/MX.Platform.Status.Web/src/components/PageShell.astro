@@ -1,0 +1,35 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = 'System status and incident history.' } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content={description} />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>{title}</title>
+  <link rel="stylesheet" href="/styles/github-minimal.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <h1 class="site-title" id="site-title">Status</h1>
+      <p class="site-tagline" id="site-tagline"></p>
+    </div>
+  </header>
+  <main class="container" id="app">
+    <slot />
+  </main>
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; {new Date().getFullYear()} &middot; Powered by <a href="https://github.com/frasermolyneux/platform-status-web">platform-status-web</a></p>
+    </div>
+  </footer>
+</body>
+</html>

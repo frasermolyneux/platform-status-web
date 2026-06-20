@@ -1,0 +1,49 @@
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    assignees: ["frasermolyneux"]
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:15"
+    groups:
+      all-updates:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    assignees: ["frasermolyneux"]
+    directory: "/src/MX.Platform.Status.Web"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:15"
+    groups:
+      all-updates:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "terraform"
+    assignees: ["frasermolyneux"]
+    directory: "/terraform"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:15"
+    groups:
+      all-updates:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    assignees: ["frasermolyneux"]
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:15"
+    groups:
+      all-updates:
+        patterns:
+          - "*"

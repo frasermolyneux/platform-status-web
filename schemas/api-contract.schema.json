@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frasermolyneux.com/schemas/status-pages/api-contract.schema.json",
+  "title": "Status API response (GET /api/status)",
+  "description": "Merged payload returned by the status-api Function. Cached server-side ~30s. Resolved per host header → site.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["site", "generatedAt", "schemaVersion", "components", "incidents", "maintenance", "summary"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName"],
+      "properties": {
+        "id": { "type": "string" },
+        "displayName": { "type": "string" },
+        "tagline": { "type": "string" },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "href"],
+            "properties": {
+              "label": { "type": "string" },
+              "href": { "type": "string", "format": "uri" }
+            }
+          }
+        }
+      }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "dataFreshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "appInsightsAt": { "type": "string", "format": "date-time" },
+        "historyAt": { "type": "string", "format": "date-time" },
+        "stale": { "type": "boolean", "description": "True if served from blob fallback because live query failed." }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "$ref": "#/$defs/status" },
+        "message": { "type": "string", "description": "Human-readable banner, e.g. 'All systems operational'." }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/component" }
+    },
+    "incidents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/incident" }
+    },
+    "maintenance": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/maintenance" }
+    }
+  },
+  "$defs": {
+    "status": { "enum": ["operational", "degraded", "outage", "maintenance", "unknown"] },
+    "incidentState": { "enum": ["investigating", "identified", "monitoring", "resolved"] },
+    "severity": { "enum": ["maintenance", "degraded", "outage"] },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "status", "uptimeWindowDays", "uptimeRatio", "history"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "link": { "type": "string", "format": "uri" },
+        "kind": { "enum": ["leaf", "group"] },
+        "status": { "$ref": "#/$defs/status" },
+        "lastSampleAt": { "type": ["string", "null"], "format": "date-time" },
+        "uptimeWindowDays": { "type": "integer" },
+        "uptimeRatio": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "history": {
+          "type": "array",
+          "description": "One bin per day, oldest first. Length matches uptimeWindowDays. Days outside history coverage are 'unknown'.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "status"],
+            "properties": {
+              "date": { "type": "string", "format": "date", "description": "UTC date." },
+              "status": { "$ref": "#/$defs/status" },
+              "uptime": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+              "total": { "type": ["integer", "null"], "minimum": 0 },
+              "failed": { "type": ["integer", "null"], "minimum": 0 },
+              "incidentIds": { "type": "array", "items": { "type": "integer" } }
+            }
+          }
+        },
+        "openIncidentIds": { "type": "array", "items": { "type": "integer" } },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/component" },
+          "description": "Only present when kind=group."
+        }
+      }
+    },
+    "incident": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "url", "components", "severity", "state", "createdAt", "updates"],
+      "properties": {
+        "id": { "type": "integer", "description": "GitHub issue number." },
+        "title": { "type": "string" },
+        "url": { "type": "string", "format": "uri" },
+        "components": { "type": "array", "items": { "type": "string" } },
+        "severity": { "$ref": "#/$defs/severity" },
+        "state": { "$ref": "#/$defs/incidentState" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "resolvedAt": { "type": ["string", "null"], "format": "date-time" },
+        "updates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["at", "state", "body"],
+            "properties": {
+              "at": { "type": "string", "format": "date-time" },
+              "state": { "$ref": "#/$defs/incidentState" },
+              "body": { "type": "string", "description": "Markdown; HTML comments (e.g. <!-- internal -->) already stripped." },
+              "author": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "maintenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "url", "components", "scheduledStart", "scheduledEnd", "state"],
+      "properties": {
+        "id": { "type": "integer" },
+        "title": { "type": "string" },
+        "url": { "type": "string", "format": "uri" },
+        "components": { "type": "array", "items": { "type": "string" } },
+        "scheduledStart": { "type": "string", "format": "date-time" },
+        "scheduledEnd": { "type": "string", "format": "date-time" },
+        "state": { "enum": ["scheduled", "in-progress", "completed"] },
+        "body": { "type": "string" }
+      }
+    }
+  }
+}

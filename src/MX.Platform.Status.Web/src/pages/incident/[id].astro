@@ -1,0 +1,12 @@
+---
+import PageShell from '../../components/PageShell.astro';
+import LoadingSkeleton from '../../components/LoadingSkeleton.astro';
+
+export function getStaticPaths() {
+  return [{ params: { id: 'placeholder' } }];
+}
+---
+<PageShell title="Incident">
+  <LoadingSkeleton />
+  <script src="../../client/main.ts"></script>
+</PageShell>

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frasermolyneux.com/schemas/status-pages/overrides.schema.json",
+  "title": "History overrides",
+  "description": "Per-day status overrides for history corrections. Stored at sites/<id>/overrides.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "overrides"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component", "date", "status"],
+        "properties": {
+          "component": { "type": "string", "description": "Component ID." },
+          "date": { "type": "string", "format": "date", "description": "UTC date (YYYY-MM-DD)." },
+          "status": { "enum": ["operational", "degraded", "outage", "maintenance", "unknown"] },
+          "reason": { "type": "string", "description": "Human-readable reason for the override." }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frasermolyneux.com/schemas/status-pages/components.schema.json",
+  "title": "Components",
+  "description": "Components shown on the status page for a site. Stored at sites/<id>/components.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "components"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/component" }
+    }
+  },
+  "$defs": {
+    "componentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)+$",
+      "description": "Dotted lowercase id. First segment MUST match the parent site id."
+    },
+    "sla": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "windowDays": { "type": "integer", "minimum": 1, "maximum": 1095, "default": 90 },
+        "uptimeTarget": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.999 },
+        "degradedBelow": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.995,
+          "description": "Amber threshold for a daily bin. Below this and >= outageBelow renders degraded."
+        },
+        "outageBelow": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.9,
+          "description": "Red threshold for a daily bin."
+        },
+        "expectedIntervalSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "description": "Heartbeat cadence. If no rows arrive for >= 3x this interval the component is unknown, not operational."
+        }
+      }
+    },
+    "appInsightsSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "resource"],
+      "properties": {
+        "kind": { "const": "appInsights" },
+        "resource": {
+          "type": "string",
+          "description": "Alias defined in site.yaml.appInsights."
+        },
+        "table": {
+          "type": "string",
+          "enum": ["availabilityResults"],
+          "default": "availabilityResults",
+          "description": "v1 only supports availabilityResults. Future: customMetrics, customEvents."
+        },
+        "filter": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] },
+          "description": "Key/value equality filter compiled to parameterised KQL. Keys may be a column or 'customDimensions.<name>'. The compiler escapes values; no raw KQL allowed."
+        }
+      }
+    },
+    "compositeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "status"],
+      "properties": {
+        "kind": { "const": "composite" },
+        "status": { "enum": ["worstOfChildren"], "default": "worstOfChildren" }
+      },
+      "description": "Used by group components. Status is derived from children, not from telemetry."
+    },
+    "staticSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "status"],
+      "properties": {
+        "kind": { "const": "static" },
+        "status": { "enum": ["operational", "degraded", "outage", "maintenance", "unknown"] }
+      },
+      "description": "Always reports a fixed status. Useful for placeholders during onboarding."
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/componentId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 280 },
+        "link": { "type": "string", "format": "uri" },
+        "kind": { "enum": ["leaf", "group"], "default": "leaf" },
+        "hidden": { "type": "boolean", "default": false },
+        "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "sla": { "$ref": "#/$defs/sla" },
+        "source": {
+          "oneOf": [
+            { "$ref": "#/$defs/appInsightsSource" },
+            { "$ref": "#/$defs/compositeSource" },
+            { "$ref": "#/$defs/staticSource" }
+          ]
+        },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/component" },
+          "description": "Children. Only allowed when kind=group."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "group" } }, "required": ["kind"] },
+          "then": {
+            "required": ["components", "source"],
+            "properties": {
+              "source": { "$ref": "#/$defs/compositeSource" }
+            }
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "not": { "required": ["kind"] } },
+              { "properties": { "kind": { "const": "leaf" } } }
+            ]
+          },
+          "then": { "required": ["source"], "not": { "required": ["components"] } }
+        }
+      ]
+    }
+  }
+}

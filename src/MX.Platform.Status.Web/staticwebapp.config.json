@@ -1,0 +1,14 @@
+{
+  "routes": [
+    { "route": "/api/*", "allowedRoles": ["anonymous"] },
+    { "route": "/feed.xml", "rewrite": "/api/feed.xml" }
+  ],
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/api/*", "/assets/*", "*.{css,js,svg,png,ico,xml}"]
+  },
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer"
+  }
+}
