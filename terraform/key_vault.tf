@@ -18,15 +18,11 @@ resource "azurerm_key_vault" "kv" {
   }
 }
 
-resource "azurerm_key_vault_secret" "github_pat" {
-  name         = "github-pat"
-  value        = "placeholder"
+resource "azurerm_key_vault_secret" "github_app_pem" {
+  name         = "github-app-pem"
+  value        = var.github_app_pem
   key_vault_id = azurerm_key_vault.kv.id
-  content_type = "text/plain"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
+  content_type = "application/x-pem-file"
 }
 
 resource "azurerm_key_vault_secret" "webhook_secret" {

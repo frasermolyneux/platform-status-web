@@ -60,3 +60,19 @@ variable "app_insights_resources" {
   }))
   default = []
 }
+
+variable "github_app_pem" {
+  description = "PEM private key for the Mxio-idp-bot GitHub App. Injected at apply time from GH_APP_PEM Actions secret."
+  type        = string
+  sensitive   = true
+}
+
+variable "github_app_id" {
+  description = "GitHub App ID for Mxio-idp-bot (from GH_APP_ID repo variable)."
+  type        = string
+}
+
+variable "github_app_installation_id" {
+  description = "Installation ID for Mxio-idp-bot on this repo (from GH_APP_INSTALLATION_ID repo variable)."
+  type        = string
+}
