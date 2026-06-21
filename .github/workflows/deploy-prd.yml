@@ -71,7 +71,7 @@ jobs:
           dotnet-version: "9.0.x"
           src-folder: "src"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -201,7 +201,7 @@ jobs:
         needs.terraform-state-check-dev.outputs.has_resources != 'true'
       )
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: static-site
           path: static-site
@@ -213,7 +213,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - id: static-web-app-api-key
-        uses: azure/CLI@v2
+        uses: azure/CLI@v3
         with:
           inlineScript: |
             static_web_app_api_key=$(az staticwebapp secrets list -n ${{ needs.terraform-plan-and-apply-dev.outputs.static_web_app_name }} -o tsv --query properties.apiKey)
@@ -332,7 +332,7 @@ jobs:
       needs.terraform-plan-and-apply-prd.result == 'success' &&
       needs.detect-changes.outputs.src == 'true'
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: static-site
           path: static-site
@@ -344,7 +344,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - id: static-web-app-api-key
-        uses: azure/CLI@v2
+        uses: azure/CLI@v3
         with:
           inlineScript: |
             static_web_app_api_key=$(az staticwebapp secrets list -n ${{ needs.terraform-plan-and-apply-prd.outputs.static_web_app_name_prd }} -o tsv --query properties.apiKey)
