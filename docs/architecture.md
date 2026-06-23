@@ -18,6 +18,6 @@ The app is multi-site by `Host` header, NOT by URL path. `status.xtremeidiots.co
 
 1. `platform-sitewatch-func` runs availability probes → writes to App Insights
 2. `status-api` Function queries AI availability results via KQL
-3. `status-api` fetches incident data from GitHub Issues in `status-pages` repo
+3. `status-api` fetches incident data from GitHub Issues in `status-pages` repo using Mxio-idp-bot GitHub App installation tokens, with the PEM stored in Key Vault
 4. Astro frontend calls `/api/status`; the Function resolves the site from the `Host` header and returns the matching response
 5. `status-rollup` timer function (daily 02:00 UTC) aggregates history to blob storage

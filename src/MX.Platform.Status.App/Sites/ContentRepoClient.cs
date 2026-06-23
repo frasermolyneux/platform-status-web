@@ -1,24 +1,22 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
-using Azure;
-using Azure.Security.KeyVault.Secrets;
+using MX.Platform.Status.App.Auth;
 using Octokit;
 
 namespace MX.Platform.Status.App.Sites;
 
 public class ContentRepoClient
 {
-    private readonly SecretClient _secretClient;
+    private readonly IGitHubAppTokenProvider _tokenProvider;
     private readonly HttpClient _httpClient;
     private readonly ConcurrentDictionary<string, CachedContent> _cache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _tokenLock = new(1, 1);
     private GitHubClient? _gitHubClient;
-    private string? _token;
+    private string? _lastToken;
 
-    public ContentRepoClient(SecretClient secretClient, HttpClient httpClient)
+    public ContentRepoClient(IGitHubAppTokenProvider tokenProvider, HttpClient httpClient)
     {
-        _secretClient = secretClient;
+        _tokenProvider = tokenProvider;
         _httpClient = httpClient;
         _httpClient.DefaultRequestHeaders.UserAgent.Clear();
         _httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("MX.Platform.Status.App", "1.0"));
@@ -28,7 +26,7 @@ public class ContentRepoClient
 
     public virtual async Task<string> GetTextFileAsync(string repo, string branch, string path, CancellationToken cancellationToken = default)
     {
-        var token = await GetGitHubTokenAsync(cancellationToken).ConfigureAwait(false);
+        var token = await _tokenProvider.GetInstallationTokenAsync(cancellationToken).ConfigureAwait(false);
         var cacheKey = $"{repo}@{branch}:{path}";
         _cache.TryGetValue(cacheKey, out var cached);
 
@@ -60,53 +58,18 @@ public class ContentRepoClient
 
     public virtual async Task<GitHubClient> GetGitHubClientAsync(CancellationToken cancellationToken = default)
     {
-        if (_gitHubClient is not null)
+        var token = await _tokenProvider.GetInstallationTokenAsync(cancellationToken).ConfigureAwait(false);
+        if (_gitHubClient is not null && token == _lastToken)
         {
             return _gitHubClient;
         }
 
-        var token = await GetGitHubTokenAsync(cancellationToken).ConfigureAwait(false);
+        _lastToken = token;
         _gitHubClient = new GitHubClient(new Octokit.ProductHeaderValue("MX.Platform.Status.App"))
         {
-            Credentials = new Credentials(token)
+            Credentials = new Credentials(token, AuthenticationType.Bearer)
         };
         return _gitHubClient;
-    }
-
-    private async Task<string> GetGitHubTokenAsync(CancellationToken cancellationToken)
-    {
-        if (!string.IsNullOrWhiteSpace(_token))
-        {
-            return _token;
-        }
-
-        await _tokenLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(_token))
-            {
-                return _token;
-            }
-
-            var secretUriRaw = Environment.GetEnvironmentVariable("GITHUB_PAT_SECRET_URI");
-            if (!string.IsNullOrWhiteSpace(secretUriRaw))
-            {
-                var secretUri = new Uri(secretUriRaw);
-                var secretName = secretUri.Segments[^1].Trim('/');
-                Response<KeyVaultSecret> secret = await _secretClient.GetSecretAsync(secretName, cancellationToken: cancellationToken).ConfigureAwait(false);
-                _token = secret.Value.Value;
-            }
-            else
-            {
-                _token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-            }
-
-            return _token ?? throw new InvalidOperationException("No GitHub token is configured.");
-        }
-        finally
-        {
-            _tokenLock.Release();
-        }
     }
 
     private static Uri BuildContentsUri(string repo, string branch, string path)

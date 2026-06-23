@@ -5,6 +5,7 @@ using Azure.Security.KeyVault.Secrets;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using MX.Platform.Status.App.Auth;
 using MX.Platform.Status.App.Caching;
 using MX.Platform.Status.App.Contracts;
 using MX.Platform.Status.App.Functions;
@@ -41,8 +42,16 @@ internal static class Program
                 });
                 services.AddSingleton(sp =>
                 {
-                    var secretUri = GetRequiredEnvironmentVariable("GITHUB_PAT_SECRET_URI");
+                    var secretUri = GetRequiredEnvironmentVariable("WEBHOOK_SECRET_URI");
                     return new SecretClient(GetVaultUri(secretUri), sp.GetRequiredService<DefaultAzureCredential>());
+                });
+                services.AddSingleton<IGitHubAppTokenProvider>(sp =>
+                {
+                    var appId = GetRequiredEnvironmentVariable("GitHubApp__AppId");
+                    var installationId = GetRequiredEnvironmentVariable("GitHubApp__InstallationId");
+                    var pemSecretName = GetRequiredEnvironmentVariable("GitHubApp__PemSecretName");
+                    var secretClient = sp.GetRequiredService<SecretClient>();
+                    return new GitHubAppTokenProvider(secretClient, appId, installationId, pemSecretName);
                 });
                 services.AddSingleton(sp => new LogsQueryClient(sp.GetRequiredService<DefaultAzureCredential>()));
                 services.AddSingleton(new HttpClient());

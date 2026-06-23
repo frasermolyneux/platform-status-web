@@ -60,7 +60,7 @@ Terraform creates and configures:
 ## Manual post-deploy steps
 
 - Create and configure the SonarCloud project for `frasermolyneux_platform-status-web`.
-- Create the GitHub PAT used for content access and store it in the target Key Vault.
+- GitHub App credentials are brokered automatically by `platform-workloads`. No per-environment manual step; the `GH_APP_PEM` Actions secret flows through the workflow → Terraform var → KV secret automatically (App ID: 2973523).
 - Create and store any webhook/shared secrets required by the Function App.
 - Configure Azure Static Web App custom domains and DNS validation records.
 - Confirm any production hostname mappings and certificates after the first successful deployment.

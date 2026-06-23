@@ -1,8 +1,10 @@
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Logging.Abstractions;
+using MX.Platform.Status.App.Auth;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.App.Sites;
 using MX.Platform.Status.App.Yaml;
+using NSubstitute;
 
 namespace MX.Platform.Status.Tests;
 
@@ -67,7 +69,7 @@ components:
         private readonly string _componentsYaml;
 
         public StubContentRepoClient(string siteYaml, string componentsYaml)
-            : base(null!, new HttpClient())
+            : base(Substitute.For<IGitHubAppTokenProvider>(), new HttpClient())
         {
             _siteYaml = siteYaml;
             _componentsYaml = componentsYaml;

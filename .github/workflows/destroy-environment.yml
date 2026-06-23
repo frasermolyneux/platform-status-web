@@ -29,6 +29,9 @@ jobs:
           terraform-folder: "terraform"
           terraform-var-file: ${{ inputs.environment == 'prd' && 'tfvars/prd.tfvars' || 'tfvars/dev.tfvars' }}
           terraform-backend-file: ${{ inputs.environment == 'prd' && 'backends/prd.backend.hcl' || 'backends/dev.backend.hcl' }}
+          terraform-additional-args: '-var="github_app_id=${{ vars.GH_APP_ID }}" -var="github_app_installation_id=${{ vars.GH_APP_INSTALLATION_ID }}"'
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        env:
+          TF_VAR_github_app_pem: ${{ secrets.GH_APP_PEM }}
