@@ -15,7 +15,7 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v1.4
+      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.0
         with:
           dotnet-project: "MX.Platform.Status.App"
           dotnet-version: "9.0.x"
