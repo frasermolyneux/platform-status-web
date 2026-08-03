@@ -1,6 +1,7 @@
-environment   = "prd"
-workload_name = "platform-status-web"
-location      = "swedencentral"
+environment             = "prd"
+workload_name           = "platform-status-web"
+location                = "swedencentral"
+static_web_app_location = "westeurope"
 
 subscription_id = "7760848c-794d-4a19-8cb2-52f71a21ac2b"
 

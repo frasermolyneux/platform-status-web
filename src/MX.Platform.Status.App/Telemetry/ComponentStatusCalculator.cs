@@ -2,9 +2,9 @@ using MX.Platform.Status.App.Models;
 
 namespace MX.Platform.Status.App.Telemetry;
 
-public sealed class ComponentStatusCalculator
+public static class ComponentStatusCalculator
 {
-    public ComponentStatus ClassifyLiveStatus(int samples, int failures, DateTimeOffset? lastSeen, SlaDefinition sla)
+    public static ComponentStatus ClassifyLiveStatus(int samples, int failures, DateTimeOffset? lastSeen, SlaDefinition sla)
     {
         if (samples == 0)
         {
@@ -49,7 +49,7 @@ public sealed class ComponentStatusCalculator
     /// healthy.
     /// </para>
     /// </summary>
-    public ComponentStatus ClassifyLiveStatusRegional(IReadOnlyList<RegionAvailabilityTelemetry> regions, SlaDefinition sla)
+    public static ComponentStatus ClassifyLiveStatusRegional(IReadOnlyList<RegionAvailabilityTelemetry> regions, SlaDefinition sla)
     {
         var consideredRegions = sla.ExpectedRegions is { Count: > 0 } expected
             ? expected
@@ -107,7 +107,7 @@ public sealed class ComponentStatusCalculator
         return ComponentStatus.Degraded;
     }
 
-    public ComponentStatus ClassifyHistoricStatus(int total, double? uptime, SlaDefinition sla)
+    public static ComponentStatus ClassifyHistoricStatus(int total, double? uptime, SlaDefinition sla)
     {
         if (total == 0 || uptime is null)
         {
@@ -127,7 +127,7 @@ public sealed class ComponentStatusCalculator
         return ComponentStatus.Operational;
     }
 
-    public ComponentStatus WorstOf(IEnumerable<ComponentStatus> statuses)
+    public static ComponentStatus WorstOf(IEnumerable<ComponentStatus> statuses)
     {
         var bestRank = statuses.Select(GetRank).DefaultIfEmpty(GetRank(ComponentStatus.Unknown)).Max();
         return bestRank switch

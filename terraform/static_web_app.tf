@@ -1,6 +1,9 @@
 resource "azurerm_static_web_app" "swa" {
-  name                = format("swa-platform-status-web-%s", var.environment)
-  location            = data.azurerm_resource_group.rg.location
+  # Static Web Apps are not available in swedencentral, so this uses its own
+  # supported region (var.static_web_app_location) rather than the resource
+  # group's location used by the rest of the stack.
+  name                = format("swa-platform-status-web-%s-%s", var.environment, var.static_web_app_location)
+  location            = var.static_web_app_location
   resource_group_name = data.azurerm_resource_group.rg.name
   sku_tier            = "Free"
   sku_size            = "Free"

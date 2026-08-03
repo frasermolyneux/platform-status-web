@@ -7,17 +7,15 @@ namespace MX.Platform.Status.App.Telemetry;
 public sealed class AvailabilityClient
 {
     private readonly LogsQueryClient _logsQueryClient;
-    private readonly AvailabilityQueryBuilder _queryBuilder;
 
-    public AvailabilityClient(LogsQueryClient logsQueryClient, AvailabilityQueryBuilder queryBuilder)
+    public AvailabilityClient(LogsQueryClient logsQueryClient)
     {
         _logsQueryClient = logsQueryClient;
-        _queryBuilder = queryBuilder;
     }
 
     public async Task<IReadOnlyList<RegionAvailabilityTelemetry>> QueryLiveRegionalAsync(string resourceId, IReadOnlyDictionary<string, object?> filters, int lookbackMinutes, CancellationToken cancellationToken = default)
     {
-        var query = _queryBuilder.BuildLiveRegionalQuery(filters, lookbackMinutes);
+        var query = AvailabilityQueryBuilder.BuildLiveRegionalQuery(filters, lookbackMinutes);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var response = await _logsQueryClient.QueryResourceAsync(new ResourceIdentifier(resourceId), query, new QueryTimeRange(TimeSpan.FromMinutes(lookbackMinutes)), cancellationToken: timeout.Token).ConfigureAwait(false);
@@ -44,7 +42,7 @@ public sealed class AvailabilityClient
 
     public async Task<IReadOnlyList<DailyAvailabilityTelemetry>> QueryDailyRollupAsync(string resourceId, IReadOnlyDictionary<string, object?> filters, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
     {
-        var query = _queryBuilder.BuildDailyRollupQuery(filters, startDate, endDate);
+        var query = AvailabilityQueryBuilder.BuildDailyRollupQuery(filters, startDate, endDate);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var response = await _logsQueryClient.QueryResourceAsync(new ResourceIdentifier(resourceId), query, new QueryTimeRange(startDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), endDate.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)), cancellationToken: timeout.Token).ConfigureAwait(false);

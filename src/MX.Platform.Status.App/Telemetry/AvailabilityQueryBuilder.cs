@@ -3,11 +3,11 @@ using System.Text.Json;
 
 namespace MX.Platform.Status.App.Telemetry;
 
-public sealed class AvailabilityQueryBuilder
+public static class AvailabilityQueryBuilder
 {
     private static readonly string[] ForbiddenTokens = [";", "|", "//", "/*", "*/", "\r", "\n"];
 
-    public string BuildLiveRegionalQuery(IReadOnlyDictionary<string, object?> filters, int lookbackMinutes)
+    public static string BuildLiveRegionalQuery(IReadOnlyDictionary<string, object?> filters, int lookbackMinutes)
     {
         if (lookbackMinutes <= 0)
         {
@@ -24,7 +24,7 @@ availabilityResults
 """;
     }
 
-    public string BuildDailyRollupQuery(IReadOnlyDictionary<string, object?> filters, DateOnly startDate, DateOnly endDate)
+    public static string BuildDailyRollupQuery(IReadOnlyDictionary<string, object?> filters, DateOnly startDate, DateOnly endDate)
     {
         if (endDate < startDate)
         {
@@ -78,7 +78,7 @@ availabilityResults
         }
 
         var filterValue = ConvertToFilterValue(value);
-        var forbiddenToken = ForbiddenTokens.FirstOrDefault(token => filterValue.Contains(token, StringComparison.Ordinal));
+        var forbiddenToken = Array.Find(ForbiddenTokens, token => filterValue.Contains(token, StringComparison.Ordinal));
         if (forbiddenToken is not null)
         {
             throw new ArgumentException($"Filter value contains forbidden KQL metacharacters: '{filterValue}'.", nameof(value));

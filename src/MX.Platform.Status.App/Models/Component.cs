@@ -65,8 +65,13 @@ public sealed record ComponentSource
     /// for this component: <see cref="Resources"/> when populated, otherwise a single-item list built
     /// from <see cref="Resource"/>, or empty when neither is configured.
     /// </summary>
-    public IReadOnlyList<string> EffectiveResources() =>
-        Resources.Count > 0
-            ? Resources.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
-            : string.IsNullOrWhiteSpace(Resource) ? [] : [Resource];
+    public IReadOnlyList<string> EffectiveResources()
+    {
+        if (Resources.Count > 0)
+        {
+            return Resources.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        return string.IsNullOrWhiteSpace(Resource) ? [] : [Resource];
+    }
 }
