@@ -6,7 +6,7 @@ namespace MX.Platform.Status.Tests;
 
 public sealed class StatusMergerTests
 {
-    private readonly StatusMerger _sut = new(new ComponentStatusCalculator());
+    private readonly StatusMerger _sut = new();
 
     [Fact]
     public void WorstOfOperationalAndDegradedIncident_ReturnsDegraded()

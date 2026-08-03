@@ -8,15 +8,13 @@ public sealed class DailyRollupService
 {
     private readonly BlobContainerClient _containerClient;
     private readonly AvailabilityClient _availabilityClient;
-    private readonly ComponentStatusCalculator _statusCalculator;
     private readonly OverrideApplier _overrideApplier;
 
-    public DailyRollupService(BlobServiceClient blobServiceClient, AvailabilityClient availabilityClient, ComponentStatusCalculator statusCalculator, OverrideApplier overrideApplier)
+    public DailyRollupService(BlobServiceClient blobServiceClient, AvailabilityClient availabilityClient, OverrideApplier overrideApplier)
     {
         var containerName = Environment.GetEnvironmentVariable("HISTORY_BLOB_CONTAINER") ?? "history";
         _containerClient = blobServiceClient.GetBlobContainerClient(containerName);
         _availabilityClient = availabilityClient;
-        _statusCalculator = statusCalculator;
         _overrideApplier = overrideApplier;
     }
 
@@ -91,7 +89,7 @@ public sealed class DailyRollupService
         return await BuildAIHistoryDays(resourceIds, component, filter, startDate, endDate, cancellationToken).ConfigureAwait(false);
     }
 
-    private List<HistoryDay> BuildStaticHistoryDays(ComponentStatus status, DateOnly startDate, DateOnly endDate)
+    private static List<HistoryDay> BuildStaticHistoryDays(ComponentStatus status, DateOnly startDate, DateOnly endDate)
     {
         var results = new List<HistoryDay>();
         for (var date = startDate; date <= endDate; date = date.AddDays(1))
@@ -116,7 +114,7 @@ public sealed class DailyRollupService
                 days.Add(new HistoryDay
                 {
                     Date = date,
-                    Status = _statusCalculator.ClassifyHistoricStatus(result.Total, result.Uptime, component.Sla),
+                    Status = ComponentStatusCalculator.ClassifyHistoricStatus(result.Total, result.Uptime, component.Sla),
                     Uptime = result.Uptime,
                     Total = result.Total,
                     Failed = result.Failures,
