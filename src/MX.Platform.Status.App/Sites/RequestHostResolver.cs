@@ -35,7 +35,8 @@ public static class RequestHostResolver
     // fully validate DNS syntax (that's SiteResolver/domain-map matching's job).
     private static readonly Regex PlausibleHostPattern = new(
         @"^\[[0-9a-fA-F:]+\](:\d{1,5})?$|^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.?(:\d{1,5})?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
 
     /// <summary>
     /// Returns the resolved host header value to use for site/tenant resolution, or <c>null</c> when
