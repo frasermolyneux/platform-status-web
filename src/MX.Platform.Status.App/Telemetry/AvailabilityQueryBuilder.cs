@@ -78,7 +78,7 @@ availabilityResults
         }
 
         var filterValue = ConvertToFilterValue(value);
-        var forbiddenToken = ForbiddenTokens.FirstOrDefault(token => filterValue.Contains(token, StringComparison.Ordinal));
+        var forbiddenToken = Array.Find(ForbiddenTokens, token => filterValue.Contains(token, StringComparison.Ordinal));
         if (forbiddenToken is not null)
         {
             throw new ArgumentException($"Filter value contains forbidden KQL metacharacters: '{filterValue}'.", nameof(value));
