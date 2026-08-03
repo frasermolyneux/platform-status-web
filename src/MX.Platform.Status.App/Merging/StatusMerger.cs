@@ -133,7 +133,7 @@ public sealed class StatusMerger
         return (todayHistory.Status, null);
     }
 
-    private ComponentStatus ApplyMergedStatus(
+    private static ComponentStatus ApplyMergedStatus(
         string componentId,
         ComponentStatus liveStatus,
         IReadOnlyList<ComponentStatus> incidentStatuses,
