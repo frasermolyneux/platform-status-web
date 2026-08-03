@@ -11,13 +11,13 @@ variable "workload_name" {
 }
 
 variable "location" {
-  description = "Azure region for all resources"
+  description = "Azure region for all resources except the Static Web App (see `static_web_app_location`)"
   type        = string
   default     = "swedencentral"
 }
 
 variable "static_web_app_location" {
-  description = "Azure region for the Static Web App. Azure Static Web Apps is only available in a fixed subset of regions (centralus, eastus2, westus2, westeurope, eastasia), which does not include swedencentral, so this is tracked independently from `location`. Aligned with the westeurope convention used by other Static Web Apps in this org (molyneux-me, twenty-one)."
+  description = "Azure region for the Static Web App. Azure Static Web Apps are only available in a fixed subset of regions (centralus, eastus2, westus2, westeurope, eastasia), which does not include swedencentral, so this is tracked independently from `location`. Aligned with the westeurope convention used by other Static Web Apps in this org (molyneux-me, twenty-one)."
   type        = string
   default     = "westeurope"
 }

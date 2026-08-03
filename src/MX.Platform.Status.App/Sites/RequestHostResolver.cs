@@ -36,7 +36,7 @@ public static class RequestHostResolver
     private static readonly Regex PlausibleHostPattern = new(
         @"^\[[0-9a-fA-F:]+\](:\d{1,5})?$|^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.?(:\d{1,5})?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
-        TimeSpan.FromSeconds(1));
+        TimeSpan.FromMilliseconds(250));
 
     /// <summary>
     /// Returns the resolved host header value to use for site/tenant resolution, or <c>null</c> when
@@ -86,6 +86,22 @@ public static class RequestHostResolver
         return string.IsNullOrWhiteSpace(firstHop) ? null : firstHop;
     }
 
-    private static bool IsPlausibleHost(string candidate) =>
-        candidate.Length <= MaxHostLength && PlausibleHostPattern.IsMatch(candidate);
+    private static bool IsPlausibleHost(string candidate)
+    {
+        if (candidate.Length > MaxHostLength)
+        {
+            return false;
+        }
+
+        try
+        {
+            return PlausibleHostPattern.IsMatch(candidate);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Fail closed: treat an unusually expensive-to-match candidate as implausible rather than
+            // letting the timeout exception propagate as an unhandled 500 for this request.
+            return false;
+        }
+    }
 }
