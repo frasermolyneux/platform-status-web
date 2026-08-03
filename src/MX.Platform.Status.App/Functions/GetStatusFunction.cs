@@ -22,7 +22,6 @@ public sealed class GetStatusFunction
     private readonly StatusMerger _statusMerger;
     private readonly InMemoryCache<StatusApiResponse> _cache;
     private readonly StaleCacheBlob _staleCacheBlob;
-    private readonly LiveWindowOptions _liveWindowOptions;
     private readonly ILogger<GetStatusFunction> _logger;
 
     public GetStatusFunction(
@@ -32,7 +31,6 @@ public sealed class GetStatusFunction
         StatusMerger statusMerger,
         InMemoryCache<StatusApiResponse> cache,
         StaleCacheBlob staleCacheBlob,
-        LiveWindowOptions liveWindowOptions,
         ILogger<GetStatusFunction> logger)
     {
         _siteResolver = siteResolver;
@@ -41,7 +39,6 @@ public sealed class GetStatusFunction
         _statusMerger = statusMerger;
         _cache = cache;
         _staleCacheBlob = staleCacheBlob;
-        _liveWindowOptions = liveWindowOptions;
         _logger = logger;
     }
 
@@ -120,7 +117,7 @@ public sealed class GetStatusFunction
         var resourceTasks = component.Source.EffectiveResources().Select(resourceKey =>
         {
             var resource = snapshot.Site.AppInsights[resourceKey];
-            return _statusDependencies.AvailabilityClient.QueryLiveRegionalAsync(resource.ResourceId, filter, _liveWindowOptions.Minutes);
+            return _statusDependencies.AvailabilityClient.QueryLiveRegionalAsync(resource.ResourceId, filter, _statusDependencies.LiveWindowOptions.Minutes);
         });
 
         var perResourceRegions = await Task.WhenAll(resourceTasks).ConfigureAwait(false);
@@ -178,4 +175,5 @@ public sealed record StatusDependencies(
     AvailabilityClient AvailabilityClient,
     HistoryReader HistoryReader,
     IncidentFetcher IncidentFetcher,
-    MaintenanceFetcher MaintenanceFetcher);
+    MaintenanceFetcher MaintenanceFetcher,
+    LiveWindowOptions LiveWindowOptions);
