@@ -9,12 +9,15 @@
 - **Frontend**: Astro static shell with vanilla TypeScript (~200 lines). No React/Preact/Vue. Target <10KB JS gzipped.
 - **Backend**: .NET 9 Azure Functions (isolated worker) — `status-api` (HTTP) and `status-rollup` (Timer).
 - **Infrastructure**: Terraform in `terraform/` — Azure resources in Sweden Central only.
-- **Multi-site**: Routed by `Host` header, not URL path.
+- **Multi-site**: Routed by resolved public hostname (`X-Forwarded-Host` when present and valid, else `Host`), not URL path — see `RequestHostResolver`.
 
 ## Key conventions
 
 - KQL queries always use `sum(itemCount)`, never `count()`
-- Historic day `unknown` = `total == 0` only; `3×expectedInterval` staleness applies only to live-today
+- Historic day `unknown` = `total == 0` only; `3×expectedInterval` staleness applies only to live status
+- Live status queries use a recent configurable window (`LIVE_WINDOW_MINUTES` app setting, default 15), not `startofday(now())`, so a fresh outage is never masked behind hours of earlier healthy samples
+- Live status is classified per probe region (`ComponentStatusCalculator.ClassifyLiveStatusRegional`): a subset of reporting regions failing is `degraded`; only all reporting regions failing is `outage`; missing/stale telemetry is never presented as healthy
+- Every Application Insights query filter is forced through `TelemetryFilters.WithSiteId`, which always sets `customDimensions.siteId` to the resolved site — tenant isolation does not depend on content authors remembering to filter by site
 - SiteConfigLoader has a blob fallback for GitHub outages
 - GitHub PAT stored in Key Vault; accessed via managed identity
 - BYOFA pattern (bring-your-own Function App for SWA), not SWA managed functions

@@ -13,38 +13,49 @@ public sealed class AvailabilityQueryBuilderTests
     public void RejectsValuesContainingKqlMetacharacters(string value)
     {
         var filters = new Dictionary<string, object?> { ["customDimensions.componentId"] = value };
-        Assert.Throws<ArgumentException>(() => _sut.BuildLiveTodayQuery(filters));
+        Assert.Throws<ArgumentException>(() => _sut.BuildLiveRegionalQuery(filters, 15));
     }
 
     [Fact]
     public void OnlyAllowsCustomDimensionsFilterKeys()
     {
         var filters = new Dictionary<string, object?> { ["name"] = "component" };
-        Assert.Throws<ArgumentException>(() => _sut.BuildLiveTodayQuery(filters));
+        Assert.Throws<ArgumentException>(() => _sut.BuildLiveRegionalQuery(filters, 15));
     }
 
     [Fact]
     public void GeneratesCorrectDynamicArray()
     {
-        var query = _sut.BuildLiveTodayQuery(new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" });
+        var query = _sut.BuildLiveRegionalQuery(new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" }, 15);
         Assert.Contains("dynamic([\"mx.api\"])", query);
     }
 
     [Fact]
     public void UsesSumItemCountInOutput()
     {
-        var query = _sut.BuildLiveTodayQuery(new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" });
+        var query = _sut.BuildLiveRegionalQuery(new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" }, 15);
         Assert.Contains("sum(itemCount)", query);
         Assert.DoesNotContain("count()", query);
     }
 
     [Fact]
-    public void BuildLiveTodayQueryProducesExpectedStructure()
+    public void BuildLiveRegionalQueryProducesExpectedStructure()
     {
-        var query = _sut.BuildLiveTodayQuery(new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" });
+        var query = _sut.BuildLiveRegionalQuery(new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" }, 15);
         Assert.Contains("availabilityResults", query);
-        Assert.Contains("startofday(now())", query);
+        Assert.Contains("ago(15m)", query);
+        Assert.DoesNotContain("startofday(now())", query);
         Assert.Contains("lastSeen = max(timestamp)", query);
+        Assert.Contains("by region = tostring(customDimensions[\"region\"])", query);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void RejectsNonPositiveLookbackMinutes(int lookbackMinutes)
+    {
+        var filters = new Dictionary<string, object?> { ["customDimensions.componentId"] = "mx.api" };
+        Assert.Throws<ArgumentOutOfRangeException>(() => _sut.BuildLiveRegionalQuery(filters, lookbackMinutes));
     }
 
     [Fact]

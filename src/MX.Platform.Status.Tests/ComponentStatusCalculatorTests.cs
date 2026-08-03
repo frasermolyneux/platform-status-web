@@ -54,4 +54,100 @@ public sealed class ComponentStatusCalculatorTests
         var result = _sut.WorstOf([ComponentStatus.Unknown, ComponentStatus.Operational, ComponentStatus.Degraded, ComponentStatus.Outage]);
         Assert.Equal(ComponentStatus.Outage, result);
     }
+
+    [Fact]
+    public void Regional_WithNoRegions_ReturnsUnknown() =>
+        Assert.Equal(ComponentStatus.Unknown, _sut.ClassifyLiveStatusRegional([], _sla));
+
+    [Fact]
+    public void Regional_WithAllRegionsHealthy_ReturnsOperational()
+    {
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("westeurope", 10, 0, DateTimeOffset.UtcNow)
+        };
+
+        Assert.Equal(ComponentStatus.Operational, _sut.ClassifyLiveStatusRegional(regions, _sla));
+    }
+
+    [Fact]
+    public void Regional_WithOneRegionFailingAndOthersHealthy_ReturnsDegraded()
+    {
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 10, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("westeurope", 10, 0, DateTimeOffset.UtcNow)
+        };
+
+        Assert.Equal(ComponentStatus.Degraded, _sut.ClassifyLiveStatusRegional(regions, _sla));
+    }
+
+    [Fact]
+    public void Regional_WithAllReportingRegionsFailing_ReturnsOutage()
+    {
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 10, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("eastus", 10, 10, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("westeurope", 10, 10, DateTimeOffset.UtcNow)
+        };
+
+        Assert.Equal(ComponentStatus.Outage, _sut.ClassifyLiveStatusRegional(regions, _sla));
+    }
+
+    [Fact]
+    public void Regional_WithAllRegionsStale_ReturnsUnknown()
+    {
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 0, DateTimeOffset.UtcNow.AddMinutes(-10)),
+            new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow.AddMinutes(-10))
+        };
+
+        Assert.Equal(ComponentStatus.Unknown, _sut.ClassifyLiveStatusRegional(regions, _sla));
+    }
+
+    [Fact]
+    public void Regional_WithExpectedRegionMissingEntirely_DoesNotReturnOperational()
+    {
+        var sla = _sla with { ExpectedRegions = ["uksouth", "eastus", "westeurope"] };
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow)
+            // westeurope never reported: must not be silently treated as healthy.
+        };
+
+        Assert.Equal(ComponentStatus.Degraded, _sut.ClassifyLiveStatusRegional(regions, sla));
+    }
+
+    [Fact]
+    public void Regional_WithExpectedRegionsAllReportingAndHealthy_ReturnsOperational()
+    {
+        var sla = _sla with { ExpectedRegions = ["uksouth", "eastus"] };
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("unexpected-region", 10, 10, DateTimeOffset.UtcNow)
+        };
+
+        Assert.Equal(ComponentStatus.Operational, _sut.ClassifyLiveStatusRegional(regions, sla));
+    }
+
+    [Fact]
+    public void Regional_WithOneRegionStaleAndOthersHealthy_ReturnsDegraded()
+    {
+        var regions = new[]
+        {
+            new RegionAvailabilityTelemetry("uksouth", 10, 0, DateTimeOffset.UtcNow.AddMinutes(-10)),
+            new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow),
+            new RegionAvailabilityTelemetry("westeurope", 10, 0, DateTimeOffset.UtcNow)
+        };
+
+        Assert.Equal(ComponentStatus.Degraded, _sut.ClassifyLiveStatusRegional(regions, _sla));
+    }
 }

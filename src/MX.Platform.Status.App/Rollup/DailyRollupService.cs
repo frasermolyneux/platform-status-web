@@ -70,17 +70,25 @@ public sealed class DailyRollupService
             return BuildStaticHistoryDays(ParseStaticStatus(component.Source.Status), startDate, endDate);
         }
 
-        if (!component.Source.Kind.Equals("appInsights", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(component.Source.Resource))
+        var resourceKeys = component.Source.EffectiveResources();
+        if (!component.Source.Kind.Equals("appInsights", StringComparison.OrdinalIgnoreCase) || resourceKeys.Count == 0)
         {
             return [];
         }
 
-        if (!snapshot.Site.AppInsights.TryGetValue(component.Source.Resource, out var resource))
+        var resourceIds = new List<string>(resourceKeys.Count);
+        foreach (var resourceKey in resourceKeys)
         {
-            return [];
+            if (!snapshot.Site.AppInsights.TryGetValue(resourceKey, out var resource))
+            {
+                return [];
+            }
+
+            resourceIds.Add(resource.ResourceId);
         }
 
-        return await BuildAIHistoryDays(resource.ResourceId, component, startDate, endDate, cancellationToken).ConfigureAwait(false);
+        var filter = TelemetryFilters.WithSiteId(component.Source.Filter, snapshot.Site.Id);
+        return await BuildAIHistoryDays(resourceIds, component, filter, startDate, endDate, cancellationToken).ConfigureAwait(false);
     }
 
     private List<HistoryDay> BuildStaticHistoryDays(ComponentStatus status, DateOnly startDate, DateOnly endDate)
@@ -94,10 +102,12 @@ public sealed class DailyRollupService
         return results;
     }
 
-    private async Task<List<HistoryDay>> BuildAIHistoryDays(string resourceId, Component component, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
+    private async Task<List<HistoryDay>> BuildAIHistoryDays(IReadOnlyList<string> resourceIds, Component component, IReadOnlyDictionary<string, object?> filter, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken)
     {
-        var queryResults = await _availabilityClient.QueryDailyRollupAsync(resourceId, component.Source.Filter, startDate, endDate, cancellationToken).ConfigureAwait(false);
-        var byDate = queryResults.ToDictionary(result => result.Date, result => result);
+        var perResourceResults = await Task.WhenAll(resourceIds.Select(resourceId =>
+            _availabilityClient.QueryDailyRollupAsync(resourceId, filter, startDate, endDate, cancellationToken))).ConfigureAwait(false);
+
+        var byDate = MergeDailyResults(perResourceResults.SelectMany(results => results));
         var days = new List<HistoryDay>();
         for (var date = startDate; date <= endDate; date = date.AddDays(1))
         {
@@ -120,6 +130,24 @@ public sealed class DailyRollupService
         }
 
         return days;
+    }
+
+    private static Dictionary<DateOnly, DailyAvailabilityTelemetry> MergeDailyResults(IEnumerable<DailyAvailabilityTelemetry> results)
+    {
+        return results
+            .GroupBy(result => result.Date)
+            .ToDictionary(group => group.Key, group =>
+            {
+                var total = group.Sum(item => item.Total);
+                var failures = group.Sum(item => item.Failures);
+                return new DailyAvailabilityTelemetry(
+                    group.Key,
+                    total,
+                    failures,
+                    total == 0 ? null : 1d - (double)failures / total,
+                    group.Select(item => item.LastSeen).Where(value => value.HasValue).Max(),
+                    group.Select(item => item.P95).Where(value => value.HasValue).Max());
+            });
     }
 
     private static ComponentHistoryRecord BuildGroupRecord(HistoryDocument existing, Component group)

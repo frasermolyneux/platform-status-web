@@ -44,18 +44,31 @@
           "type": "integer",
           "minimum": 10,
           "description": "Heartbeat cadence. If no rows arrive for >= 3x this interval the component is unknown, not operational."
+        },
+        "expectedRegions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Optional explicit list of probe region identifiers (matching the producer's customDimensions.region value, e.g. 'uksouth') expected to report for this component. When set, a listed region that has not reported at all (or only stale data) counts against the component's live status instead of being silently ignored. When omitted, only the regions actually observed in the live query window are considered."
         }
       }
     },
     "appInsightsSource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "resource"],
+      "required": ["kind"],
       "properties": {
         "kind": { "const": "appInsights" },
         "resource": {
           "type": "string",
-          "description": "Alias defined in site.yaml.appInsights."
+          "description": "Alias defined in site.yaml.appInsights. Deprecated in favour of 'resources' for components spanning more than one Application Insights resource; retained for backward compatibility with single-resource content."
+        },
+        "resources": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Aliases defined in site.yaml.appInsights to query for this component. Takes precedence over 'resource' when present. Per-region results across all listed resources are merged (summed) by region before status classification."
         },
         "table": {
           "type": "string",
@@ -66,9 +79,13 @@
         "filter": {
           "type": "object",
           "additionalProperties": { "type": ["string", "number", "boolean"] },
-          "description": "Key/value equality filter compiled to parameterised KQL. Keys may be a column or 'customDimensions.<name>'. The compiler escapes values; no raw KQL allowed."
+          "description": "Key/value equality filter compiled to parameterised KQL. Keys may be a column or 'customDimensions.<name>'. The compiler escapes values; no raw KQL allowed. The platform always enforces an additional customDimensions.siteId filter matching the owning site, regardless of what is configured here."
         }
-      }
+      },
+      "anyOf": [
+        { "required": ["resource"] },
+        { "required": ["resources"] }
+      ]
     },
     "compositeSource": {
       "type": "object",

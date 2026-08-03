@@ -22,6 +22,7 @@ public sealed class GetStatusFunction
     private readonly StatusMerger _statusMerger;
     private readonly InMemoryCache<StatusApiResponse> _cache;
     private readonly StaleCacheBlob _staleCacheBlob;
+    private readonly LiveWindowOptions _liveWindowOptions;
     private readonly ILogger<GetStatusFunction> _logger;
 
     public GetStatusFunction(
@@ -31,6 +32,7 @@ public sealed class GetStatusFunction
         StatusMerger statusMerger,
         InMemoryCache<StatusApiResponse> cache,
         StaleCacheBlob staleCacheBlob,
+        LiveWindowOptions liveWindowOptions,
         ILogger<GetStatusFunction> logger)
     {
         _siteResolver = siteResolver;
@@ -39,6 +41,7 @@ public sealed class GetStatusFunction
         _statusMerger = statusMerger;
         _cache = cache;
         _staleCacheBlob = staleCacheBlob;
+        _liveWindowOptions = liveWindowOptions;
         _logger = logger;
     }
 
@@ -97,15 +100,13 @@ public sealed class GetStatusFunction
         var components = Flatten(snapshot.Components.Components)
             .Where(c => c.Kind.Equals("leaf", StringComparison.OrdinalIgnoreCase)
                 && c.Source.Kind.Equals("appInsights", StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrWhiteSpace(c.Source.Resource)
-                && snapshot.Site.AppInsights.ContainsKey(c.Source.Resource))
+                && c.Source.EffectiveResources().Count > 0
+                && c.Source.EffectiveResources().All(snapshot.Site.AppInsights.ContainsKey))
             .ToList();
 
         var tasks = components.Select(async component =>
         {
-            var resourceKey = component.Source.Resource!;
-            var resource = snapshot.Site.AppInsights[resourceKey];
-            var telemetry = await _statusDependencies.AvailabilityClient.QueryLiveTodayAsync(resource.ResourceId, component.Source.Filter).ConfigureAwait(false);
+            var telemetry = await QueryComponentLiveTelemetryAsync(snapshot, component).ConfigureAwait(false);
             return (component.Id, telemetry);
         });
 
@@ -113,14 +114,42 @@ public sealed class GetStatusFunction
         return results.ToDictionary(result => result.Id, result => result.telemetry, StringComparer.OrdinalIgnoreCase);
     }
 
+    private async Task<ComponentLiveTelemetry> QueryComponentLiveTelemetryAsync(SiteConfigurationSnapshot snapshot, Component component)
+    {
+        var filter = TelemetryFilters.WithSiteId(component.Source.Filter, snapshot.Site.Id);
+        var resourceTasks = component.Source.EffectiveResources().Select(resourceKey =>
+        {
+            var resource = snapshot.Site.AppInsights[resourceKey];
+            return _statusDependencies.AvailabilityClient.QueryLiveRegionalAsync(resource.ResourceId, filter, _liveWindowOptions.Minutes);
+        });
+
+        var perResourceRegions = await Task.WhenAll(resourceTasks).ConfigureAwait(false);
+        var regions = MergeRegions(perResourceRegions.SelectMany(regions => regions));
+
+        return new ComponentLiveTelemetry(
+            regions.Sum(region => region.Samples),
+            regions.Sum(region => region.Failures),
+            regions.Select(region => region.LastSeen).Where(value => value.HasValue).Max(),
+            null)
+        {
+            Regions = regions
+        };
+    }
+
+    private static IReadOnlyList<RegionAvailabilityTelemetry> MergeRegions(IEnumerable<RegionAvailabilityTelemetry> regions) =>
+        regions
+            .GroupBy(region => region.Region, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new RegionAvailabilityTelemetry(
+                group.Key,
+                group.Sum(region => region.Samples),
+                group.Sum(region => region.Failures),
+                group.Select(region => region.LastSeen).Where(value => value.HasValue).Max()))
+            .ToArray();
+
     private async Task<string?> ResolveSiteAsync(HttpRequestData req)
     {
-        if (req.Headers.TryGetValues("Host", out var values))
-        {
-            return await _siteResolver.ResolveSiteIdAsync(values.FirstOrDefault()).ConfigureAwait(false);
-        }
-
-        return null;
+        var host = RequestHostResolver.Resolve(req);
+        return await _siteResolver.ResolveSiteIdAsync(host).ConfigureAwait(false);
     }
 
     private static async Task<HttpResponseData> WriteJsonAsync(HttpRequestData req, StatusApiResponse payload)

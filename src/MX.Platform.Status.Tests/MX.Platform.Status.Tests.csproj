@@ -24,4 +24,8 @@
   <ItemGroup>
     <ProjectReference Include="..\MX.Platform.Status.App\MX.Platform.Status.App.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\contract\availability-telemetry-contract.json" Link="contract\availability-telemetry-contract.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

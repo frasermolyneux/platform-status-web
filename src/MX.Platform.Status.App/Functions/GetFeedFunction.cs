@@ -25,7 +25,7 @@ public sealed class GetFeedFunction
     public async Task<HttpResponseData> Run(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "feed.xml")] HttpRequestData req)
     {
-        var host = req.Headers.TryGetValues("Host", out var values) ? values.FirstOrDefault() : null;
+        var host = RequestHostResolver.Resolve(req);
         var siteId = await _siteResolver.ResolveSiteIdAsync(host).ConfigureAwait(false);
         if (siteId is null)
         {

@@ -15,16 +15,31 @@ public sealed class AvailabilityClient
         _queryBuilder = queryBuilder;
     }
 
-    public async Task<ComponentLiveTelemetry> QueryLiveTodayAsync(string resourceId, IReadOnlyDictionary<string, object?> filters, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<RegionAvailabilityTelemetry>> QueryLiveRegionalAsync(string resourceId, IReadOnlyDictionary<string, object?> filters, int lookbackMinutes, CancellationToken cancellationToken = default)
     {
-        var query = _queryBuilder.BuildLiveTodayQuery(filters);
-        return await QuerySingleAsync(resourceId, query, TimeSpan.FromDays(1), cancellationToken).ConfigureAwait(false);
-    }
+        var query = _queryBuilder.BuildLiveRegionalQuery(filters, lookbackMinutes);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        var response = await _logsQueryClient.QueryResourceAsync(new ResourceIdentifier(resourceId), query, new QueryTimeRange(TimeSpan.FromMinutes(lookbackMinutes)), cancellationToken: timeout.Token).ConfigureAwait(false);
+        var table = response.Value.Table;
+        if (table.Rows.Count == 0)
+        {
+            return [];
+        }
 
-    public async Task<ComponentLiveTelemetry> QueryRecentProbeAsync(string resourceId, IReadOnlyDictionary<string, object?> filters, int lookbackMinutes = 15, CancellationToken cancellationToken = default)
-    {
-        var query = _queryBuilder.BuildRecentProbeQuery(filters, lookbackMinutes);
-        return await QuerySingleAsync(resourceId, query, TimeSpan.FromMinutes(lookbackMinutes), cancellationToken).ConfigureAwait(false);
+        var indices = BuildColumnIndex(table);
+        var results = new List<RegionAvailabilityTelemetry>(table.Rows.Count);
+        foreach (var row in table.Rows)
+        {
+            var region = ReadString(row, indices, "region");
+            results.Add(new RegionAvailabilityTelemetry(
+                string.IsNullOrWhiteSpace(region) ? "unknown" : region,
+                ReadInt(row, indices, "total"),
+                ReadInt(row, indices, "failures"),
+                ReadDateTimeOffset(row, indices, "lastSeen")));
+        }
+
+        return results;
     }
 
     public async Task<IReadOnlyList<DailyAvailabilityTelemetry>> QueryDailyRollupAsync(string resourceId, IReadOnlyDictionary<string, object?> filters, DateOnly startDate, DateOnly endDate, CancellationToken cancellationToken = default)
@@ -56,32 +71,15 @@ public sealed class AvailabilityClient
         return results;
     }
 
-    private async Task<ComponentLiveTelemetry> QuerySingleAsync(string resourceId, string query, TimeSpan range, CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        var response = await _logsQueryClient.QueryResourceAsync(new ResourceIdentifier(resourceId), query, new QueryTimeRange(range), cancellationToken: timeout.Token).ConfigureAwait(false);
-        var table = response.Value.Table;
-        if (table.Rows.Count == 0)
-        {
-            return new ComponentLiveTelemetry(0, 0, null, null);
-        }
-
-        var indices = BuildColumnIndex(table);
-        var row = table.Rows[0];
-        return new ComponentLiveTelemetry(
-            ReadInt(row, indices, "total"),
-            ReadInt(row, indices, "failures"),
-            ReadDateTimeOffset(row, indices, "lastSeen"),
-            ReadDouble(row, indices, "p95"));
-    }
-
     private static Dictionary<string, int> BuildColumnIndex(LogsTable table) =>
         table.Columns.Select((column, index) => new { column.Name, index })
             .ToDictionary(item => item.Name, item => item.index, StringComparer.OrdinalIgnoreCase);
 
     private static object? GetValue(LogsTableRow row, IReadOnlyDictionary<string, int> indices, string name) =>
         indices.TryGetValue(name, out var index) ? row[index] : null;
+
+    private static string? ReadString(LogsTableRow row, IReadOnlyDictionary<string, int> indices, string name) =>
+        GetValue(row, indices, name) as string;
 
     private static int ReadInt(LogsTableRow row, IReadOnlyDictionary<string, int> indices, string name)
     {
@@ -124,5 +122,16 @@ public sealed class AvailabilityClient
     }
 }
 
-public sealed record ComponentLiveTelemetry(int Samples, int Failures, DateTimeOffset? LastSeen, double? P95);
+public sealed record ComponentLiveTelemetry(int Samples, int Failures, DateTimeOffset? LastSeen, double? P95)
+{
+    /// <summary>
+    /// Per-region breakdown backing regional status classification (see
+    /// <see cref="ComponentStatusCalculator.ClassifyLiveStatusRegional"/>). Empty when the component
+    /// has no regional telemetry (e.g. static components) or the underlying query returned no rows.
+    /// </summary>
+    public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
+}
+
+public sealed record RegionAvailabilityTelemetry(string Region, int Samples, int Failures, DateTimeOffset? LastSeen);
+
 public sealed record DailyAvailabilityTelemetry(DateOnly Date, int Total, int Failures, double? Uptime, DateTimeOffset? LastSeen, double? P95);

@@ -7,19 +7,7 @@ public sealed class AvailabilityQueryBuilder
 {
     private static readonly string[] ForbiddenTokens = [";", "|", "//", "/*", "*/", "\r", "\n"];
 
-    public string BuildLiveTodayQuery(IReadOnlyDictionary<string, object?> filters)
-    {
-        var where = BuildWhereClauses(filters);
-        return $$"""
-availabilityResults
-| where timestamp >= startofday(now())
-{{where}}
-| summarize total = sum(itemCount), failures = sumif(itemCount, success == false), lastSeen = max(timestamp), p95 = percentile(duration, 95)
-| project total, failures, lastSeen, p95
-""";
-    }
-
-    public string BuildRecentProbeQuery(IReadOnlyDictionary<string, object?> filters, int lookbackMinutes = 15)
+    public string BuildLiveRegionalQuery(IReadOnlyDictionary<string, object?> filters, int lookbackMinutes)
     {
         if (lookbackMinutes <= 0)
         {
@@ -31,8 +19,8 @@ availabilityResults
 availabilityResults
 | where timestamp >= ago({{lookbackMinutes}}m)
 {{where}}
-| summarize total = sum(itemCount), failures = sumif(itemCount, success == false), lastSeen = max(timestamp), p95 = percentile(duration, 95)
-| project total, failures, lastSeen, p95
+| summarize total = sum(itemCount), failures = sumif(itemCount, success == false), lastSeen = max(timestamp) by region = tostring(customDimensions["region"])
+| project region, total, failures, lastSeen
 """;
     }
 

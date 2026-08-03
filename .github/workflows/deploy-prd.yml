@@ -78,7 +78,7 @@ jobs:
           node-version: "22.x"
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
         working-directory: src/MX.Platform.Status.Web
 
       - name: Build frontend
