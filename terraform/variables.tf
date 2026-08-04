@@ -23,13 +23,13 @@ variable "static_web_app_location" {
 }
 
 variable "static_web_app_sku" {
-  description = "Static Web Apps SKU tier/size. Must be Standard: the linked bring-your-own Azure Functions registration (azurerm_static_web_app_function_app_registration) is rejected by Azure with a `SkuCode 'Free' is invalid` error on the Free tier, so both dev and prd must run Standard. Kept as a variable (set explicitly per environment tfvars) rather than hard-coded so the requirement is visible and any future environment must set it deliberately."
+  description = "Static Web Apps SKU tier/size. Must be Standard: this module always creates the linked bring-your-own Azure Functions registration (azurerm_static_web_app_function_app_registration), which Azure rejects with a `SkuCode 'Free' is invalid` error on the Free tier, so both dev and prd must run Standard. Kept as a variable (set explicitly per environment tfvars) rather than hard-coded so the requirement is visible and any future environment must set it deliberately. Free is intentionally not a valid value here since it would fail at apply time."
   type        = string
   default     = "Standard"
 
   validation {
-    condition     = contains(["Free", "Standard"], var.static_web_app_sku)
-    error_message = "static_web_app_sku must be either \"Free\" or \"Standard\"."
+    condition     = var.static_web_app_sku == "Standard"
+    error_message = "static_web_app_sku must be \"Standard\": this module always creates azurerm_static_web_app_function_app_registration, which requires the Standard SKU."
   }
 }
 
