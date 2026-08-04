@@ -10,6 +10,14 @@
 - **.NET Function App** (`src/MX.Platform.Status.App/`) — `status-api` and `status-rollup` functions
 - **Terraform** (`terraform/`) — Azure resources (SWA, Function App, Storage, Key Vault, App Insights)
 
+## Static Web App: dedicated Standard SKU, own region
+
+The status service uses one dedicated Azure Static Web App per environment (not a shared/multi-tenant SWA in `platform-hosting`), because SWA is billed per application and this service should remain independently owned. That single SWA serves all status tenants (`status.xtremeidiots.com`/`xi`, `mxstatus.io`/`mx`, `dev.mxstatus.io`/`dev`) from one deployed artifact via host-based routing (see below), not one SWA per tenant.
+
+The SWA runs the **Standard** SKU (`var.static_web_app_sku`) in both dev and prd. The Free tier cannot host a linked bring-your-own Function App: `azurerm_static_web_app_function_app_registration` fails against Free with `SkuCode 'Free' is invalid`, and Microsoft's documentation confirms Standard is required for linked APIs. Expected incremental cost is ~GBP 6.82/month in West Europe plus bandwidth above 100 GB/month.
+
+The SWA runs in **West Europe** (`var.static_web_app_location`) because Azure Static Web Apps are not available in Sweden Central; the Function App, Storage, Key Vault, and Application Insights remain in **Sweden Central** (`var.location`) with the rest of the platform estate.
+
 ## Multi-site routing
 
 The app is multi-site by resolved public hostname, NOT by URL path. `status.xtremeidiots.com` and `mxstatus.io` both serve `/` but with different content per host. Because this Function App is linked to Azure Static Web Apps as a "bring your own Function App" (BYOFA) backend, the `Host` header it sees reflects the internal SWA↔Function App hop, not the custom domain the browser requested. `RequestHostResolver` resolves the original hostname from a validated first hop of `X-Forwarded-Host` when present, falling back to `Host`; `SiteResolver` then maps that hostname to a site configuration loaded from the `status-pages` GitHub repo.

@@ -186,8 +186,12 @@ jobs:
           azure_static_web_apps_api_token: ${{ env.static_web_app_api_key }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: upload
-          app_location: "src/MX.Platform.Status.Web"
-          output_location: "dist"
+          # skip_app_build deploys directly from app_location (output_location is only
+          # honored when Oryx performs the build), so this must point at the already
+          # built Astro output rather than the source folder - see deploy-dev.yml/
+          # deploy-prd.yml, which use the same skip_app_build: true pattern against a
+          # pre-built static-site artifact.
+          app_location: "src/MX.Platform.Status.Web/dist"
           skip_app_build: true
 
   terraform-plan-prd:
