@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "astro": "^6.4.8",
-    "dompurify": "^3.4.11"
+    "dompurify": "^3.4.13"
   },
   "devDependencies": {
     "@types/dompurify": "^3.2.0",
