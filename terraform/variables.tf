@@ -22,6 +22,17 @@ variable "static_web_app_location" {
   default     = "westeurope"
 }
 
+variable "static_web_app_sku" {
+  description = "Static Web Apps SKU tier/size. Must be Standard: the linked bring-your-own Azure Functions registration (azurerm_static_web_app_function_app_registration) is rejected by Azure with a `SkuCode 'Free' is invalid` error on the Free tier, so both dev and prd must run Standard. Kept as a variable (set explicitly per environment tfvars) rather than hard-coded so the requirement is visible and any future environment must set it deliberately."
+  type        = string
+  default     = "Standard"
+
+  validation {
+    condition     = contains(["Free", "Standard"], var.static_web_app_sku)
+    error_message = "static_web_app_sku must be either \"Free\" or \"Standard\"."
+  }
+}
+
 variable "subscription_id" {
   description = "Azure subscription ID for the target environment"
   type        = string
