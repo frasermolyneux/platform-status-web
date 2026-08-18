@@ -48,7 +48,7 @@ Changes are promoted through GitHub Actions workflows. Pull request labels contr
 - **Open a pull request** runs [PR Verify](.github/workflows/pr-verify.yml): build and test, plus a dev Terraform plan by default.
   - Add the **`deploy-dev`** label to apply Terraform and deploy the Function App and Static Web App to the Development environment from the PR branch. This label is ignored for Dependabot PRs.
   - Add the **`run-prd-plan`** label to run a production Terraform plan for review.
-- **Merge to `main`** triggers [Deploy Prd](.github/workflows/deploy-prd.yml) to promote to Production. [Deploy Dev](.github/workflows/deploy-dev.yml) can also be run on demand via `workflow_dispatch`.
+- **Merge to `main`** triggers [Deploy Prd](.github/workflows/deploy-prd.yml) to promote to Production. Deploy Prd can also be run on demand via `workflow_dispatch` and runs on a weekly schedule. [Deploy Dev](.github/workflows/deploy-dev.yml) can likewise be run on demand via `workflow_dispatch`.
 
 Dependabot dependency updates are grouped weekly per ecosystem and auto-merged once required checks pass, via [Dependabot Auto-Merge](.github/workflows/dependabot-automerge.yml).
 
