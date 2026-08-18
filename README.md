@@ -40,6 +40,18 @@ npm run build
 4. Add any required Application Insights resource access in `terraform\tfvars\*.tfvars`.
 5. Validate locally, then use the PR verify and deployment workflows to promote the change.
 
+## Deployment and route to live
+
+Changes are promoted through GitHub Actions workflows. Pull request labels control the optional plan/deploy stages:
+
+- **Push** to a `feature/**`, `bugfix/**`, or `hotfix/**` branch runs [Build and Test](.github/workflows/build-and-test.yml) (build, unit tests, and a dev Terraform plan).
+- **Open a pull request** runs [PR Verify](.github/workflows/pr-verify.yml): build and test, plus a dev Terraform plan by default.
+  - Add the **`deploy-dev`** label to apply Terraform and deploy the Function App and Static Web App to the Development environment from the PR branch. This label is ignored for Dependabot PRs.
+  - Add the **`run-prd-plan`** label to run a production Terraform plan for review.
+- **Merge to `main`** triggers [Deploy Prd](.github/workflows/deploy-prd.yml) to promote to Production. [Deploy Dev](.github/workflows/deploy-dev.yml) can also be run on demand via `workflow_dispatch`.
+
+Dependabot dependency updates are grouped weekly per ecosystem and auto-merged once required checks pass, via [Dependabot Auto-Merge](.github/workflows/dependabot-automerge.yml).
+
 ## Planned status content repository
 
 Planned content lives in: https://github.com/frasermolyneux/status-pages
