@@ -15,4 +15,18 @@ public class GitHubAppTokenProviderTests
         var provider = new GitHubAppTokenProvider(secretClient, "12345", "67890", "github-app-pem");
         Assert.NotNull(provider);
     }
+
+    [Theory]
+    [InlineData("invalid", "67890", "GitHubApp__AppId")]
+    [InlineData("12345", "invalid", "GitHubApp__InstallationId")]
+    public void Constructor_WithInvalidId_ThrowsClearError(string appId, string installationId, string settingName)
+    {
+        var credential = Substitute.For<TokenCredential>();
+        var secretClient = Substitute.For<SecretClient>(new Uri("https://example.vault.azure.net/"), credential);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new GitHubAppTokenProvider(secretClient, appId, installationId, "github-app-pem"));
+
+        Assert.Contains(settingName, exception.Message, StringComparison.Ordinal);
+    }
 }

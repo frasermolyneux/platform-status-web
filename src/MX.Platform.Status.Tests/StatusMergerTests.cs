@@ -6,7 +6,7 @@ namespace MX.Platform.Status.Tests;
 
 public sealed class StatusMergerTests
 {
-    private readonly StatusMerger _sut = new(new ComponentStatusCalculator());
+    private readonly StatusMerger _sut = new();
 
     [Fact]
     public void WorstOfOperationalAndDegradedIncident_ReturnsDegraded()
@@ -47,6 +47,26 @@ public sealed class StatusMergerTests
 
         var response = _sut.Merge(snapshot, new Dictionary<string, ComponentLiveTelemetry> { ["mx.api"] = new(100, 20, DateTimeOffset.UtcNow, 10) }, null, [], []);
         Assert.Equal("outage", response.Summary.Status);
+    }
+
+    [Fact]
+    public void UsesRegionalClassificationWhenRegionsPresent()
+    {
+        // One of two reporting regions is fully failing while the other is healthy: aggregate ratio
+        // (10 failures / 20 samples = 50%) would read as Outage under the old aggregate classifier,
+        // but regional semantics require a subset failing (not all) to classify as Degraded.
+        var snapshot = CreateSnapshot();
+        var telemetry = new ComponentLiveTelemetry(20, 10, DateTimeOffset.UtcNow, null)
+        {
+            Regions =
+            [
+                new RegionAvailabilityTelemetry("uksouth", 10, 10, DateTimeOffset.UtcNow),
+                new RegionAvailabilityTelemetry("eastus", 10, 0, DateTimeOffset.UtcNow)
+            ]
+        };
+
+        var response = _sut.Merge(snapshot, new Dictionary<string, ComponentLiveTelemetry> { ["mx.api"] = telemetry }, null, [], []);
+        Assert.Equal("degraded", response.Components.Single().Status);
     }
 
     private MX.Platform.Status.App.Contracts.StatusApiResponse MergeWith(Severity severity, ComponentStatus liveStatus)

@@ -13,11 +13,11 @@
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^6.4.8",
-    "dompurify": "^3.4.11"
+    "astro": "^7.2.4",
+    "dompurify": "^3.4.14"
   },
   "devDependencies": {
     "@types/dompurify": "^3.2.0",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }

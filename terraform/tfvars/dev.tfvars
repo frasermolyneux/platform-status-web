@@ -1,6 +1,8 @@
-environment   = "dev"
-workload_name = "platform-status-web"
-location      = "swedencentral"
+environment             = "dev"
+workload_name           = "platform-status-web"
+location                = "swedencentral"
+static_web_app_location = "westeurope"
+static_web_app_sku      = "Standard"
 
 subscription_id = "6cad03c1-9e98-4160-8ebe-64dd30f1bbc7"
 

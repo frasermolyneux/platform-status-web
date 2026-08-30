@@ -8,7 +8,7 @@ namespace MX.Platform.Status.App.Auth;
 public sealed class GitHubAppTokenProvider : IGitHubAppTokenProvider
 {
     private readonly SecretClient _secretClient;
-    private readonly string _appId;
+    private readonly int _appId;
     private readonly long _installationId;
     private readonly string _pemSecretName;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -18,8 +18,16 @@ public sealed class GitHubAppTokenProvider : IGitHubAppTokenProvider
     public GitHubAppTokenProvider(SecretClient secretClient, string appId, string installationId, string pemSecretName)
     {
         _secretClient = secretClient;
-        _appId = appId;
-        _installationId = long.Parse(installationId, CultureInfo.InvariantCulture);
+        if (!int.TryParse(appId, NumberStyles.None, CultureInfo.InvariantCulture, out _appId))
+        {
+            throw new InvalidOperationException("Configuration setting 'GitHubApp__AppId' must be a valid integer.");
+        }
+
+        if (!long.TryParse(installationId, NumberStyles.None, CultureInfo.InvariantCulture, out _installationId))
+        {
+            throw new InvalidOperationException("Configuration setting 'GitHubApp__InstallationId' must be a valid integer.");
+        }
+
         _pemSecretName = pemSecretName;
     }
 
@@ -45,7 +53,7 @@ public sealed class GitHubAppTokenProvider : IGitHubAppTokenProvider
                 new StringPrivateKeySource(pem),
                 new GitHubJwtFactoryOptions
                 {
-                    AppIntegrationId = int.Parse(_appId, CultureInfo.InvariantCulture),
+                    AppIntegrationId = _appId,
                     ExpirationSeconds = 540
                 });
             var jwt = generator.CreateEncodedJwtToken();

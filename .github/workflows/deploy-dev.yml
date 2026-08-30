@@ -12,7 +12,7 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v1.4
+      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.0
         with:
           dotnet-project: "MX.Platform.Status.App"
           dotnet-version: "9.0.x"
@@ -20,12 +20,12 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22.x"
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
         working-directory: src/MX.Platform.Status.Web
 
       - name: Build frontend

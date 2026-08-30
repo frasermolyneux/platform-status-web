@@ -1,0 +1,48 @@
+{
+  "$schema": "https://frasermolyneux.com/schemas/status-pages/availability-telemetry-contract.schema.json",
+  "version": 1,
+  "description": "Canonical shape of the customDimensions emitted onto every native Application Insights availabilityResults row produced by platform-sitewatch-func and consumed by platform-status-web. This file is duplicated verbatim in both repositories (platform-sitewatch-func/contract/ and platform-status-web/contract/) and each repo has a test asserting its own code against these exact key names, so a rename on either side that isn't mirrored in the other repo's copy fails CI instead of drifting silently in production.",
+  "customDimensions": {
+    "componentId": {
+      "required": true,
+      "type": "string",
+      "description": "Dotted component identifier matching the status-web components.yaml component id, e.g. 'mx.api'. Must be prefixed with the owning site id and a dot."
+    },
+    "siteId": {
+      "required": true,
+      "type": "string",
+      "description": "Tenant/site identifier, one of the known site ids (currently 'xi', 'mx', 'dev'). Must match the first dot-delimited segment of componentId. Status-web always forces an additional customDimensions.siteId query filter to this value at query time - it never infers tenancy from componentId text alone."
+    },
+    "region": {
+      "required": true,
+      "type": "string",
+      "description": "Canonical lowercase Azure region string the probe executed in (e.g. 'uksouth', 'eastus', 'westeurope', 'swedencentral'), taken directly from the sitewatch-func REGION_NAME app setting. Falls back to the literal sentinel 'unknown' (never silently omitted) when REGION_NAME is missing/empty, so a probe with unresolvable region never accidentally satisfies a component's sla.expectedRegions check."
+    }
+  },
+  "example": {
+    "name": "availabilityResults",
+    "customDimensions": {
+      "componentId": "mx.api",
+      "siteId": "mx",
+      "region": "uksouth"
+    }
+  },
+  "producer": {
+    "repo": "platform-sitewatch-func",
+    "emittedBy": "src/MX.Platform.SiteWatch.App/ExternalHealthCheck.cs (BuildContractDimensions)",
+    "validatedBy": "src/MX.Platform.SiteWatch.App/TestConfigValidator.cs"
+  },
+  "consumer": {
+    "repo": "platform-status-web",
+    "queriedBy": "src/MX.Platform.Status.App/Telemetry/AvailabilityQueryBuilder.cs, AvailabilityClient.cs",
+    "enforcedBy": "src/MX.Platform.Status.App/Telemetry/TelemetryFilters.cs (WithSiteId)",
+    "classifiedBy": "src/MX.Platform.Status.App/Telemetry/ComponentStatusCalculator.cs (ClassifyLiveStatusRegional)"
+  },
+  "howToUpdate": [
+    "1. Update this file identically in both platform-sitewatch-func/contract/ and platform-status-web/contract/ (copy one over the other).",
+    "2. Update the producer emission code and its tests in platform-sitewatch-func (ExternalHealthCheck.cs, ComponentDimensionTests.cs, TestConfigValidator(Tests).cs).",
+    "3. Update the consumer query/filter code and its tests in platform-status-web (AvailabilityQueryBuilder(Tests).cs, TelemetryFilters(Tests).cs, ComponentStatusCalculator(Tests).cs).",
+    "4. Deploy platform-sitewatch-func (the producer) before platform-status-web/status-pages content starts depending on the new/changed dimension, so consumers never query for a dimension that isn't being emitted yet.",
+    "5. Both repos' 'contract fixture' tests load this file and assert their code's dimension names against it - re-run both test suites after any change."
+  ]
+}

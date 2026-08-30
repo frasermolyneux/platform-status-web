@@ -11,9 +11,26 @@ variable "workload_name" {
 }
 
 variable "location" {
-  description = "Azure region for all resources"
+  description = "Azure region for all resources except the Static Web App (see `static_web_app_location`)"
   type        = string
   default     = "swedencentral"
+}
+
+variable "static_web_app_location" {
+  description = "Azure region for the Static Web App. Azure Static Web Apps are only available in a fixed subset of regions (centralus, eastus2, westus2, westeurope, eastasia), which does not include swedencentral, so this is tracked independently from `location`. Aligned with the westeurope convention used by other Static Web Apps in this org (molyneux-me, twenty-one)."
+  type        = string
+  default     = "westeurope"
+}
+
+variable "static_web_app_sku" {
+  description = "Static Web Apps SKU tier/size. Must be Standard: this module always creates the linked bring-your-own Azure Functions registration (azurerm_static_web_app_function_app_registration), which Azure rejects with a `SkuCode 'Free' is invalid` error on the Free tier, so both dev and prd must run Standard. Kept as a variable (set explicitly per environment tfvars) rather than hard-coded so the requirement is visible and any future environment must set it deliberately. Free is intentionally not a valid value here since it would fail at apply time."
+  type        = string
+  default     = "Standard"
+
+  validation {
+    condition     = var.static_web_app_sku == "Standard"
+    error_message = "static_web_app_sku must be \"Standard\": this module always creates azurerm_static_web_app_function_app_registration, which requires the Standard SKU."
+  }
 }
 
 variable "subscription_id" {

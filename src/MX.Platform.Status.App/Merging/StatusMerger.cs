@@ -6,13 +6,6 @@ namespace MX.Platform.Status.App.Merging;
 
 public sealed class StatusMerger
 {
-    private readonly ComponentStatusCalculator _componentStatusCalculator;
-
-    public StatusMerger(ComponentStatusCalculator componentStatusCalculator)
-    {
-        _componentStatusCalculator = componentStatusCalculator;
-    }
-
     public StatusApiResponse Merge(
         SiteConfigurationSnapshot snapshot,
         IReadOnlyDictionary<string, ComponentLiveTelemetry> liveData,
@@ -112,7 +105,7 @@ public sealed class StatusMerger
         if (component.Kind.Equals("group", StringComparison.OrdinalIgnoreCase))
         {
             return (
-                children.Count == 0 ? ComponentStatus.Unknown : _componentStatusCalculator.WorstOf(children.Select(child => ParseStatus(child.Status))),
+                children.Count == 0 ? ComponentStatus.Unknown : ComponentStatusCalculator.WorstOf(children.Select(child => ParseStatus(child.Status))),
                 children.Select(child => child.LastSampleAt).Where(value => value.HasValue).Max());
         }
 
@@ -123,7 +116,9 @@ public sealed class StatusMerger
 
         if (liveData.TryGetValue(component.Id, out var telemetry))
         {
-            var liveStatus = _componentStatusCalculator.ClassifyLiveStatus(telemetry.Samples, telemetry.Failures, telemetry.LastSeen, component.Sla);
+            var liveStatus = telemetry.Regions.Count > 0
+                ? ComponentStatusCalculator.ClassifyLiveStatusRegional(telemetry.Regions, component.Sla)
+                : ComponentStatusCalculator.ClassifyLiveStatus(telemetry.Samples, telemetry.Failures, telemetry.LastSeen, component.Sla);
             historicalDays[^1] = todayHistory with
             {
                 Status = liveStatus,
@@ -138,7 +133,7 @@ public sealed class StatusMerger
         return (todayHistory.Status, null);
     }
 
-    private ComponentStatus ApplyMergedStatus(
+    private static ComponentStatus ApplyMergedStatus(
         string componentId,
         ComponentStatus liveStatus,
         IReadOnlyList<ComponentStatus> incidentStatuses,
@@ -151,7 +146,7 @@ public sealed class StatusMerger
 
         return incidentStatuses.Count == 0
             ? liveStatus
-            : _componentStatusCalculator.WorstOf([liveStatus, .. incidentStatuses.Where(status => status != ComponentStatus.Maintenance)]);
+            : ComponentStatusCalculator.WorstOf([liveStatus, .. incidentStatuses.Where(status => status != ComponentStatus.Maintenance)]);
     }
 
     private List<HistoryDay> BuildHistoricalWindow(Component component, HistoryDocument? history, DateOnly today, int windowDays)

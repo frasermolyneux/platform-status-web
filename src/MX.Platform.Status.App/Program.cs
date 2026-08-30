@@ -61,9 +61,8 @@ internal static class Program
                 services.AddSingleton<SiteConfigLoader>();
                 services.AddSingleton<SiteConfigSnapshotStore>();
                 services.AddSingleton<ContentRepoClient>();
-                services.AddSingleton<AvailabilityQueryBuilder>();
                 services.AddSingleton<AvailabilityClient>();
-                services.AddSingleton<ComponentStatusCalculator>();
+                services.AddSingleton(new LiveWindowOptions(GetIntEnvironmentVariable("LIVE_WINDOW_MINUTES", LiveWindowOptions.DefaultMinutes)));
                 services.AddSingleton<IncidentFetcher>();
                 services.AddSingleton<MaintenanceFetcher>();
                 services.AddSingleton<HistoryReader>();

@@ -3,23 +3,11 @@ using System.Text.Json;
 
 namespace MX.Platform.Status.App.Telemetry;
 
-public sealed class AvailabilityQueryBuilder
+public static class AvailabilityQueryBuilder
 {
     private static readonly string[] ForbiddenTokens = [";", "|", "//", "/*", "*/", "\r", "\n"];
 
-    public string BuildLiveTodayQuery(IReadOnlyDictionary<string, object?> filters)
-    {
-        var where = BuildWhereClauses(filters);
-        return $$"""
-availabilityResults
-| where timestamp >= startofday(now())
-{{where}}
-| summarize total = sum(itemCount), failures = sumif(itemCount, success == false), lastSeen = max(timestamp), p95 = percentile(duration, 95)
-| project total, failures, lastSeen, p95
-""";
-    }
-
-    public string BuildRecentProbeQuery(IReadOnlyDictionary<string, object?> filters, int lookbackMinutes = 15)
+    public static string BuildLiveRegionalQuery(IReadOnlyDictionary<string, object?> filters, int lookbackMinutes)
     {
         if (lookbackMinutes <= 0)
         {
@@ -31,12 +19,12 @@ availabilityResults
 availabilityResults
 | where timestamp >= ago({{lookbackMinutes}}m)
 {{where}}
-| summarize total = sum(itemCount), failures = sumif(itemCount, success == false), lastSeen = max(timestamp), p95 = percentile(duration, 95)
-| project total, failures, lastSeen, p95
+| summarize total = sum(itemCount), failures = sumif(itemCount, success == false), lastSeen = max(timestamp) by region = tostring(customDimensions["region"])
+| project region, total, failures, lastSeen
 """;
     }
 
-    public string BuildDailyRollupQuery(IReadOnlyDictionary<string, object?> filters, DateOnly startDate, DateOnly endDate)
+    public static string BuildDailyRollupQuery(IReadOnlyDictionary<string, object?> filters, DateOnly startDate, DateOnly endDate)
     {
         if (endDate < startDate)
         {
@@ -90,7 +78,7 @@ availabilityResults
         }
 
         var filterValue = ConvertToFilterValue(value);
-        var forbiddenToken = ForbiddenTokens.FirstOrDefault(token => filterValue.Contains(token, StringComparison.Ordinal));
+        var forbiddenToken = Array.Find(ForbiddenTokens, token => filterValue.Contains(token, StringComparison.Ordinal));
         if (forbiddenToken is not null)
         {
             throw new ArgumentException($"Filter value contains forbidden KQL metacharacters: '{filterValue}'.", nameof(value));

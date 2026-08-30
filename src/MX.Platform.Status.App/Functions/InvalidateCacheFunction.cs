@@ -58,9 +58,7 @@ public sealed class InvalidateCacheFunction
 
     private async Task<string?> ResolveSiteFromHostAsync(HttpRequestData req)
     {
-        return req.Headers.TryGetValues("Host", out var values)
-            ? await _siteResolver.ResolveSiteIdAsync(values.FirstOrDefault()).ConfigureAwait(false)
-            : null;
+        return await _siteResolver.ResolveSiteIdAsync(RequestHostResolver.Resolve(req)).ConfigureAwait(false);
     }
 
     private static string? GetSiteQueryParameter(Uri url)
