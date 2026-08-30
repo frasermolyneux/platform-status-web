@@ -12,8 +12,8 @@ public class ContentRepoClient
     private readonly HttpClient _httpClient;
     private readonly ConcurrentDictionary<string, CachedContent> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _gitHubClientLock = new(1, 1);
-    private GitHubClient? _gitHubClient;
-    private string? _lastToken;
+    private volatile GitHubClient? _gitHubClient;
+    private volatile string? _lastToken;
 
     public ContentRepoClient(IGitHubAppTokenProvider tokenProvider, HttpClient httpClient)
     {
