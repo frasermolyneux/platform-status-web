@@ -28,6 +28,11 @@ public sealed class GitHubAppTokenProvider : IGitHubAppTokenProvider
             throw new InvalidOperationException("Configuration setting 'GitHubApp__InstallationId' must be a valid integer.");
         }
 
+        if (string.IsNullOrWhiteSpace(pemSecretName))
+        {
+            throw new InvalidOperationException("Configuration setting 'GitHubApp__PemSecretName' must not be empty.");
+        }
+
         _pemSecretName = pemSecretName;
     }
 

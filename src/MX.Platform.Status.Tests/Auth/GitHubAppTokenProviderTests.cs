@@ -29,4 +29,18 @@ public class GitHubAppTokenProviderTests
 
         Assert.Contains(settingName, exception.Message, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Constructor_WithInvalidPemSecretName_ThrowsClearError(string pemSecretName)
+    {
+        var credential = Substitute.For<TokenCredential>();
+        var secretClient = Substitute.For<SecretClient>(new Uri("https://example.vault.azure.net/"), credential);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => new GitHubAppTokenProvider(secretClient, "12345", "67890", pemSecretName));
+
+        Assert.Contains("GitHubApp__PemSecretName", exception.Message, StringComparison.Ordinal);
+    }
 }
