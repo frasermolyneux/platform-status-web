@@ -11,6 +11,7 @@ public class ContentRepoClient
     private readonly IGitHubAppTokenProvider _tokenProvider;
     private readonly HttpClient _httpClient;
     private readonly ConcurrentDictionary<string, CachedContent> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _gitHubClientLock = new(1, 1);
     private GitHubClient? _gitHubClient;
     private string? _lastToken;
 
@@ -64,12 +65,26 @@ public class ContentRepoClient
             return _gitHubClient;
         }
 
-        _lastToken = token;
-        _gitHubClient = new GitHubClient(new Octokit.ProductHeaderValue("MX.Platform.Status.App"))
+        await _gitHubClientLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            Credentials = new Credentials(token, AuthenticationType.Bearer)
-        };
-        return _gitHubClient;
+            if (_gitHubClient is not null && token == _lastToken)
+            {
+                return _gitHubClient;
+            }
+
+            var gitHubClient = new GitHubClient(new Octokit.ProductHeaderValue("MX.Platform.Status.App"))
+            {
+                Credentials = new Credentials(token, AuthenticationType.Bearer)
+            };
+            _gitHubClient = gitHubClient;
+            _lastToken = token;
+            return gitHubClient;
+        }
+        finally
+        {
+            _gitHubClientLock.Release();
+        }
     }
 
     private static Uri BuildContentsUri(string repo, string branch, string path)
