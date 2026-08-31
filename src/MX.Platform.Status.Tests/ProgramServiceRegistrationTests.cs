@@ -19,6 +19,8 @@ using MX.Platform.Status.App.Telemetry;
 using MX.Platform.Status.App.Yaml;
 using System.Text.Json;
 
+[assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]
+
 namespace MX.Platform.Status.Tests;
 
 /// <summary>
@@ -46,7 +48,11 @@ public sealed class ProgramServiceRegistrationTests
         services.AddLogging();
         Program.ConfigureServices(services);
 
-        using var provider = services.BuildServiceProvider(validateScopes: true);
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
 
         Assert.IsType<JsonSerializerOptions>(provider.GetRequiredService<JsonSerializerOptions>());
         Assert.IsType<DefaultAzureCredential>(provider.GetRequiredService<DefaultAzureCredential>());
@@ -75,8 +81,8 @@ public sealed class ProgramServiceRegistrationTests
         Assert.IsType<BackfillService>(provider.GetRequiredService<BackfillService>());
         Assert.IsType<OverrideApplier>(provider.GetRequiredService<OverrideApplier>());
 
-        // Registrations must all be singletons so the Functions host reuses one instance per
-        // invocation batch instead of re-creating external clients per request.
+        // HttpClient must be singleton so the Functions host reuses one instance per invocation
+        // batch instead of re-creating outbound handlers per request.
         Assert.Same(provider.GetRequiredService<HttpClient>(), provider.GetRequiredService<HttpClient>());
     }
 
