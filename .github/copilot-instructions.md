@@ -22,18 +22,8 @@
 - GitHub PAT stored in Key Vault; accessed via managed identity
 - BYOFA pattern (bring-your-own Function App for SWA), not SWA managed functions
 
-## MCP catalog
-
-This repository is part of the `frasermolyneux` GitHub org. The MCP server `frasermolyneux-copilot` provides org-wide instructions, agents, and prompts for coding standards, workflow templates, and project alignment.
-
-Available tools:
-- `frasermolyneux-copilot-list_instructions` — list all org instructions
-- `frasermolyneux-copilot-get_instruction` — read a specific instruction
-- `frasermolyneux-copilot-search_instructions` — search instructions by keyword
-- `frasermolyneux-copilot-list_agents` — list available agents
-- `frasermolyneux-copilot-get_agent` — read agent instructions
-- `frasermolyneux-copilot-list_prompts` — list available prompts
-- `frasermolyneux-copilot-get_prompt` — read a specific prompt
+See `docs/architecture.md` for the full telemetry contract and query classification
+rules, and `AGENTS.md` for build commands and repo boundaries.
 
 ## Related repositories
 

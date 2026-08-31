@@ -14,18 +14,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-      - name: Checkout .github-copilot for shared instructions
-        uses: actions/checkout@v7
+      - name: Copilot setup
+        uses: frasermolyneux/actions/copilot-setup@copilot-setup/v2
         with:
-          repository: frasermolyneux/.github-copilot
-          path: .github-copilot
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 9.0.x
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "22.x"
+          checkout-repo: "false"
+          setup-dotnet: "true"
+          dotnet-version: "9.0.100"
