@@ -49,7 +49,9 @@ resource "azurerm_linux_function_app" "app" {
 
     "STATUS_CONTENT_REPO"            = "frasermolyneux/status-pages"
     "STATUS_CONTENT_BRANCH"          = "main"
-    "GITHUB_PAT_SECRET_URI"          = azurerm_key_vault_secret.github_pat.versionless_id
+    "GitHubApp__AppId"               = var.github_app_id
+    "GitHubApp__InstallationId"      = var.github_app_installation_id
+    "GitHubApp__PemSecretName"       = azurerm_key_vault_secret.github_app_pem.name
     "WEBHOOK_SECRET_URI"             = azurerm_key_vault_secret.webhook_secret.versionless_id
     "HISTORY_BLOB_CONTAINER"         = azurerm_storage_container.history.name
     "STALE_CACHE_BLOB_CONTAINER"     = azurerm_storage_container.stale_cache.name

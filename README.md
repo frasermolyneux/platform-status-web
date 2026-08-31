@@ -81,7 +81,7 @@ The Static Web App uses the **Standard** tier (`var.static_web_app_sku`, set exp
 ## Manual post-deploy steps
 
 - Create and configure the SonarCloud project for `frasermolyneux_platform-status-web`.
-- Create the GitHub PAT used for content access and store it in the target Key Vault.
+- Ensure the `GH_APP_PEM` Actions secret is populated (brokered by `platform-workloads`); workflows pass it through Terraform to the Key Vault secret automatically (App ID: 2973523).
 - Create and store any webhook/shared secrets required by the Function App.
 - Populate the [status-pages](https://github.com/frasermolyneux/status-pages) content repository (currently empty) with `site.yaml`/`components.yaml` for `xi`, `mx`, and `dev` before status content is available end-to-end.
 - Configure Azure Static Web App custom domains and DNS validation records for `status.xtremeidiots.com`, `mxstatus.io`, and `dev.mxstatus.io` (not yet provisioned; requires public DNS changes outside this repository).

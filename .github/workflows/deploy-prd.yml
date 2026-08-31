@@ -118,9 +118,12 @@ jobs:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
           terraform-backend-file: "backends/dev.backend.hcl"
+          terraform-additional-args: '-var="github_app_id=${{ vars.GH_APP_ID }}" -var="github_app_installation_id=${{ vars.GH_APP_INSTALLATION_ID }}"'
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        env:
+          TF_VAR_github_app_pem: ${{ secrets.GH_APP_PEM }}
 
       - if: needs.detect-changes.outputs.terraform != 'true' && needs.terraform-state-check-dev.outputs.has_resources == 'true'
         uses: frasermolyneux/actions/terraform-output@terraform-output/v1.0
@@ -257,9 +260,12 @@ jobs:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/prd.tfvars"
           terraform-backend-file: "backends/prd.backend.hcl"
+          terraform-additional-args: '-var="github_app_id=${{ vars.GH_APP_ID }}" -var="github_app_installation_id=${{ vars.GH_APP_INSTALLATION_ID }}"'
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        env:
+          TF_VAR_github_app_pem: ${{ secrets.GH_APP_PEM }}
 
       - if: needs.detect-changes.outputs.terraform != 'true'
         uses: frasermolyneux/actions/terraform-output@terraform-output/v1.0
