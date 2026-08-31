@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="MX.Platform.Status.App/MX.Platform.Status.App.csproj" />
+  <Project Path="MX.Platform.Status.Tests/MX.Platform.Status.Tests.csproj" />
+</Solution>

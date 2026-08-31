@@ -12,8 +12,8 @@ by a .NET Azure Function App (BYOFA), with Terraform-managed Azure infrastructur
 
 | Area | Path | Toolchain | Notes |
 |---|---|---|---|
-| Backend | `src/MX.Platform.Status.App/` | .NET 9 (`src/global.json` pins SDK `9.0.100`) | Isolated worker; `status-api` (HTTP) + `status-rollup` (Timer) |
-| Tests | `src/MX.Platform.Status.Tests/` | .NET 9 via `dotnet test` | Backend only |
+| Backend | `src/MX.Platform.Status.App/` | .NET 10 (`src/global.json` pins SDK `10.0.100`) | Isolated worker; `status-api` (HTTP) + `status-rollup` (Timer) |
+| Tests | `src/MX.Platform.Status.Tests/` | .NET 10 via `dotnet test` | Backend only |
 | Frontend | `src/MX.Platform.Status.Web/` | Node 22.x, Astro 7 + vanilla TS | Maintained source: `src/pages/`, `src/client/`, `src/components/`. `dist/` is generated — gitignored, never hand-edit |
 | Infrastructure | `terraform/` | Terraform >= 1.15, AzureRM | SWA, Linux Function App, Storage, Key Vault, App Insights; remote-state from `platform-monitoring`/`platform-hosting` |
 
