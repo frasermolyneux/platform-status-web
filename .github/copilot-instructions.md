@@ -7,7 +7,7 @@
 ## Architecture
 
 - **Frontend**: Astro static shell with vanilla TypeScript (~200 lines). No React/Preact/Vue. Target <10KB JS gzipped.
-- **Backend**: .NET 9 Azure Functions (isolated worker) — `status-api` (HTTP) and `status-rollup` (Timer).
+- **Backend**: .NET 10 Azure Functions (isolated worker) — `status-api` (HTTP) and `status-rollup` (Timer).
 - **Infrastructure**: Terraform in `terraform/` — Azure resources in Sweden Central only.
 - **Multi-site**: Routed by resolved public hostname (`X-Forwarded-Host` when present and valid, else `Host`), not URL path — see `RequestHostResolver`.
 

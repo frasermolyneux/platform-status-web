@@ -17,7 +17,10 @@ using MX.Platform.Status.App.Rollup;
 using MX.Platform.Status.App.Sites;
 using MX.Platform.Status.App.Telemetry;
 using MX.Platform.Status.App.Yaml;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+
+[assembly: InternalsVisibleTo("MX.Platform.Status.Tests")]
 
 namespace MX.Platform.Status.App;
 
@@ -30,54 +33,56 @@ internal static class Program
             {
                 worker.Serializer = new JsonObjectSerializer(StatusJson.Options);
             })
-            .ConfigureServices(services =>
-            {
-                services.AddSingleton(StatusJson.Options);
-                services.AddSingleton<DefaultAzureCredential>();
-                services.AddSingleton(sp =>
-                {
-                    var storageAccountName = GetRequiredEnvironmentVariable("STORAGE_ACCOUNT_NAME");
-                    var credential = sp.GetRequiredService<DefaultAzureCredential>();
-                    return new BlobServiceClient(new Uri($"https://{storageAccountName}.blob.core.windows.net"), credential);
-                });
-                services.AddSingleton(sp =>
-                {
-                    var secretUri = GetRequiredEnvironmentVariable("WEBHOOK_SECRET_URI");
-                    return new SecretClient(GetVaultUri(secretUri), sp.GetRequiredService<DefaultAzureCredential>());
-                });
-                services.AddSingleton<IGitHubAppTokenProvider>(sp =>
-                {
-                    var appId = GetRequiredEnvironmentVariable("GitHubApp__AppId");
-                    var installationId = GetRequiredEnvironmentVariable("GitHubApp__InstallationId");
-                    var pemSecretName = GetRequiredEnvironmentVariable("GitHubApp__PemSecretName");
-                    var secretClient = sp.GetRequiredService<SecretClient>();
-                    return new GitHubAppTokenProvider(secretClient, appId, installationId, pemSecretName);
-                });
-                services.AddSingleton(sp => new LogsQueryClient(sp.GetRequiredService<DefaultAzureCredential>()));
-                services.AddSingleton(new HttpClient());
-
-                services.AddSingleton<YamlParser>();
-                services.AddSingleton<SiteResolver>();
-                services.AddSingleton<SiteConfigLoader>();
-                services.AddSingleton<SiteConfigSnapshotStore>();
-                services.AddSingleton<ContentRepoClient>();
-                services.AddSingleton<AvailabilityClient>();
-                services.AddSingleton(new LiveWindowOptions(GetIntEnvironmentVariable("LIVE_WINDOW_MINUTES", LiveWindowOptions.DefaultMinutes)));
-                services.AddSingleton<IncidentFetcher>();
-                services.AddSingleton<MaintenanceFetcher>();
-                services.AddSingleton<HistoryReader>();
-                services.AddSingleton<StatusDependencies>();
-                services.AddSingleton(sp => new InMemoryCache<StatusApiResponse>(TimeSpan.FromSeconds(GetIntEnvironmentVariable("LIVE_CACHE_TTL_SECONDS", 30))));
-                services.AddSingleton<StaleCacheBlob>();
-                services.AddSingleton<StatusMerger>();
-                services.AddSingleton<DailyRollupService>();
-                services.AddSingleton<YearlyAggregator>();
-                services.AddSingleton<BackfillService>();
-                services.AddSingleton<OverrideApplier>();
-            })
+            .ConfigureServices(ConfigureServices)
             .Build();
 
         await host.RunAsync().ConfigureAwait(false);
+    }
+
+    internal static void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton(StatusJson.Options);
+        services.AddSingleton<DefaultAzureCredential>();
+        services.AddSingleton(sp =>
+        {
+            var storageAccountName = GetRequiredEnvironmentVariable("STORAGE_ACCOUNT_NAME");
+            var credential = sp.GetRequiredService<DefaultAzureCredential>();
+            return new BlobServiceClient(new Uri($"https://{storageAccountName}.blob.core.windows.net"), credential);
+        });
+        services.AddSingleton(sp =>
+        {
+            var secretUri = GetRequiredEnvironmentVariable("WEBHOOK_SECRET_URI");
+            return new SecretClient(GetVaultUri(secretUri), sp.GetRequiredService<DefaultAzureCredential>());
+        });
+        services.AddSingleton<IGitHubAppTokenProvider>(sp =>
+        {
+            var appId = GetRequiredEnvironmentVariable("GitHubApp__AppId");
+            var installationId = GetRequiredEnvironmentVariable("GitHubApp__InstallationId");
+            var pemSecretName = GetRequiredEnvironmentVariable("GitHubApp__PemSecretName");
+            var secretClient = sp.GetRequiredService<SecretClient>();
+            return new GitHubAppTokenProvider(secretClient, appId, installationId, pemSecretName);
+        });
+        services.AddSingleton(sp => new LogsQueryClient(sp.GetRequiredService<DefaultAzureCredential>()));
+        services.AddSingleton(new HttpClient());
+
+        services.AddSingleton<YamlParser>();
+        services.AddSingleton<SiteResolver>();
+        services.AddSingleton<SiteConfigLoader>();
+        services.AddSingleton<SiteConfigSnapshotStore>();
+        services.AddSingleton<ContentRepoClient>();
+        services.AddSingleton<AvailabilityClient>();
+        services.AddSingleton(new LiveWindowOptions(GetIntEnvironmentVariable("LIVE_WINDOW_MINUTES", LiveWindowOptions.DefaultMinutes)));
+        services.AddSingleton<IncidentFetcher>();
+        services.AddSingleton<MaintenanceFetcher>();
+        services.AddSingleton<HistoryReader>();
+        services.AddSingleton<StatusDependencies>();
+        services.AddSingleton(sp => new InMemoryCache<StatusApiResponse>(TimeSpan.FromSeconds(GetIntEnvironmentVariable("LIVE_CACHE_TTL_SECONDS", 30))));
+        services.AddSingleton<StaleCacheBlob>();
+        services.AddSingleton<StatusMerger>();
+        services.AddSingleton<DailyRollupService>();
+        services.AddSingleton<YearlyAggregator>();
+        services.AddSingleton<BackfillService>();
+        services.AddSingleton<OverrideApplier>();
     }
 
     private static Uri GetVaultUri(string secretUri)

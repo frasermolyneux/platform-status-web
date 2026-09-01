@@ -18,7 +18,7 @@ jobs:
       - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.0
         with:
           dotnet-project: "MX.Platform.Status.App"
-          dotnet-version: "9.0.x"
+          dotnet-version: "10.0.x"
           src-folder: "src"
 
       - uses: actions/checkout@v7
