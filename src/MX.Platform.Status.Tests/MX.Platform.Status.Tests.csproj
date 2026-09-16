@@ -28,5 +28,6 @@
 
   <ItemGroup>
     <None Include="..\..\contract\availability-telemetry-contract.json" Link="contract\availability-telemetry-contract.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\MX.Platform.Status.App\host.json" Link="Configuration\host.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
