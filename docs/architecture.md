@@ -34,6 +34,12 @@ Every `availabilityResults` row produced by `platform-sitewatch-func` carries th
 
 See `platform-sitewatch-func`'s `docs/telemetry-contract.md` (or equivalent) for the producer side of this contract, and keep both repos' contract fixtures/tests in sync — see that repo's contract fixture for the canonical shape and update-in-lockstep guidance.
 
+## Function App telemetry
+
+The Azure Functions host and the .NET isolated worker have separate logging configuration. Host-generated invocation telemetry is reduced deterministically in `host.json`: `Function = Warning` suppresses successful start/completion traces emitted at `Information`, while retaining warnings, errors, and exceptions; `Host.Results = Error` suppresses successful invocation request records while retaining failed execution requests. Host-side Application Insights sampling is disabled so retention is severity-based rather than probabilistic.
+
+The isolated worker's logging and application behavior are unchanged. This repository does not define request-based Terraform alerts, so no alert depends on successful host request records.
+
 ## Deployment order
 
 `platform-sitewatch-func` (the telemetry producer) must be deployed before `platform-status-web`/`status-pages` content start relying on the new `componentId`/`siteId`/`region` dimensions or the regional live-status query, since the consumer's regional classifier and enforced `siteId` filter assume every row already carries them.
