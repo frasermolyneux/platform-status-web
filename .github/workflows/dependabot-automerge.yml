@@ -4,6 +4,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
+  schedule:
+    - cron: "45 7 * * *"
+  workflow_dispatch:
 
 permissions: {}
 
@@ -14,7 +17,7 @@ jobs:
       issues: write
       pull-requests: write
     runs-on: ubuntu-latest
-    if: ${{ github.event.pull_request.draft == false }}
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
     outputs:
       is_dependabot: ${{ steps.evaluate.outputs.is_dependabot }}
       auto_merge_allowed: ${{ steps.evaluate.outputs.auto_merge_allowed }}
@@ -37,4 +40,36 @@ jobs:
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  refresh-auto-merge-branches:
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Refresh stale Dependabot branches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --base main \
+            --limit 100 \
+            --json number,author,mergeStateStatus,autoMergeRequest \
+            --jq '.[] | select(
+              .author.login == "app/dependabot" and
+              .mergeStateStatus == "BEHIND" and
+              .autoMergeRequest != null
+            ) | .number' |
+          while read -r pr_number; do
+            echo "Refreshing Dependabot PR #$pr_number"
+            gh api \
+              --method PUT \
+              "repos/$GITHUB_REPOSITORY/pulls/$pr_number/update-branch"
+          done
+        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
