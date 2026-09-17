@@ -48,28 +48,42 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    concurrency:
+      group: dependabot-auto-merge-refresh
+      cancel-in-progress: false
     steps:
       - name: Refresh stale Dependabot branches
         shell: bash
         run: |
           set -euo pipefail
 
-          gh pr list \
+          pr_numbers=$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
             --state open \
             --base main \
             --limit 100 \
             --json number,author,mergeStateStatus,autoMergeRequest \
             --jq '.[] | select(
-              .author.login == "app/dependabot" and
+              (
+                .author.login == "app/dependabot" or
+                .author.login == "dependabot[bot]"
+              ) and
               .mergeStateStatus == "BEHIND" and
               .autoMergeRequest != null
-            ) | .number' |
+            ) | .number')
+
+          failed=0
           while read -r pr_number; do
+            [[ -z "$pr_number" ]] && continue
             echo "Refreshing Dependabot PR #$pr_number"
-            gh api \
+            if ! gh api \
               --method PUT \
-              "repos/$GITHUB_REPOSITORY/pulls/$pr_number/update-branch"
-          done
+              "repos/$GITHUB_REPOSITORY/pulls/$pr_number/update-branch"; then
+              echo "::error::Failed to refresh Dependabot PR #$pr_number"
+              failed=1
+            fi
+          done <<< "$pr_numbers"
+
+          exit "$failed"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
