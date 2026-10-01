@@ -26,6 +26,7 @@ jobs:
       security-events: write
     uses: frasermolyneux/actions/.github/workflows/codequality.yml@main
     with:
+      test-reporting: true
       sonar-project-key: frasermolyneux_platform-status-web
       build-target: dotnet-func-ci
       dotnet-project: MX.Platform.Status.App

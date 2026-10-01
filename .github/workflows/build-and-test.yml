@@ -15,8 +15,9 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.0
+      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.1
         with:
+          test-reporting: "true"
           dotnet-project: "MX.Platform.Status.App"
           dotnet-version: "10.0.x"
           src-folder: "src"
