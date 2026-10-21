@@ -46,6 +46,7 @@ export function renderOverview(data: StatusResponse): void {
   html += '<section class="components-section"><h2>Components</h2>';
   for (const c of data.components) {
     html += renderComponentRow(c);
+    for (const child of flattenComponents(c.children || [])) html += renderComponentRow(child);
   }
   html += '</section>';
 
@@ -134,7 +135,7 @@ function renderHistoryBars(c: ComponentDto): string {
 export function renderComponent(data: StatusResponse, componentId: string): void {
   const app = document.getElementById('app');
   if (!app) return;
-  const component = data.components.find(c => c.id === componentId);
+  const component = flattenComponents(data.components).find(c => c.id === componentId);
   if (!component) {
     app.innerHTML = safeHtml('<p>Component not found.</p>');
     return;
@@ -158,6 +159,7 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
     app.innerHTML = safeHtml('<p>Incident not found.</p>');
     return;
   }
+
   let html = `
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(incident.title)}</h2>
@@ -177,4 +179,22 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
   }
   html += '</div>';
   app.innerHTML = safeHtml(html);
+}
+
+function flattenComponents(components: ComponentDto[]): ComponentDto[] {
+  return components.flatMap(component => [component, ...flattenComponents(component.children || [])]);
+}
+
+export function renderHistory(data: StatusResponse): void {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const incidents = [...data.incidents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  app.innerHTML = safeHtml(`
+    <nav class="breadcrumb"><a href="/">Back to current status</a></nav>
+    <h2>Incident history</h2>
+    <p>Availability is based on observed checks. Grey periods have no data and are not counted as healthy.</p>
+    ${data.dataFreshness?.stale ? '<div class="stale-warning">Live collection is unavailable; showing the last publication.</div>' : ''}
+    <section>${flattenComponents(data.components).filter(c => c.kind === 'leaf').map(renderHistoryBars).join('')}</section>
+    <section>${incidents.length ? incidents.map(renderIncidentCard).join('') : '<p>No published incidents.</p>'}</section>
+  `);
 }

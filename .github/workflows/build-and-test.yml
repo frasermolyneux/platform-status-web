@@ -2,57 +2,39 @@ name: Build and Test
 
 on:
   push:
-    branches:
-      - "feature/**"
-      - "bugfix/**"
-      - "hotfix/**"
+    branches: [main, "feature/**", "bugfix/**", "hotfix/**"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions: {}
 
+concurrency:
+  group: service-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.1
-        with:
-          test-reporting: "true"
-          dotnet-project: "MX.Platform.Status.App"
-          dotnet-version: "10.0.x"
-          src-folder: "src"
-
       - uses: actions/checkout@v7
-
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
       - uses: actions/setup-node@v7
         with:
           node-version: "22.x"
-
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Build and test backend
+        run: dotnet test src/MX.Platform.Status.slnx --configuration Release --nologo
+      - name: Build and check frontend
         working-directory: src/MX.Platform.Status.Web
-
-      - name: Build frontend
-        run: npm run build
-        working-directory: src/MX.Platform.Status.Web
-
-  terraform-plan-dev:
-    permissions:
-      contents: read
-      id-token: write
-    runs-on: ubuntu-latest
-    environment: Development
-    concurrency:
-      group: ${{ github.repository }}-dev
-    steps:
-      - uses: frasermolyneux/actions/terraform-plan@terraform-plan/v1.4
-        with:
-          terraform-folder: "terraform"
-          terraform-var-file: "tfvars/dev.tfvars"
-          terraform-backend-file: "backends/dev.backend.hcl"
-          terraform-additional-args: '-var="github_app_id=${{ vars.GH_APP_ID }}" -var="github_app_installation_id=${{ vars.GH_APP_INSTALLATION_ID }}"'
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-        env:
-          TF_VAR_github_app_pem: ${{ secrets.GH_APP_PEM }}
+        run: npm ci && npm run build && npx tsc --noEmit
+      - name: Build constrained runtime images
+        run: |
+          docker build --tag status-service:ci .
+          docker build --file deployment/postgres.Dockerfile --tag status-postgres:ci .
+      - name: Exercise primary, standby, and persisted public serving
+        run: python3 deployment/integration_test.py

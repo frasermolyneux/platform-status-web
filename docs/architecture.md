@@ -1,5 +1,26 @@
 # Architecture
 
+## Independent service
+
+The new runtime is `src\MX.Platform.Status.Service`: ASP.NET Core serves the Astro
+assets and host-isolated local JSON publications. PostgreSQL holds incidents,
+audit events, daily probe counters, private monitoring evidence, and publications.
+A single publisher probes public endpoints; a standby copies replicated
+publications onto its own durable local disk. Azure collection runs independently
+and never gates publication. See the repository README for configuration,
+identity, availability limits, and deployment prerequisites.
+
+The service temporarily references the existing App assembly to reuse its
+contracts, domain types, regional classifiers, and merger. It does not run the
+Functions host or its GitHub/blob query path. Shared KQL tenant filtering and
+`sum(itemCount)` conventions below still apply to optional Sitewatch evidence.
+
+## Legacy Azure architecture
+
+The remaining sections describe the preserved, inactive Azure implementation,
+not the new deployment topology. Do not apply or destroy its Terraform state
+as part of the independent-service rollout.
+
 ## Overview
 
 `platform-status-web` is a multi-site public status page system. It reads App Insights availability telemetry (from `platform-sitewatch-func`) and GitHub Issues (from `status-pages` content repo) to serve a GitHub-style minimal status page via Azure Static Web Apps.

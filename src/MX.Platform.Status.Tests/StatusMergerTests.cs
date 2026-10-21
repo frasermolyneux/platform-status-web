@@ -69,6 +69,62 @@ public sealed class StatusMergerTests
         Assert.Equal("degraded", response.Components.Single().Status);
     }
 
+    [Fact]
+    public void UnknownChildrenPreventAHealthyGroupAndSummary()
+    {
+        var snapshot = CreateSnapshot() with
+        {
+            Components = new ComponentsDocument
+            {
+                Components = [new Component
+                {
+                    Id = "group", Kind = "group", Children =
+                    [
+                        new() { Id = "known", Source = new ComponentSource { Kind = "static", Status = "operational" } },
+                        new() { Id = "missing", Source = new ComponentSource { Kind = "probe" } }
+                    ]
+                }]
+            }
+        };
+        var result = _sut.Merge(snapshot, new Dictionary<string, ComponentLiveTelemetry>(), null, [], []);
+        Assert.Equal("unknown", result.Components.Single().Status);
+        Assert.Equal("unknown", result.Summary.Status);
+    }
+
+    [Fact]
+    public void HiddenSubtreesAndTheirIncidentsAreNotPublished()
+    {
+        var snapshot = CreateSnapshot(new Component
+        {
+            Id = "private",
+            Kind = "group",
+            Hidden = true,
+            Children = [new() { Id = "private-child" }]
+        });
+        var incident = new Incident { Id = 2, Title = "Restricted", Components = ["private-child"] };
+        var result = _sut.Merge(snapshot, new Dictionary<string, ComponentLiveTelemetry>(), null, [incident], []);
+        Assert.Single(result.Components);
+        Assert.Empty(result.Incidents);
+    }
+
+    [Fact]
+    public void HistoricHealthySamplesCannotReplaceMissingLiveObservations()
+    {
+        var history = new HistoryDocument
+        {
+            ComponentsById = new Dictionary<string, ComponentHistoryRecord>
+            {
+                ["mx.api"] = new()
+                {
+                    Days = [new HistoryDay { Date = DateOnly.FromDateTime(DateTime.UtcNow), Status = ComponentStatus.Operational, Uptime = 1, Total = 10, Failed = 0 }]
+                }
+            }
+        };
+        var result = _sut.Merge(CreateSnapshot(), new Dictionary<string, ComponentLiveTelemetry>(), history, [], []);
+        Assert.Equal("unknown", result.Components.Single().Status);
+        Assert.Equal("operational", result.Components.Single().History.Last().Status);
+    }
+
     private MX.Platform.Status.App.Contracts.StatusApiResponse MergeWith(Severity severity, ComponentStatus liveStatus)
     {
         var snapshot = CreateSnapshot();

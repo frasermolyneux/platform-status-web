@@ -7,6 +7,7 @@ permissions: {}
 
 jobs:
   build-and-test:
+    if: vars.LEGACY_AZURE_DEPLOYMENT_ENABLED == 'true'
     permissions:
       contents: read
       id-token: write

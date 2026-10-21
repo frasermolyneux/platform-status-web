@@ -14,10 +14,11 @@ public sealed class StatusMerger
         IEnumerable<MaintenanceWindow> maintenance,
         bool stale = false)
     {
-        var incidentList = incidents.OrderByDescending(item => item.CreatedAt).ToArray();
-        var maintenanceList = maintenance.OrderBy(item => item.ScheduledStart).ToArray();
+        var publicIds = PublicIds(snapshot.Components.Components).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var incidentList = incidents.Where(item => item.Components.All(publicIds.Contains)).OrderByDescending(item => item.CreatedAt).ToArray();
+        var maintenanceList = maintenance.Where(item => item.Components.All(publicIds.Contains)).OrderBy(item => item.ScheduledStart).ToArray();
         var nowDate = DateOnly.FromDateTime(DateTime.UtcNow);
-        var componentDtos = snapshot.Components.Components.Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate)).ToArray();
+        var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate)).ToArray();
         var summaryStatus = Summarize(componentDtos.Select(component => ParseStatus(component.Status)));
 
         return new StatusApiResponse
@@ -55,7 +56,7 @@ public sealed class StatusMerger
         IReadOnlyList<MaintenanceWindow> maintenance,
         DateOnly today)
     {
-        var children = component.Children.Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today)).ToArray();
+        var children = component.Children.Where(child => !child.Hidden).Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today)).ToArray();
         var windowDays = Math.Max(1, component.Sla.WindowDays);
         var historicalDays = BuildHistoricalWindow(component, history, today, windowDays);
         var todayHistory = historicalDays[^1];
@@ -105,7 +106,7 @@ public sealed class StatusMerger
         if (component.Kind.Equals("group", StringComparison.OrdinalIgnoreCase))
         {
             return (
-                children.Count == 0 ? ComponentStatus.Unknown : ComponentStatusCalculator.WorstOf(children.Select(child => ParseStatus(child.Status))),
+                Summarize(children.Select(child => ParseStatus(child.Status))),
                 children.Select(child => child.LastSampleAt).Where(value => value.HasValue).Max());
         }
 
@@ -130,7 +131,7 @@ public sealed class StatusMerger
             return (liveStatus, telemetry.LastSeen);
         }
 
-        return (todayHistory.Status, null);
+        return (ComponentStatus.Unknown, null);
     }
 
     private static ComponentStatus ApplyMergedStatus(
@@ -225,12 +226,17 @@ public sealed class StatusMerger
 
     private static ComponentStatus ParseStaticStatus(string? status) => ParseStatus(status);
 
+    private static IEnumerable<string> PublicIds(IEnumerable<Component> components) =>
+        components.Where(component => !component.Hidden)
+            .SelectMany(component => new[] { component.Id }.Concat(PublicIds(component.Children)));
+
     private static ComponentStatus Summarize(IEnumerable<ComponentStatus> statuses)
     {
         var values = statuses.ToArray();
         if (values.Contains(ComponentStatus.Outage)) return ComponentStatus.Outage;
         if (values.Contains(ComponentStatus.Degraded)) return ComponentStatus.Degraded;
         if (values.Contains(ComponentStatus.Maintenance)) return ComponentStatus.Maintenance;
+        if (values.Contains(ComponentStatus.Unknown)) return ComponentStatus.Unknown;
         if (values.Contains(ComponentStatus.Operational)) return ComponentStatus.Operational;
         return ComponentStatus.Unknown;
     }

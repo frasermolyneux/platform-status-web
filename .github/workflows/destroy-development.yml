@@ -1,14 +1,13 @@
 name: Destroy Development
 
 on:
-  schedule:
-    - cron: "55 23 * * *"
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
   terraform-destroy:
+    if: vars.LEGACY_AZURE_RETIREMENT_APPROVED == 'true'
     permissions:
       contents: read
       id-token: write

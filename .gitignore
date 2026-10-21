@@ -251,3 +251,9 @@ terraform.rc
 
 # Shared Copilot configuration checked out during copilot-setup-steps
 .github-copilot/
+
+# Local status runtime and credentials
+data/
+.env
+*.pem
+*.key

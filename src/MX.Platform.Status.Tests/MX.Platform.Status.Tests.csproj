@@ -20,10 +20,12 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MX.Platform.Status.App\MX.Platform.Status.App.csproj" />
+    <ProjectReference Include="..\MX.Platform.Status.Service\MX.Platform.Status.Service.csproj" />
   </ItemGroup>
 
   <ItemGroup>
