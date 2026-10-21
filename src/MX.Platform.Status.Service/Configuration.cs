@@ -22,19 +22,25 @@ public sealed record RuntimeOptions
     public string? ClientId { get; init; }
     public string? AzureCertificatePath { get; init; }
     public string? AzureCollectorClientId { get; init; }
+    public Uri AzureStatusFeed { get; init; } = new("https://azure.status.microsoft/status/feed/");
     public string[] WebhookApplicationIds { get; init; } = [];
 
     public void Validate()
     {
         if (RefreshSeconds is < 30 or > 3600 || StaleAfterSeconds < RefreshSeconds * 2)
             throw new InvalidOperationException("Invalid publication refresh/freshness settings.");
-        if ((TenantId is null) != (ClientId is null)
-            || (TenantId is not null && (!Guid.TryParse(TenantId, out _) || !Guid.TryParse(ClientId, out _))))
-            throw new InvalidOperationException("Entra tenant and client IDs must be configured together as GUIDs.");
+        ValidateIdentity();
         if (Publisher && DatabaseConnectionFile is null && DatabaseHost is null)
             throw new InvalidOperationException("A publisher requires a database connection.");
         if (DatabasePort is < 1 or > 65535 || WriterPort is < 1 or > 65535)
             throw new InvalidOperationException("Invalid database port.");
+    }
+
+    private void ValidateIdentity()
+    {
+        if ((TenantId is null) != (ClientId is null)
+            || (TenantId is not null && (!Guid.TryParse(TenantId, out _) || !Guid.TryParse(ClientId, out _))))
+            throw new InvalidOperationException("Entra tenant and client IDs must be configured together as GUIDs.");
         if (WebhookApplicationIds.Any(id => !Guid.TryParse(id, out _)))
             throw new InvalidOperationException("Webhook application IDs must be GUIDs.");
         if (AzureCertificatePath is not null && (TenantId is null || !Guid.TryParse(AzureCollectorClientId, out _)))
@@ -64,7 +70,7 @@ public sealed class StatusCatalog
         var domains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var definition in Sites)
         {
-            if (!Regex.IsMatch(definition.Site.Id, "^[a-z][a-z0-9-]{0,31}$", RegexOptions.CultureInvariant))
+            if (!Regex.IsMatch(definition.Site.Id, "^[a-z][a-z0-9-]{0,31}$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)))
                 throw new InvalidOperationException("Invalid status site ID.");
             if (definition.Site.Domains.Count == 0 || definition.Site.Domains.Any(domain =>
                 Uri.CheckHostName(domain) != UriHostNameType.Dns || !domains.Add(domain)))
@@ -72,14 +78,19 @@ public sealed class StatusCatalog
             var components = Flatten(definition.Components.Components).ToArray();
             if (components.Length == 0 || components.Select(c => c.Id).Distinct().Count() != components.Length)
                 throw new InvalidOperationException("Status component IDs must be unique within a site.");
-            foreach (var (componentId, target) in definition.Probes)
-            {
-                if (!components.Any(c => c.Id == componentId && c.Kind == "leaf")
-                    || !Uri.TryCreate(target, UriKind.Absolute, out var uri) || uri.Scheme != "https"
-                    || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query)
-                    || Uri.CheckHostName(uri.Host) != UriHostNameType.Dns)
-                    throw new InvalidOperationException("Probes require a known leaf component and a public HTTPS URL without credentials or query strings.");
-            }
+            ValidateProbes(definition, components);
+        }
+    }
+
+    private static void ValidateProbes(SiteDefinition definition, Component[] components)
+    {
+        foreach (var (componentId, target) in definition.Probes)
+        {
+            if (!components.Any(c => c.Id == componentId && c.Kind == "leaf")
+                || !Uri.TryCreate(target, UriKind.Absolute, out var uri) || uri.Scheme != "https"
+                || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query)
+                || Uri.CheckHostName(uri.Host) != UriHostNameType.Dns)
+                throw new InvalidOperationException("Probes require a known leaf component and a public HTTPS URL without credentials or query strings.");
         }
     }
 

@@ -15,7 +15,8 @@ public sealed class PublicationStore(StatusCatalog catalog, RuntimeOptions optio
         var path = Path.Combine(_directory, $"{site}.json");
         if (!File.Exists(path))
             return new StatusMerger().Merge(definition.Snapshot, new Dictionary<string, App.Telemetry.ComponentLiveTelemetry>(),
-                null, [], [], stale: true) with { GeneratedAt = DateTimeOffset.UnixEpoch };
+                null, [], [], stale: true) with
+            { GeneratedAt = DateTimeOffset.UnixEpoch };
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         var publication = await JsonSerializer.DeserializeAsync<StatusApiResponse>(stream, StatusJson.Options, cancellationToken)
             ?? throw new InvalidDataException("Invalid status publication.");

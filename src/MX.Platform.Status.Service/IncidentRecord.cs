@@ -21,19 +21,34 @@ public sealed record IncidentRecord
 
     public Incident ToPublicIncident() => new()
     {
-        Id = Id, Title = Title, Components = Components, Severity = Severity, State = State,
-        Url = $"/incident/{Id}", CreatedAt = StartedAt, StartedAt = StartedAt, ResolvedAt = ResolvedAt,
+        Id = Id,
+        Title = Title,
+        Components = Components,
+        Severity = Severity,
+        State = State,
+        Url = $"/incident/{Id}",
+        CreatedAt = StartedAt,
+        StartedAt = StartedAt,
+        ResolvedAt = ResolvedAt,
         Updates = Updates.Select(update => update with { Author = null }).ToArray()
     };
 
-    public MaintenanceWindow ToMaintenance(DateTimeOffset now) => new()
+    public MaintenanceWindow ToMaintenance(DateTimeOffset now)
     {
-        Id = Id, Title = Title, Components = Components, Url = $"/incident/{Id}",
-        ScheduledStart = ScheduledStart!.Value, ScheduledEnd = ScheduledEnd!.Value,
-        State = State == IncidentState.Resolved || now >= ScheduledEnd ? "completed"
-            : now >= ScheduledStart ? "in-progress" : "scheduled",
-        Body = Updates.LastOrDefault()?.Body
-    };
+        var maintenanceState = now >= ScheduledStart ? "in-progress" : "scheduled";
+        if (State == IncidentState.Resolved || now >= ScheduledEnd) maintenanceState = "completed";
+        return new()
+        {
+            Id = Id,
+            Title = Title,
+            Components = Components,
+            Url = $"/incident/{Id}",
+            ScheduledStart = ScheduledStart!.Value,
+            ScheduledEnd = ScheduledEnd!.Value,
+            State = maintenanceState,
+            Body = Updates.LastOrDefault()?.Body
+        };
+    }
 }
 
 public sealed record IncidentCommand(
@@ -62,11 +77,18 @@ public sealed record IncidentCommand(
 
     public IncidentRecord Apply(int id, string site, IncidentRecord? previous, DateTimeOffset now) => new()
     {
-        Id = id, SiteId = site, Revision = (previous?.Revision ?? 0) + 1, Published = Published,
-        Title = Title.Trim(), Components = Components, Severity = Severity, State = State,
+        Id = id,
+        SiteId = site,
+        Revision = (previous?.Revision ?? 0) + 1,
+        Published = Published,
+        Title = Title.Trim(),
+        Components = Components,
+        Severity = Severity,
+        State = State,
         StartedAt = previous?.StartedAt ?? now,
         ResolvedAt = State == IncidentState.Resolved ? previous?.ResolvedAt ?? now : null,
-        ScheduledStart = ScheduledStart, ScheduledEnd = ScheduledEnd,
+        ScheduledStart = ScheduledStart,
+        ScheduledEnd = ScheduledEnd,
         Updates = [.. previous?.Updates ?? [], new IncidentUpdate
         {
             At = now, State = State, Body = WebUtility.HtmlEncode(Message.Trim()).Replace("\n", "<br>", StringComparison.Ordinal)

@@ -23,8 +23,13 @@ public sealed class PostgresStore(RuntimeOptions options) : IAsyncDisposable
             Host = (writer ? options.WriterHost ?? options.DatabaseHost : options.DatabaseHost)
                 ?? throw new InvalidOperationException("Database is not configured."),
             Port = writer && options.WriterHost is not null ? options.WriterPort : options.DatabasePort,
-            Database = "status", Username = "status_app", Password = File.ReadAllText(options.DatabasePasswordFile).Trim(),
-            Timeout = 5, CommandTimeout = 15, MaxPoolSize = 10, SslMode = SslMode.Disable
+            Database = "status",
+            Username = "status_app",
+            Password = File.ReadAllText(options.DatabasePasswordFile).Trim(),
+            Timeout = 5,
+            CommandTimeout = 15,
+            MaxPoolSize = 10,
+            SslMode = SslMode.Disable
         }.ConnectionString;
     }
 
@@ -164,7 +169,10 @@ public sealed class PostgresStore(RuntimeOptions options) : IAsyncDisposable
             var uptime = 1d - (double)failures / total;
             record.Days.Add(new HistoryDay
             {
-                Date = reader.GetFieldValue<DateOnly>(1), Total = total, Failed = failures, Uptime = uptime,
+                Date = reader.GetFieldValue<DateOnly>(1),
+                Total = total,
+                Failed = failures,
+                Uptime = uptime,
                 Status = ComponentStatusCalculator.ClassifyHistoricStatus(total, uptime, new SlaDefinition())
             });
         }

@@ -71,19 +71,24 @@ public sealed class EvidenceWorker(
 
     private async Task CollectAzureStatusAsync(CancellationToken ct)
     {
-        using var response = await clients.CreateClient("vendor").GetAsync("https://azure.status.microsoft/status/feed/",
+        using var response = await clients.CreateClient("vendor").GetAsync(options.AzureStatusFeed,
             HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = XmlReader.Create(stream, new XmlReaderSettings
         {
-            Async = true, DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 2_000_000
+            Async = true,
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            MaxCharactersInDocument = 2_000_000
         });
         var document = await XDocument.LoadAsync(reader, LoadOptions.None, ct);
         var items = document.Descendants("item").Take(50).Select(item => new
         {
-            title = item.Element("title")?.Value, link = item.Element("link")?.Value,
-            description = item.Element("description")?.Value, publishedAt = item.Element("pubDate")?.Value
+            title = item.Element("title")?.Value,
+            link = item.Element("link")?.Value,
+            description = item.Element("description")?.Value,
+            publishedAt = item.Element("pubDate")?.Value
         }).ToArray();
         await database.SaveEvidenceAsync("azure-public-status", "feed", DateTimeOffset.UtcNow,
             JsonSerializer.SerializeToElement(new { items, coverage = "Broad incidents only; not a complete Azure health feed." }), ct);

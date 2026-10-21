@@ -13,14 +13,17 @@ using MX.Platform.Status.App.Models;
 
 namespace MX.Platform.Status.Service;
 
-public sealed class ServiceProgram
+public static class ServiceProgram
 {
+    private const string ReaderPolicy = "reader";
+
     public static async Task<int> Main(string[] args)
     {
         if (args is ["--healthcheck"])
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            try { return (await client.GetAsync("http://127.0.0.1:8080/health/ready")).IsSuccessStatusCode ? 0 : 1; }
+            var healthUri = new UriBuilder(Uri.UriSchemeHttp, IPAddress.Loopback.ToString(), 8080, "/health/ready").Uri;
+            try { return (await client.GetAsync(healthUri)).IsSuccessStatusCode ? 0 : 1; }
             catch (HttpRequestException) { return 1; }
             catch (TaskCanceledException) { return 1; }
         }
@@ -68,37 +71,7 @@ public sealed class ServiceProgram
         {
             foreach (var converter in StatusJson.Options.Converters) settings.SerializerOptions.Converters.Add(converter);
         });
-        if (options.TenantId is not null)
-        {
-            builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(settings =>
-            {
-                settings.Authority = $"https://login.microsoftonline.com/{options.TenantId}/v2.0";
-                settings.Audience = options.ClientId;
-                settings.MapInboundClaims = false;
-                settings.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true, ValidateAudience = true, ValidateLifetime = true,
-                    ValidIssuer = $"https://login.microsoftonline.com/{options.TenantId}/v2.0",
-                    RoleClaimType = "roles", NameClaimType = "oid", ClockSkew = TimeSpan.FromMinutes(1)
-                };
-            });
-        }
-        else
-        {
-            builder.Services.AddAuthentication("unconfigured")
-                .AddScheme<AuthenticationSchemeOptions, UnconfiguredAuthenticationHandler>("unconfigured", _ => { });
-        }
-        builder.Services.AddAuthorization(auth =>
-        {
-            auth.AddPolicy("operator", policy => policy.RequireAuthenticatedUser()
-                .RequireAssertion(context => HasUserScope(context.User) && context.User.IsInRole("Status.Operator")));
-            auth.AddPolicy("reader", policy => policy.RequireAuthenticatedUser()
-                .RequireAssertion(context => HasUserScope(context.User)
-                    && (context.User.IsInRole("Status.Reader") || context.User.IsInRole("Status.Operator"))));
-            auth.AddPolicy("ingest", policy => policy.RequireAuthenticatedUser().RequireRole("Status.Ingest")
-                .RequireAssertion(context => options.WebhookApplicationIds.Contains(
-                    context.User.FindFirstValue("azp") ?? context.User.FindFirstValue("appid"), StringComparer.OrdinalIgnoreCase)));
-        });
+        ConfigureIdentity(builder.Services, options);
         builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 131072);
         var app = builder.Build();
         app.UseExceptionHandler(error => error.Run(async context =>
@@ -136,17 +109,19 @@ public sealed class ServiceProgram
         });
         app.MapGet("/api/auth/config", () => Results.Ok(new
         {
-            enabled = options.ClientId is not null, tenantId = options.TenantId, clientId = options.ClientId,
+            enabled = options.ClientId is not null,
+            tenantId = options.TenantId,
+            clientId = options.ClientId,
             scope = options.ClientId is null ? null : $"api://{options.ClientId}/Status.Access"
         }));
         app.MapGet("/api/ops/incidents", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
             Results.Json(await database.ReadIncidentsAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, ct), StatusJson.Options))
-            .RequireAuthorization("reader");
+            .RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/evidence", async (PostgresStore database, CancellationToken ct) =>
-            Results.Ok(await database.ReadEvidenceAsync(ct))).RequireAuthorization("reader");
+            Results.Ok(await database.ReadEvidenceAsync(ct))).RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/runtime", async (PostgresStore database, CancellationToken ct) =>
             Results.Ok(new { publisher = options.Publisher, writable = await database.IsWritableAsync(ct) }))
-            .RequireAuthorization("reader");
+            .RequireAuthorization(ReaderPolicy);
         app.MapPost("/api/ops/incidents", (HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
             SaveIncidentAsync(context, command, null, catalog, database, ct)).RequireAuthorization("operator");
         app.MapPut("/api/ops/incidents/{id:int}", (int id, HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
@@ -167,6 +142,45 @@ public sealed class ServiceProgram
         return app;
     }
 
+    private static void ConfigureIdentity(IServiceCollection services, RuntimeOptions options)
+    {
+        if (options.TenantId is not null)
+        {
+            services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(settings =>
+            {
+                settings.Authority = $"https://login.microsoftonline.com/{options.TenantId}/v2.0";
+                settings.Audience = options.ClientId;
+                settings.MapInboundClaims = false;
+                settings.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidIssuer = $"https://login.microsoftonline.com/{options.TenantId}/v2.0",
+                    RoleClaimType = "roles",
+                    NameClaimType = "oid",
+                    ClockSkew = TimeSpan.FromMinutes(1)
+                };
+            });
+        }
+        else
+        {
+            services.AddAuthentication("unconfigured")
+                .AddScheme<AuthenticationSchemeOptions, UnconfiguredAuthenticationHandler>("unconfigured", _ => { });
+        }
+        services.AddAuthorization(auth =>
+        {
+            auth.AddPolicy("operator", policy => policy.RequireAuthenticatedUser()
+                .RequireAssertion(context => HasUserScope(context.User) && context.User.IsInRole("Status.Operator")));
+            auth.AddPolicy(ReaderPolicy, policy => policy.RequireAuthenticatedUser()
+                .RequireAssertion(context => HasUserScope(context.User)
+                    && (context.User.IsInRole("Status.Reader") || context.User.IsInRole("Status.Operator"))));
+            auth.AddPolicy("ingest", policy => policy.RequireAuthenticatedUser().RequireRole("Status.Ingest")
+                .RequireAssertion(context => options.WebhookApplicationIds.Contains(
+                    context.User.FindFirstValue("azp") ?? context.User.FindFirstValue("appid"), StringComparer.OrdinalIgnoreCase)));
+        });
+    }
+
     private static bool HasUserScope(ClaimsPrincipal user) =>
         user.FindFirstValue("scp")?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("Status.Access") == true;
 
@@ -180,8 +194,9 @@ public sealed class ServiceProgram
             return Results.Json(new { error = "This origin is read-only. Retry on the publisher; promotion requires fencing the former writer." }, statusCode: 503);
         var record = await database.SaveIncidentAsync(site.Site.Id, id, command,
             context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct);
+        var statusCode = id is null ? StatusCodes.Status201Created : StatusCodes.Status200OK;
         return record is null ? Results.Conflict(new { error = "Incident changed or does not exist. Reload before editing." })
-            : Results.Json(record, StatusJson.Options, statusCode: id is null ? 201 : 200);
+            : Results.Json(record, StatusJson.Options, statusCode: statusCode);
     }
 
     private static async Task WriteFeedAsync(HttpContext context, StatusCatalog catalog, PublicationStore files, CancellationToken ct)

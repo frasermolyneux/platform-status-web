@@ -11,33 +11,14 @@ public sealed class PublicationWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (options.DatabaseConnectionFile is null && options.DatabaseHost is null) return;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (options.DatabaseConnectionFile is not null || options.DatabaseHost is not null)
-                {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                    timeout.CancelAfter(TimeSpan.FromMinutes(2));
-                    if (options.Publisher)
-                    {
-                        await database.InitializeAsync(timeout.Token);
-                        if (!await database.IsWritableAsync(timeout.Token))
-                            throw new InvalidOperationException("Publisher database is in recovery; refusing publication.");
-                        await using var publisherLock = await database.TryPublisherLockAsync(timeout.Token);
-                        if (publisherLock is null)
-                            throw new InvalidOperationException("Another publisher holds the database lock.");
-                        await PublishAsync(timeout.Token);
-                    }
-                    else
-                    {
-                        foreach (var site in catalog.Sites)
-                        {
-                            var publication = await database.ReadPublicationAsync(site.Site.Id, timeout.Token);
-                            if (publication is not null) await files.WriteAsync(publication, timeout.Token);
-                        }
-                    }
-                }
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                timeout.CancelAfter(TimeSpan.FromMinutes(2));
+                await RefreshAsync(timeout.Token);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception)
@@ -47,6 +28,25 @@ public sealed class PublicationWorker(
             try { await Task.Delay(TimeSpan.FromSeconds(options.Publisher ? options.RefreshSeconds : 10), stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
         }
+    }
+
+    private async Task RefreshAsync(CancellationToken ct)
+    {
+        if (!options.Publisher)
+        {
+            foreach (var site in catalog.Sites)
+            {
+                var publication = await database.ReadPublicationAsync(site.Site.Id, ct);
+                if (publication is not null) await files.WriteAsync(publication, ct);
+            }
+            return;
+        }
+        await database.InitializeAsync(ct);
+        if (!await database.IsWritableAsync(ct))
+            throw new InvalidOperationException("Publisher database is in recovery; refusing publication.");
+        await using var publisherLock = await database.TryPublisherLockAsync(ct)
+            ?? throw new InvalidOperationException("Another publisher holds the database lock.");
+        await PublishAsync(ct);
     }
 
     private async Task PublishAsync(CancellationToken ct)
@@ -73,9 +73,9 @@ public sealed class PublicationWorker(
                 {
                     logger.LogWarning(exception, "Independent probe failed for {Site}/{Component}.", site.Site.Id, component);
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                catch (OperationCanceledException exception) when (!ct.IsCancellationRequested)
                 {
-                    logger.LogWarning("Independent probe timed out for {Site}/{Component}.", site.Site.Id, component);
+                    logger.LogWarning(exception, "Independent probe timed out for {Site}/{Component}.", site.Site.Id, component);
                 }
                 ct.ThrowIfCancellationRequested();
                 var now = DateTimeOffset.UtcNow;
@@ -105,10 +105,7 @@ public sealed class PublicationWorker(
         var days = history.ComponentsById.TryGetValue(component.Id, out var record)
             ? record.Days.ToDictionary(day => day.Date) : [];
         var children = component.Children?.Select(child => CorrectComponent(child, history)).ToArray();
-        var corrected = component.History.Select(day => days.TryGetValue(day.Date, out var sample)
-            ? day with { Status = sample.Status.ToApiString(), Uptime = sample.Uptime, Total = sample.Total, Failed = sample.Failed }
-            : children is { Length: > 0 } ? GroupDay(day, children)
-            : day).ToArray();
+        var corrected = component.History.Select(day => CorrectDay(day, days, children)).ToArray();
         var known = corrected.Where(day => day.Total > 0 && day.Failed.HasValue && day.Status != "maintenance").ToArray();
         var total = known.Sum(day => day.Total!.Value);
         return component with
@@ -119,14 +116,20 @@ public sealed class PublicationWorker(
         };
     }
 
+    private static HistoryDayDto CorrectDay(HistoryDayDto day, IReadOnlyDictionary<DateOnly, HistoryDay> days, ComponentDto[]? children)
+    {
+        if (days.TryGetValue(day.Date, out var sample))
+            return day with { Status = sample.Status.ToApiString(), Uptime = sample.Uptime, Total = sample.Total, Failed = sample.Failed };
+        return children is { Length: > 0 } ? GroupDay(day, children) : day;
+    }
+
     private static HistoryDayDto GroupDay(HistoryDayDto day, IReadOnlyList<ComponentDto> children)
     {
         var samples = children.Select(child => child.History.Single(sample => sample.Date == day.Date)).ToArray();
         var total = samples.Sum(sample => sample.Total ?? 0);
         var failures = samples.Sum(sample => sample.Failed ?? 0);
-        var state = samples.Any(sample => sample.Status == "outage") ? "outage"
-            : samples.Any(sample => sample.Status == "degraded") ? "degraded"
-            : samples.Any(sample => sample.Status == "unknown") ? "unknown" : "operational";
+        var state = new[] { "outage", "degraded", "maintenance", "unknown", "operational" }
+            .FirstOrDefault(status => samples.Any(sample => sample.Status == status)) ?? "unknown";
         return day with { Status = state, Total = total, Failed = failures, Uptime = total == 0 ? null : 1d - (double)failures / total };
     }
 }
