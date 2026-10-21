@@ -152,6 +152,8 @@ def database_ready(container):
                       'PGPASSWORD="$(cat /run/secrets/app-password)" psql '
                       '-h 127.0.0.1 -U status_app -d status -Atc "SELECT 1"') == "1"
     except subprocess.CalledProcessError:
+        if docker("inspect", "--format", "{{.State.Running}}", container) != "true":
+            raise RuntimeError(f"Database container exited before becoming ready: {container}")
         return False
 
 

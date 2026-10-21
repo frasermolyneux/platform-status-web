@@ -83,7 +83,7 @@ SQL
     trap - EXIT
 fi
 unset PGPASSWORD
-exec postgres --pgdata="$PGDATA" \
+exec postgres -D "$PGDATA" \
     -c listen_addresses='*' -c unix_socket_directories=/tmp \
     -c wal_level=replica -c max_wal_senders=4 -c max_replication_slots=2 \
     -c max_slot_wal_keep_size=1GB -c hot_standby=on -c shared_buffers=128MB

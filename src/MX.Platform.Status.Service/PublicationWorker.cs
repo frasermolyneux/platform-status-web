@@ -120,12 +120,14 @@ public sealed class PublicationWorker(
     {
         if (days.TryGetValue(day.Date, out var sample))
             return day with { Status = sample.Status.ToApiString(), Uptime = sample.Uptime, Total = sample.Total, Failed = sample.Failed };
-        return children is { Length: > 0 } ? GroupDay(day, children) : day;
+        return children is { Length: > 0 } ? GroupDay(day, children)
+            : day with { Status = "unknown", Uptime = null, Total = null, Failed = null };
     }
 
     private static HistoryDayDto GroupDay(HistoryDayDto day, IReadOnlyList<ComponentDto> children)
     {
-        var samples = children.Select(child => child.History.Single(sample => sample.Date == day.Date)).ToArray();
+        var samples = children.Select(child => child.History.FirstOrDefault(sample => sample.Date == day.Date)
+            ?? new HistoryDayDto { Date = day.Date }).ToArray();
         var total = samples.Sum(sample => sample.Total ?? 0);
         var failures = samples.Sum(sample => sample.Failed ?? 0);
         var state = new[] { "outage", "degraded", "maintenance", "unknown", "operational" }

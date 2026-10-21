@@ -1,9 +1,17 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
 using MX.Platform.Status.App.Contracts;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.Service;
@@ -13,6 +21,10 @@ namespace MX.Platform.Status.Tests;
 public sealed class IndependentServiceTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "status-tests-" + Guid.NewGuid().ToString("N"));
+    private readonly string _tenant = Guid.NewGuid().ToString();
+    private readonly string _client = Guid.NewGuid().ToString();
+    private readonly string _ingestor = Guid.NewGuid().ToString();
+    private readonly SymmetricSecurityKey _signingKey = new(RandomNumberGenerator.GetBytes(32));
 
     public IndependentServiceTests() => Directory.CreateDirectory(_directory);
 
@@ -127,14 +139,75 @@ public sealed class IndependentServiceTests : IDisposable
         Assert.Null((command with { Published = false }).Validate(site));
     }
 
-    private Microsoft.AspNetCore.Builder.WebApplication Build() => ServiceProgram.Build([], builder =>
+    [Theory]
+    [InlineData("Status.Reader", "Status.Access", "operator", false, 403)]
+    [InlineData("Status.Operator", "", "operator", false, 403)]
+    [InlineData("Status.Operator", "Status.Access", "operator", false, 400)]
+    [InlineData("Status.Operator", "Status.Access", "ingest", true, 403)]
+    [InlineData("Status.Ingest", "", "ingest", false, 403)]
+    [InlineData("Status.Ingest", "", "ingest", true, 400)]
+    public async Task RolesScopesAndIngestorAllowlistAreEnforcedByTheApi(
+        string role, string scope, string endpoint, bool allowedCaller, int expected)
+    {
+        await using var app = Build(configuredIdentity: true);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Host = "mxstatus.io";
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
+            Token(role, scope, allowedCaller ? _ingestor : Guid.NewGuid().ToString()));
+        var path = endpoint == "operator" ? "/api/ops/incidents" : "/api/integrations/azure";
+        var payload = endpoint == "operator"
+            ? JsonContent.Create(new { title = "", components = Array.Empty<string>(), severity = "outage", state = "investigating", message = "", published = false })
+            : JsonContent.Create(new { });
+        Assert.Equal(expected, (int)(await client.PostAsync(path, payload)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("issuer")]
+    [InlineData("audience")]
+    [InlineData("expired")]
+    public async Task InvalidTokenBoundariesAreRejectedWithoutAffectingPublicReads(string invalid)
+    {
+        await using var app = Build(configuredIdentity: true);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Host = "mxstatus.io";
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
+            Token("Status.Operator", "Status.Access", _ingestor, invalid));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/incidents")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/status")).StatusCode);
+    }
+
+    private string Token(string role, string scope, string caller, string? invalid = null) =>
+        new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = invalid == "issuer" ? "https://untrusted.example" : $"https://login.microsoftonline.com/{_tenant}/v2.0",
+            Audience = invalid == "audience" ? Guid.NewGuid().ToString() : _client,
+            NotBefore = DateTime.UtcNow.AddHours(-1),
+            Expires = invalid == "expired" ? DateTime.UtcNow.AddMinutes(-5) : DateTime.UtcNow.AddMinutes(5),
+            Subject = new ClaimsIdentity([new("oid", Guid.NewGuid().ToString()), new("roles", role), new("scp", scope), new("azp", caller)]),
+            SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
+        });
+
+    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false) => ServiceProgram.Build([], builder =>
     {
         builder.WebHost.UseTestServer();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Status:CatalogPath"] = Path.Combine(AppContext.BaseDirectory, "catalog.json"),
-            ["Status:DataDirectory"] = _directory
+            ["Status:DataDirectory"] = _directory,
+            ["Status:TenantId"] = configuredIdentity ? _tenant : null,
+            ["Status:ClientId"] = configuredIdentity ? _client : null,
+            ["Status:WebhookApplicationIds:0"] = _ingestor
         });
+        if (configuredIdentity)
+        {
+            builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, settings =>
+            {
+                settings.Configuration = new OpenIdConnectConfiguration { Issuer = $"https://login.microsoftonline.com/{_tenant}/v2.0" };
+                settings.Configuration.SigningKeys.Add(_signingKey);
+            });
+        }
     });
 
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
