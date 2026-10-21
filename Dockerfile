@@ -18,4 +18,6 @@ COPY --from=build /publish/ ./
 COPY --from=frontend /web/dist/ ./wwwroot/
 USER 10001:10001
 EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["dotnet", "MX.Platform.Status.Service.dll", "--healthcheck"]
 ENTRYPOINT ["dotnet", "MX.Platform.Status.Service.dll"]
