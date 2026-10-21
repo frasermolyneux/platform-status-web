@@ -54,7 +54,7 @@ public sealed class PublicationWorker(
         foreach (var site in catalog.Sites)
         {
             var publicIds = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
-            var incidents = (await database.ReadIncidentsAsync(site.Site.Id, ct))
+            var incidents = (await database.ReadPublicationIncidentsAsync(site.Site.Id, ct))
                 .Where(i => i.Published && i.Components.All(publicIds.Contains)).ToArray();
             var live = new Dictionary<string, ComponentLiveTelemetry>();
             foreach (var (component, target) in site.Probes)
@@ -89,7 +89,7 @@ public sealed class PublicationWorker(
 
             var history = await database.ReadHistoryAsync(site.Site.Id, ct);
             var publication = new StatusMerger().Merge(site.Snapshot, live, history,
-                incidents.Where(i => i.Severity != Severity.Maintenance).Select(i => i.ToPublicIncident()),
+                incidents.Select(i => i.ToPublicIncident()),
                 incidents.Where(i => i.Severity == Severity.Maintenance).Select(i => i.ToMaintenance(DateTimeOffset.UtcNow)));
             publication = CorrectTodayHistory(publication, history);
             await database.SavePublicationAsync(publication, ct);

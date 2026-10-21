@@ -8,6 +8,7 @@ import secrets
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -85,7 +86,7 @@ def main():
                 container = f"{name}-{role}"
                 containers.append(container)
                 docker("run", "--detach", "--name", container, "--network", name,
-                       "--ip", f"100.120.200{address}", "--user", "999:10001", *restrictions,
+                       "--ip", f"100.120.200{address}", *restrictions,
                        "--mount", f"type=bind,src={root / role},dst=/var/lib/postgresql/data",
                        "--mount", f"type=bind,src={root / node},dst=/node,readonly",
                        "--mount", f"type=bind,src={root / 'secrets'},dst=/run/secrets,readonly",
@@ -125,13 +126,60 @@ def main():
                    "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command))
             for label, url in urls.items():
                 wait_for(lambda: bool(request(url, "/api/status")[1].get("incidents")), f"{label} incident replication")
+            now = datetime.now(timezone.utc)
+            maintenance = {
+                "title": "Integration maintenance", "components": ["mx.sitewatch.molyneux-me"],
+                "severity": "maintenance", "state": "monitoring", "message": "Approved maintenance timeline",
+                "published": True, "scheduledStart": (now - timedelta(minutes=5)).isoformat(),
+                "scheduledEnd": (now + timedelta(minutes=30)).isoformat(),
+            }
+            maintenance_record = json.loads(docker("exec", "--interactive", f"{name}-public", "dotnet",
+                                                  "MX.Platform.Status.Service.dll", "--emergency-publish", "mx",
+                                                  input=json.dumps(maintenance)))
+            for label, url in urls.items():
+                wait_for(lambda: len(request(url, "/api/status")[1].get("incidents", [])) == 2,
+                         f"{label} maintenance timeline publication")
+                publication = request(url, "/api/status")[1]
+                assert any(item["id"] == maintenance_record["id"] for item in publication["maintenance"])
+                assert request(url, f"/incident/{maintenance_record['id']}")[0] == 200
+                assert "Integration maintenance" in request(url, "/feed.xml")[1]
+                assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(publication)
+            docker("exec", "--interactive", f"{name}-primary", "sh", "-ec",
+                   'PGPASSWORD="$(cat /run/secrets/app-password)" psql '
+                   '-h 127.0.0.1 -U status_app -d status --set=ON_ERROR_STOP=1', input=f"""
+                WITH copies AS (
+                    SELECT nextval(pg_get_serial_sequence('status_incidents', 'id')) AS id, n
+                    FROM generate_series(1,2002) n
+                ), history AS (
+                    SELECT jsonb_build_array(jsonb_build_object(
+                        'at', now()-interval '1 day', 'state', 'resolved',
+                        'body', 'Synthetic historic recovery')) AS updates
+                )
+                INSERT INTO status_incidents(id,site_id,revision,document) OVERRIDING SYSTEM VALUE
+                SELECT copies.id, original.site_id, 1,
+                    original.document || CASE WHEN copies.n <= 1001
+                    THEN jsonb_build_object('id', copies.id, 'published', false)
+                    ELSE jsonb_build_object(
+                        'id', copies.id, 'title', 'Historic integration incident', 'state', 'resolved',
+                        'startedAt', now()-interval '2 days', 'resolvedAt', now()-interval '1 day',
+                        'updates', history.updates, 'publicUpdates', history.updates) END
+                FROM copies CROSS JOIN history CROSS JOIN status_incidents original
+                WHERE original.id={int(record['id'])};
+                """)
+            for label, url in urls.items():
+                wait_for(lambda: len(request(url, "/api/status")[1].get("incidents", [])) == 1002,
+                         f"{label} active records preserved beyond historical and draft limits")
+                publication = request(url, "/api/status")[1]
+                assert {record["id"], maintenance_record["id"]}.issubset(
+                    {item["id"] for item in publication["incidents"]})
+                assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(publication)
             snapshots = {label: request(url, "/api/status")[1]["generatedAt"] for label, url in urls.items()}
             docker("stop", f"{name}-primary", f"{name}-standby")
             for label, url in urls.items():
                 docker("restart", f"{name}-{label}")
                 wait_for(lambda: request(url, "/health/ready")[0] == 200, f"{label} independent restart", seconds=30)
                 publication = request(url, "/api/status")[1]
-                assert publication["incidents"][0]["title"] == "Integration incident"
+                assert any(item["title"] == "Integration incident" for item in publication["incidents"])
                 assert publication["generatedAt"] >= snapshots[label]
                 assert request(url, "/feed.xml")[0] == 200
             time.sleep(65)
@@ -170,7 +218,7 @@ def request(url, path, host="mxstatus.io"):
 
 def published(url):
     status, body = request(url, "/api/status")
-    return status == 200 and not body["dataFreshness"]["stale"] and not body["generatedAt"].startswith("1970-")
+    return status == 200 and not body["dataFreshness"].get("stale", False) and not body["generatedAt"].startswith("1970-")
 
 
 if __name__ == "__main__":

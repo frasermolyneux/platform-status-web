@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
@@ -43,6 +45,7 @@ public sealed class IndependentServiceTests : IDisposable
         Assert.True(publication.DataFreshness!.Stale);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/feed.xml")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/ready")).StatusCode);
+        Assert.Equal("static-shell", await client.GetStringAsync("/component/mx.sitewatch.molyneux-me"));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/evidence")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/api/integrations/azure", JsonContent.Create(new { }))).StatusCode);
     }
@@ -125,6 +128,22 @@ public sealed class IndependentServiceTests : IDisposable
     }
 
     [Fact]
+    public void PublishingApprovesOnlyTheCurrentUpdateAndRetainsDraftHistoryPrivately()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var draft = new IncidentCommand("Maintenance", ["mx.sitewatch.molyneux-me"], Severity.Maintenance,
+            IncidentState.Investigating, "PRIVATE_DRAFT", false, ScheduledStart: now, ScheduledEnd: now.AddHours(1));
+        var record = draft.Apply(1, "mx", null, now);
+        record = (draft with { Published = true, Message = "Approved first update" }).Apply(1, "mx", record, now.AddMinutes(1));
+        record = (draft with { Message = "PRIVATE_REVISION" }).Apply(1, "mx", record, now.AddMinutes(2));
+        record = (draft with { Published = true, Message = "Approved final update" }).Apply(1, "mx", record, now.AddMinutes(3));
+
+        Assert.Equal(4, record.Updates.Count);
+        Assert.Equal(["Approved first update", "Approved final update"], record.ToPublicIncident().Updates.Select(update => update.Body));
+        Assert.Equal("Approved final update", record.ToMaintenance(now).Body);
+    }
+
+    [Fact]
     public void PublicIncidentsCannotTargetChildrenOfRestrictedGroups()
     {
         var site = Catalogue().Get("mx") with
@@ -178,6 +197,25 @@ public sealed class IndependentServiceTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/status")).StatusCode);
     }
 
+    [Fact]
+    public async Task AnUnavailableWriterProducesReadOnlyStateButDoesNotSuppressCancellation()
+    {
+        using var reservedPort = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        reservedPort.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var passwordFile = Path.Combine(_directory, "app-password");
+        await File.WriteAllTextAsync(passwordFile, Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
+        await using var database = new PostgresStore(new RuntimeOptions
+        {
+            DatabaseHost = IPAddress.Loopback.ToString(),
+            DatabasePort = ((IPEndPoint)reservedPort.LocalEndPoint!).Port,
+            DatabasePasswordFile = passwordFile
+        }, NullLogger<PostgresStore>.Instance);
+        Assert.False(await database.IsWritableAsync(CancellationToken.None));
+        using var canceled = new CancellationTokenSource();
+        await canceled.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => database.IsWritableAsync(canceled.Token));
+    }
+
     private string Token(string role, string scope, string caller, string? invalid = null) =>
         new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
@@ -189,26 +227,32 @@ public sealed class IndependentServiceTests : IDisposable
             SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
         });
 
-    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false) => ServiceProgram.Build([], builder =>
+    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false)
     {
-        builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        var webRoot = Path.Combine(_directory, "webroot");
+        Directory.CreateDirectory(webRoot);
+        File.WriteAllText(Path.Combine(webRoot, "index.html"), "static-shell");
+        return ServiceProgram.Build(["--webroot", webRoot], builder =>
         {
-            ["Status:CatalogPath"] = Path.Combine(AppContext.BaseDirectory, "catalog.json"),
-            ["Status:DataDirectory"] = _directory,
-            ["Status:TenantId"] = configuredIdentity ? _tenant : null,
-            ["Status:ClientId"] = configuredIdentity ? _client : null,
-            ["Status:WebhookApplicationIds:0"] = _ingestor
-        });
-        if (configuredIdentity)
-        {
-            builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, settings =>
+            builder.WebHost.UseTestServer();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                settings.Configuration = new OpenIdConnectConfiguration { Issuer = $"https://login.microsoftonline.com/{_tenant}/v2.0" };
-                settings.Configuration.SigningKeys.Add(_signingKey);
+                ["Status:CatalogPath"] = Path.Combine(AppContext.BaseDirectory, "catalog.json"),
+                ["Status:DataDirectory"] = _directory,
+                ["Status:TenantId"] = configuredIdentity ? _tenant : null,
+                ["Status:ClientId"] = configuredIdentity ? _client : null,
+                ["Status:WebhookApplicationIds:0"] = _ingestor
             });
-        }
-    });
+            if (configuredIdentity)
+            {
+                builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, settings =>
+                {
+                    settings.Configuration = new OpenIdConnectConfiguration { Issuer = $"https://login.microsoftonline.com/{_tenant}/v2.0" };
+                    settings.Configuration.SigningKeys.Add(_signingKey);
+                });
+            }
+        });
+    }
 
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
 

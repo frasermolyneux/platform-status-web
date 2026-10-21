@@ -138,6 +138,7 @@ public static class ServiceProgram
         app.Map("/api/{**path}", () => Results.NotFound());
         app.UseDefaultFiles();
         app.UseStaticFiles();
+        app.MapFallbackToFile("/component/{id}", "index.html");
         app.MapFallbackToFile("index.html");
         return app;
     }
@@ -205,7 +206,8 @@ public static class ServiceProgram
         var publication = await files.ReadAsync(site.Site.Id, ct);
         var feed = new SyndicationFeed(site.Site.DisplayName, site.Site.Tagline,
             new Uri($"https://{site.Site.Domains[0]}/"), publication.Incidents.Select(incident =>
-                new SyndicationItem(incident.Title, incident.Updates.LastOrDefault()?.Body ?? "",
+                new SyndicationItem(incident.Title, WebUtility.HtmlDecode((incident.Updates.LastOrDefault()?.Body ?? "")
+                        .Replace("<br>", "\n", StringComparison.Ordinal)),
                     new Uri($"https://{site.Site.Domains[0]}{incident.Url}"), $"{site.Site.Id}:{incident.Id}", incident.Updates.LastOrDefault()?.At ?? incident.CreatedAt)));
         context.Response.ContentType = "application/rss+xml; charset=utf-8";
         using var buffer = new MemoryStream();

@@ -7,7 +7,7 @@ using NpgsqlTypes;
 
 namespace MX.Platform.Status.Service;
 
-public sealed class PostgresStore(RuntimeOptions options) : IAsyncDisposable
+public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore> logger) : IAsyncDisposable
 {
     private readonly Lazy<NpgsqlDataSource> _source = new(() => NpgsqlDataSource.Create(ConnectionString(options, writer: false)));
     private readonly Lazy<NpgsqlDataSource> _writer = new(() => NpgsqlDataSource.Create(ConnectionString(options, writer: true)));
@@ -58,22 +58,58 @@ public sealed class PostgresStore(RuntimeOptions options) : IAsyncDisposable
 
     public async Task<bool> IsWritableAsync(CancellationToken ct)
     {
-        await using var command = Writer.CreateCommand("SELECT NOT pg_is_in_recovery()");
-        return (bool)(await command.ExecuteScalarAsync(ct))!;
+        try
+        {
+            await using var command = Writer.CreateCommand("SELECT NOT pg_is_in_recovery()");
+            return (bool)(await command.ExecuteScalarAsync(ct))!;
+        }
+        catch (NpgsqlException exception) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "The status writer is unavailable; restricted reads may continue from the local database.");
+            return false;
+        }
+        catch (TimeoutException exception) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "The status writer timed out; restricted reads may continue from the local database.");
+            return false;
+        }
     }
 
     public async Task<PublisherLease?> TryPublisherLockAsync(CancellationToken ct)
     {
         var connection = await Source.OpenConnectionAsync(ct);
-        await using var command = new NpgsqlCommand("SELECT pg_try_advisory_lock(814233107)", connection);
-        if ((bool)(await command.ExecuteScalarAsync(ct))!) return new PublisherLease(connection);
+        try
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_try_advisory_lock(814233107)", connection);
+            if ((bool)(await command.ExecuteScalarAsync(ct))!) return new PublisherLease(connection);
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
         await connection.DisposeAsync();
         return null;
     }
 
-    public async Task<IReadOnlyList<IncidentRecord>> ReadIncidentsAsync(string site, CancellationToken ct)
+    public Task<IReadOnlyList<IncidentRecord>> ReadIncidentsAsync(string site, CancellationToken ct) =>
+        ReadIncidentDocumentsAsync(site, "SELECT document::text FROM status_incidents WHERE site_id=$1 ORDER BY id DESC LIMIT 1000", ct);
+
+    public Task<IReadOnlyList<IncidentRecord>> ReadPublicationIncidentsAsync(string site, CancellationToken ct) =>
+        ReadIncidentDocumentsAsync(site, """
+            SELECT document::text FROM (
+                SELECT id, document FROM status_incidents
+                WHERE site_id=$1 AND document->>'published'='true' AND document->>'state'<>'resolved'
+                UNION ALL
+                (SELECT id, document FROM status_incidents
+                 WHERE site_id=$1 AND document->>'published'='true' AND document->>'state'='resolved'
+                 ORDER BY id DESC LIMIT 1000)
+            ) records ORDER BY id DESC
+            """, ct);
+
+    private async Task<IReadOnlyList<IncidentRecord>> ReadIncidentDocumentsAsync(string site, string sql, CancellationToken ct)
     {
-        await using var command = Source.CreateCommand("SELECT document::text FROM status_incidents WHERE site_id=$1 ORDER BY id DESC LIMIT 1000");
+        await using var command = Source.CreateCommand(sql);
         command.Parameters.AddWithValue(site);
         await using var reader = await command.ExecuteReaderAsync(ct);
         var result = new List<IncidentRecord>();

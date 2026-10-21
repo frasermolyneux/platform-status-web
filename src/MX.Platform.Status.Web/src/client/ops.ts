@@ -78,6 +78,13 @@ export async function renderOperations(): Promise<void> {
       return;
     }
     const request = async (path: string, init?: RequestInit): Promise<Response> => {
+      try {
+        token = (await client.acquireTokenSilent({ account, scopes: [config.scope] })).accessToken;
+      } catch (error) {
+        if (!(error instanceof InteractionRequiredAuthError)) throw error;
+        root.append(signIn);
+        throw new Error('Sign-in is required again. Copy your unsaved update before signing in.');
+      }
       const response = await fetch(path, {
         ...init, cache: 'no-store',
         headers: { ...init?.headers, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

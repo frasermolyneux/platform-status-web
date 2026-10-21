@@ -21,6 +21,7 @@ fi
 for file in postgres-password app-password replication-password; do
     test -s "/run/secrets/$file"
 done
+chmod 0700 "$PGDATA"
 
 export PGUSER=status_admin
 export PGPASSWORD
