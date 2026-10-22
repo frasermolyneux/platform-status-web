@@ -92,6 +92,7 @@ class EdgePlanTests(unittest.TestCase):
         for resource in plan["resource_changes"]:
             resource["change"]["actions"] = ["no-op"]
         self.assertEqual(validate_preflight(plan), 0)
+        self.assertEqual(validate_plan(plan, activate=True), 0)
         drift = plan["resource_drift"][0]["change"]
         for key, value in (("country_pools", {"US": ["another-pool"]}), ("enabled", False)):
             with self.subTest(key=key):
@@ -102,6 +103,30 @@ class EdgePlanTests(unittest.TestCase):
         drift["after_unknown"] = {"country_pools": True}
         with self.assertRaises(ValueError):
             validate_preflight(plan)
+        with self.assertRaises(ValueError):
+            validate_plan(plan, activate=True)
+
+    def test_reconciliation_rejects_unreviewed_drift_even_when_resource_actions_are_noop(self):
+        for index, field, value in (
+            (0, "country_pools", {"US": ["another-pool"]}),
+            (1, "description", "unreviewed-change"),
+        ):
+            with self.subTest(index=index, field=field):
+                plan = activation_plan()
+                for resource in plan["resource_changes"]:
+                    change = resource["change"]
+                    change["actions"] = ["no-op"]
+                    change["after_unknown"] = {}
+                    change["before"] = copy.deepcopy(change["after"])
+                resource = plan["resource_changes"][index]
+                resource["change"]["before"][field] = value
+                resource["change"]["after"][field] = value
+                drift = copy.deepcopy(resource)
+                drift["change"]["actions"] = ["update"]
+                drift["change"]["before"][field] = None
+                plan["resource_drift"] = [drift]
+                with self.assertRaises(ValueError):
+                    validate_plan(plan, activate=True)
 
     def test_rejects_detached_or_substituted_links_in_initial_and_partial_plans(self):
         for actions in (["create"], ["no-op"]):

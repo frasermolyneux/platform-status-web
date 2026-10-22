@@ -16,7 +16,23 @@ def contains_unknown(value):
     return value is True
 
 
+def validate_drift(plan, *, allow_enablement=False):
+    for resource in plan.get("resource_drift", []):
+        if resource["mode"] != "managed" or resource["change"]["actions"] == ["no-op"]:
+            continue
+        change = resource["change"]
+        before, after = change.get("before"), change.get("after")
+        if (not allow_enablement or resource["address"] != "cloudflare_load_balancer.status"
+                or change["actions"] != ["update"] or before is None or after is None
+                or before.get("enabled") is not False or after.get("enabled") is not True
+                or contains_unknown(change.get("after_unknown", {}))
+                or any(before.get(key) != after.get(key)
+                       for key in before.keys() | after.keys() if key not in {"enabled", "modified_on"})):
+            raise ValueError("The edge plan must contain no unreviewed managed drift.")
+
+
 def validate_plan(plan, *, activate=False):
+    validate_drift(plan, allow_enablement=activate)
     expected = {
         "cloudflare_load_balancer.status",
         "cloudflare_load_balancer_pool.status",
@@ -129,18 +145,7 @@ def validate_plan(plan, *, activate=False):
 
 
 def validate_preflight(plan):
-    for resource in plan.get("resource_drift", []):
-        if resource["mode"] != "managed" or resource["change"]["actions"] == ["no-op"]:
-            continue
-        change = resource["change"]
-        before, after = change.get("before"), change.get("after")
-        if (resource["address"] != "cloudflare_load_balancer.status" or change["actions"] != ["update"]
-                or before is None or after is None or before.get("enabled") is not False
-                or after.get("enabled") is not True or contains_unknown(change.get("after_unknown", {}))
-                or any(before.get(key) != after.get(key)
-                       for key in before.keys() | after.keys() if key not in {"enabled", "modified_on"})):
-            raise ValueError("Activation preflight must contain no unreviewed managed drift.")
-        print("Verified enablement-only drift from an interrupted approved activation; resuming reconciliation.")
+    validate_drift(plan, allow_enablement=True)
     if "resource_changes" not in plan:
         values = plan["planned_values"]
         if "resources" not in values.get("root_module", {}):
