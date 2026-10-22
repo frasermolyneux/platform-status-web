@@ -48,8 +48,9 @@ def should_publish(repository, pattern):
         print("No retained source publication record; performing a complete image publication.")
         return True
     changed = subprocess.check_output(
-        ["git", "diff", "--name-only", previous, "HEAD"], text=True
-    ).splitlines()
+        ["git", "diff", "--no-renames", "--name-only", "-z", previous, "HEAD"],
+        text=True, encoding="utf-8"
+    ).split("\0")
     return any(re.search(pattern, path) for path in changed)
 
 
