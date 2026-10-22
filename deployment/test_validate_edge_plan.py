@@ -78,7 +78,28 @@ class EdgePlanTests(unittest.TestCase):
         plan["prior_state"] = {"values": plan.pop("planned_values")}
         plan["planned_values"] = {"root_module": {}}
         self.assertEqual(validate_preflight(plan), 0)
-        plan["resource_drift"] = [{"mode": "managed", "change": {"actions": ["update"]}}]
+        plan["resource_drift"] = [{"address": "cloudflare_load_balancer_pool.status",
+                                  "mode": "managed", "change": {"actions": ["update"]}}]
+        with self.assertRaises(ValueError):
+            validate_preflight(plan)
+
+    def test_preflight_resumes_only_known_enablement_drift_after_interruption(self):
+        plan = activation_plan()
+        change = plan["resource_changes"][0]["change"]
+        change["after_unknown"] = {}
+        change["after"]["modified_on"] = "new-time"
+        plan["resource_drift"] = [copy.deepcopy(plan["resource_changes"][0])]
+        for resource in plan["resource_changes"]:
+            resource["change"]["actions"] = ["no-op"]
+        self.assertEqual(validate_preflight(plan), 0)
+        drift = plan["resource_drift"][0]["change"]
+        for key, value in (("country_pools", {"US": ["another-pool"]}), ("enabled", False)):
+            with self.subTest(key=key):
+                changed = copy.deepcopy(plan)
+                changed["resource_drift"][0]["change"]["after"][key] = value
+                with self.assertRaises(ValueError):
+                    validate_preflight(changed)
+        drift["after_unknown"] = {"country_pools": True}
         with self.assertRaises(ValueError):
             validate_preflight(plan)
 

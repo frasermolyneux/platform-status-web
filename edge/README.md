@@ -52,7 +52,10 @@ only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main
 It never invokes the retained legacy Azure stack.
 
 Pull requests and the main-only `activate` operation use a refresh-only preflight:
-the five staged resources must already exist, with no managed changes or drift.
+the five staged resources must already exist, with no managed changes or
+unreviewed drift. A retry may accept only a known, verified false-to-true
+enablement change and its modification timestamp from an interrupted approved
+activation; all other resource drift remains blocked.
 The check retains exact-host strict TLS, exactly the two approved enabled
 equal-weight origins without Host overrides, one monitoring region, and strict
 60-second HTTPS checks. This plan is never applied to enable routing.
