@@ -63,27 +63,19 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Detect image input changes
         id: inputs
         env:
           FORCE_PUBLISH: ${{ github.event_name == 'workflow_dispatch' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          changed="$(git diff --name-only HEAD^ HEAD)"
-          if [[ "$FORCE_PUBLISH" == true ]] ||
-            grep --extended-regexp --quiet '^(Dockerfile$|\.dockerignore$|src/|deployment/postgres[-.]|\.github/workflows/deploy-prd\.yml$)' <<<"$changed"; then
-            echo "publish=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >>"$GITHUB_OUTPUT"
-            echo "No image inputs changed; retaining the published image digests." >>"$GITHUB_STEP_SUMMARY"
-          fi
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deployment/image_inputs.py
       - uses: azure/login@v3
         if: steps.inputs.outputs.publish == 'true'
         with:
@@ -111,6 +103,6 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: steps.inputs.outputs.publish == 'true'
         with:
-          name: status-image-digests
+          name: status-image-digests-${{ github.event.workflow_run.head_sha || github.sha }}
           path: "*-image.txt"
-          retention-days: 30
+          retention-days: 90

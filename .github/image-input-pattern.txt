@@ -1,0 +1,1 @@
+^(Dockerfile$|\.dockerignore$|src/|deployment/postgres[-.]|\.github/workflows/deploy-prd\.yml$)

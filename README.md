@@ -111,7 +111,11 @@ draft privacy, writes through the standby application, local-cache survival afte
 database loss and application restart, and truthful staleness.
 
 Successful `main` CI publishes immutable images to the existing platform ACR.
-Manifest-only and documentation-only changes do not rebuild images. Manual image
+Manifest-only and documentation-only changes do not rebuild images while a source
+publication record is retained. Gating compares all inputs with the last recorded
+build source, not just the final commit, so skipped or overlapping CI runs cannot
+lose source changes. Missing or expired provenance requires one full publication;
+source-specific digest artifacts are retained for 90 days. Manual image
 publication can explicitly refresh base images. Published digests still require a
 reviewed `workload.json` update before origins pull them.
 Publishing an image does not enable a server deployment or change public DNS.
