@@ -27,7 +27,8 @@ def validate_plan(plan):
             or load_balancer["session_affinity"] != "none"):
         raise ValueError("Staging must keep the single MX load balancer disabled without paid steering or affinity.")
     pool = resources["cloudflare_load_balancer_pool.status"]
-    if (pool["check_regions"] != ["ENAM"] or pool["enabled"] is not True
+    if (pool["name"] != "platform-status-origins"
+            or pool["check_regions"] != ["ENAM"] or pool["enabled"] is not True
             or pool["minimum_origins"] != 1 or pool["origin_steering"]["policy"] != "random"):
         raise ValueError("The enabled pool must retain the approved single region and simple origin steering.")
     origins = pool["origins"]
@@ -38,15 +39,28 @@ def validate_plan(plan):
                    for origin in origins)):
         raise ValueError("Exactly the two approved enabled, equal-weight origins without Host overrides are required.")
     monitor = resources["cloudflare_load_balancer_monitor.status"]
-    if monitor["allow_insecure"] is not False or monitor["type"] != "https" or monitor["interval"] != 60:
-        raise ValueError("The readiness monitor must retain strict HTTPS and its approved 60-second interval.")
+    expected_monitor = {
+        "type": "https", "method": "GET", "path": "/health/ready",
+        "expected_codes": "200", "expected_body": "\"status\":\"ready\"",
+        "header": {"Host": ["mxstatus.io"]}, "probe_zone": "mxstatus.io",
+        "allow_insecure": False, "follow_redirects": False,
+        "interval": 60, "timeout": 5, "retries": 1,
+        "consecutive_up": 2, "consecutive_down": 2,
+    }
+    if (any(monitor[key] != value for key, value in expected_monitor.items())
+            or monitor.get("port") not in (None, 443)):
+        raise ValueError("The strict HTTPS monitor must retain the exact publication-readiness and 60-second checking contract.")
     preflight = plan["planned_values"]["outputs"]["status_edge_preflight"]["value"]
+    if (pool["account_id"] != preflight["mxstatus.io"]["account_id"]
+            or monitor["account_id"] != preflight["mxstatus.io"]["account_id"]):
+        raise ValueError("The pool and monitor must remain in the preflight-verified account.")
     if load_balancer["zone_id"] != preflight["mxstatus.io"]["zone_id"]:
         raise ValueError("The load balancer must belong to the preflight-verified MX zone.")
     for zone, hostname in (("mxstatus.io", "mxstatus.io"), ("xtremeidiots.com", "status.xtremeidiots.com")):
         ruleset = resources[f'cloudflare_ruleset.status_tls["{zone}"]']
         rules = ruleset["rules"]
-        if (ruleset["zone_id"] != preflight[zone]["zone_id"] or ruleset["kind"] != "zone"
+        if (ruleset["zone_id"] != preflight[zone]["zone_id"]
+                or ruleset["name"] != "platform-status-origin-tls" or ruleset["kind"] != "zone"
                 or ruleset["phase"] != "http_config_settings" or len(rules) != 1):
             raise ValueError(f"Unexpected TLS configuration scope for {zone}.")
         rule = rules[0]
