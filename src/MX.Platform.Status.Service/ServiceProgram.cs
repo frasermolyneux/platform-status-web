@@ -136,8 +136,7 @@ public static class ServiceProgram
         {
             context.Response.Headers.XContentTypeOptions = "nosniff";
             context.Response.Headers["Referrer-Policy"] = "no-referrer";
-            context.Response.Headers.CacheControl = context.Request.Path.StartsWithSegments("/api/ops")
-                || context.Request.Path.StartsWithSegments("/api/integrations") ? "private, no-store" : "no-store";
+            context.Response.Headers.CacheControl = IsRestrictedApi(context.Request.Path) ? "private, no-store" : "no-store";
             if (!context.Request.Path.StartsWithSegments("/health")
                 && catalog.FindHost(context.Request.Host.Host) is null)
             {
@@ -150,9 +149,17 @@ public static class ServiceProgram
 
     private static void ConfigureIdentity(IServiceCollection services, RuntimeOptions options)
     {
+        var authentication = services.AddAuthentication("request-boundary")
+            .AddScheme<AuthenticationSchemeOptions, UnconfiguredAuthenticationHandler>("unconfigured", _ => { })
+            .AddPolicyScheme("request-boundary", null, settings =>
+            {
+                settings.ForwardDefaultSelector = context =>
+                    options.TenantId is not null && IsRestrictedApi(context.Request.Path)
+                        ? JwtBearerDefaults.AuthenticationScheme : "unconfigured";
+            });
         if (options.TenantId is not null)
         {
-            services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(settings =>
+            authentication.AddJwtBearer(settings =>
             {
                 settings.Authority = $"https://login.microsoftonline.com/{options.TenantId}/v2.0";
                 settings.Audience = options.ClientId;
@@ -169,11 +176,6 @@ public static class ServiceProgram
                 };
             });
         }
-        else
-        {
-            services.AddAuthentication("unconfigured")
-                .AddScheme<AuthenticationSchemeOptions, UnconfiguredAuthenticationHandler>("unconfigured", _ => { });
-        }
         services.AddAuthorization(auth =>
         {
             auth.AddPolicy("operator", policy => policy.RequireAuthenticatedUser()
@@ -186,6 +188,9 @@ public static class ServiceProgram
                     context.User.FindFirstValue("azp") ?? context.User.FindFirstValue("appid"), StringComparer.OrdinalIgnoreCase)));
         });
     }
+
+    private static bool IsRestrictedApi(PathString path) =>
+        path.StartsWithSegments("/api/ops") || path.StartsWithSegments("/api/integrations");
 
     private static bool HasUserScope(ClaimsPrincipal user) =>
         user.FindFirstValue("scp")?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("Status.Access") == true;

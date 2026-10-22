@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
@@ -62,6 +63,29 @@ public sealed class IndependentServiceTests : IDisposable
         client.DefaultRequestHeaders.Host = "status.xtremeidiots.com";
         var publication = JsonSerializer.Deserialize<StatusApiResponse>(await client.GetStringAsync("/api/status"), StatusJson.Options)!;
         Assert.Equal("xi", publication.Site.Id);
+    }
+
+    [Fact]
+    public async Task EntraConfiguredPublicRequestsIgnoreBearerHeadersWithoutInvokingRemoteAuthentication()
+    {
+        await using var app = Build(configuredIdentity: true);
+        var bearerRequests = 0;
+        app.Services.GetRequiredService<IOptionsMonitor<JwtBearerOptions>>()
+            .Get(JwtBearerDefaults.AuthenticationScheme).Events.OnMessageReceived = _ =>
+            {
+                bearerRequests++;
+                return Task.CompletedTask;
+            };
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Host = "mxstatus.io";
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
+            Token("Status.Operator", "Status.Access", _ingestor, "expired"));
+        foreach (var path in new[] { "/api/status", "/feed.xml", "/health/ready", "/", "/api/auth/config" })
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(path)).StatusCode);
+        Assert.Equal(0, bearerRequests);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/runtime")).StatusCode);
+        Assert.Equal(1, bearerRequests);
     }
 
     [Fact]
