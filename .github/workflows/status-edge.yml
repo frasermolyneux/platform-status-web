@@ -1,0 +1,117 @@
+name: Status Edge
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "edge/**"
+      - ".github/workflows/status-edge.yml"
+      - "deployment/validate_edge_plan.py"
+      - "deployment/test_validate_edge_plan.py"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Plan, apply reviewed main, or read live origin health
+        type: choice
+        options: [plan, apply, verify]
+        default: plan
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: status-edge-prd
+  cancel-in-progress: false
+
+jobs:
+  edge:
+    if: >-
+      github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: Production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_AZUREAD: "true"
+      ARM_USE_OIDC: "true"
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_KEY }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+      - name: Check edge formatting
+        run: terraform -chdir=edge fmt -check -recursive
+      - name: Initialize isolated edge state
+        run: |
+          set -euo pipefail
+          terraform -chdir=edge init -input=false \
+            -backend-config=../terraform/backends/prd.backend.hcl \
+            -backend-config=backends/prd.backend.hcl
+          jq -e '.backend.config.key == "status-edge-prd.tfstate"' edge/.terraform/terraform.tfstate
+      - name: Validate edge configuration
+        run: terraform -chdir=edge validate
+      - name: Plan only Cloudflare edge resources
+        if: github.event_name == 'pull_request' || inputs.operation != 'verify'
+        run: |
+          set -euo pipefail
+          terraform -chdir=edge plan -input=false -lock-timeout=5m -out=edge.tfplan
+          terraform -chdir=edge show -no-color edge.tfplan > "$RUNNER_TEMP/status-edge-plan.txt"
+          {
+            echo '## Status edge plan'
+            echo '```terraform'
+            cat "$RUNNER_TEMP/status-edge-plan.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce the approved disabled staging boundary
+        if: github.event_name == 'pull_request' || inputs.operation != 'verify'
+        run: terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py
+      - name: Apply reviewed main configuration
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
+        run: terraform -chdir=edge apply -input=false edge.tfplan
+      - name: Publish edge verification identifiers
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.operation == 'apply' || inputs.operation == 'verify')
+        run: terraform -chdir=edge output -json status_edge >> "$GITHUB_STEP_SUMMARY"
+      - name: Read live Cloudflare origin health without changing routing
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.operation == 'apply' || inputs.operation == 'verify')
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from urllib.request import Request, urlopen
+
+          edge = json.loads(subprocess.check_output(
+              ["terraform", "-chdir=edge", "output", "-json", "status_edge"], text=True))
+          request = Request(
+              f"https://api.cloudflare.com/client/v4/accounts/{edge['account_id']}/load_balancers/pools/{edge['pool_id']}/health",
+              headers={"Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"]})
+          with urlopen(request, timeout=30) as response:
+              health = json.load(response)
+          if health["success"] is not True:
+              raise RuntimeError("Cloudflare pool-health request failed: " + json.dumps(health["errors"]))
+          report = json.dumps(health["result"], indent=2)
+          print(report)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("\n## Live origin health\n```json\n" + report + "\n```\n")
+          PY
+      - name: Remove transient edge plan files
+        if: always()
+        run: rm -f "$GITHUB_WORKSPACE/edge/edge.tfplan" "$RUNNER_TEMP/status-edge-plan.txt"
