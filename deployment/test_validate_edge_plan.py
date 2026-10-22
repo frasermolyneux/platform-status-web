@@ -10,7 +10,14 @@ def staged_plan():
             "enabled": False, "name": "mxstatus.io", "zone_id": "mx-zone", "proxied": True,
             "steering_policy": "off", "session_affinity": "none",
         },
-        "cloudflare_load_balancer_pool.status": {"check_regions": ["ENAM"]},
+        "cloudflare_load_balancer_pool.status": {
+            "check_regions": ["ENAM"], "enabled": True, "minimum_origins": 1,
+            "origin_steering": {"policy": "random"},
+            "origins": [
+                {"name": "ns346663", "address": "5.196.80.194", "enabled": True, "weight": 1},
+                {"name": "ns5019527", "address": "15.235.119.97", "enabled": True, "weight": 1},
+            ],
+        },
         "cloudflare_load_balancer_monitor.status": {"allow_insecure": False, "type": "https", "interval": 60},
     }
     for zone, hostname in (("mxstatus.io", "mxstatus.io"), ("xtremeidiots.com", "status.xtremeidiots.com")):
@@ -103,5 +110,19 @@ class EdgePlanTests(unittest.TestCase):
             with self.subTest(key=key):
                 plan = staged_plan()
                 plan["resource_changes"][-1]["change"]["after"]["rules"][0][key] = value
+                with self.assertRaises(ValueError):
+                    validate_plan(plan)
+
+    def test_rejects_added_substituted_disabled_or_host_overridden_origins(self):
+        plan = staged_plan()
+        plan["resource_changes"][1]["change"]["after"]["origins"].append(
+            {"name": "third", "address": "192.0.2.1", "enabled": True, "weight": 1})
+        with self.assertRaises(ValueError):
+            validate_plan(plan)
+        for key, value in (("address", "192.0.2.1"), ("enabled", False),
+                           ("weight", 2), ("header", {"Host": ["another.example"]})):
+            with self.subTest(key=key):
+                plan = staged_plan()
+                plan["resource_changes"][1]["change"]["after"]["origins"][0][key] = value
                 with self.assertRaises(ValueError):
                     validate_plan(plan)

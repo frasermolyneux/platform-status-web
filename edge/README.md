@@ -55,7 +55,8 @@ Every saved plan is checked before it can be applied: the five staged managed
 resources must already exist, and the only permitted change is enabling the
 existing MX load balancer. All other load-balancer settings and the existing
 pool, monitor and TLS entrypoints must remain unchanged. The check retains
-exact-host strict TLS, one monitoring region, and strict 60-second HTTPS checks.
+exact-host strict TLS, exactly the two approved enabled equal-weight origins
+without Host overrides, one monitoring region, and strict 60-second HTTPS checks.
 An unchanged retry is safe; imports, creations, replacements, deletes, unrelated
 updates or extra resources stop for separate review.
 Transient saved plans are removed even when a step fails.

@@ -41,8 +41,17 @@ def validate_plan(plan, *, activate=False):
             or load_balancer["proxied"] is not True or load_balancer["steering_policy"] != "off"
             or load_balancer["session_affinity"] != "none"):
         raise ValueError("The single MX load balancer must retain the reviewed routing state without paid steering or affinity.")
-    if resources["cloudflare_load_balancer_pool.status"]["check_regions"] != ["ENAM"]:
-        raise ValueError("Only the approved single monitoring region is allowed.")
+    pool = resources["cloudflare_load_balancer_pool.status"]
+    if (pool["check_regions"] != ["ENAM"] or pool["enabled"] is not True
+            or pool["minimum_origins"] != 1 or pool["origin_steering"]["policy"] != "random"):
+        raise ValueError("The enabled pool must retain the approved single region and simple origin steering.")
+    origins = pool["origins"]
+    if (len(origins) != 2
+            or {(origin["name"], origin["address"]) for origin in origins} != {
+                ("ns346663", "5.196.80.194"), ("ns5019527", "15.235.119.97")}
+            or any(origin["enabled"] is not True or origin["weight"] != 1 or origin.get("header")
+                   for origin in origins)):
+        raise ValueError("Exactly the two approved enabled, equal-weight origins without Host overrides are required.")
     monitor = resources["cloudflare_load_balancer_monitor.status"]
     if monitor["allow_insecure"] is not False or monitor["type"] != "https" or monitor["interval"] != 60:
         raise ValueError("The readiness monitor must retain strict HTTPS and its approved 60-second interval.")
