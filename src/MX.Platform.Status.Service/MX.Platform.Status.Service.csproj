@@ -11,6 +11,7 @@
     <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="MX.Platform.Status.Tests" />
     <Content Update="catalog.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

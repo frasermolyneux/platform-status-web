@@ -216,6 +216,72 @@ public sealed class IndependentServiceTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => database.IsWritableAsync(canceled.Token));
     }
 
+    [Fact]
+    public void WriterHostOverridesTheLocalConnectionFileWithoutRedirectingLocalReads()
+    {
+        var localFile = Path.Combine(_directory, "local-connection");
+        File.WriteAllText(localFile, "Host=standby.invalid;Port=35432;Database=status;Username=status_app");
+        var options = new RuntimeOptions
+        {
+            DatabaseConnectionFile = localFile,
+            WriterHost = "primary.invalid",
+            WriterPort = 15432
+        };
+        var reader = new Npgsql.NpgsqlConnectionStringBuilder(PostgresStore.ConnectionString(options, writer: false));
+        var writer = new Npgsql.NpgsqlConnectionStringBuilder(PostgresStore.ConnectionString(options, writer: true));
+        Assert.Equal("standby.invalid", reader.Host);
+        Assert.Equal(35432, reader.Port);
+        Assert.Equal("primary.invalid", writer.Host);
+        Assert.Equal(15432, writer.Port);
+        Assert.Equal(reader.Database, writer.Database);
+        Assert.Equal(reader.Username, writer.Username);
+
+        var writerFile = Path.Combine(_directory, "writer-connection");
+        File.WriteAllText(writerFile, "Host=explicit-writer.invalid;Port=45432");
+        options = options with { WriterConnectionFile = writerFile };
+        writer = new(PostgresStore.ConnectionString(options, writer: true));
+        Assert.Equal("explicit-writer.invalid", writer.Host);
+        Assert.Equal(45432, writer.Port);
+    }
+
+    [Theory]
+    [InlineData(0, "unknown")]
+    [InlineData(10, "operational")]
+    public void HistoricGroupsUseObservedSamplesWhileMissingChildrenKeepLiveStatusUnknown(int observations, string expected)
+    {
+        var day = DateOnly.FromDateTime(DateTime.UtcNow);
+        var history = new HistoryDocument
+        {
+            ComponentsById = new Dictionary<string, ComponentHistoryRecord>
+            {
+                ["observed"] = new()
+                {
+                    Days = observations == 0 ? [] : [new HistoryDay
+                    {
+                        Date = day, Status = ComponentStatus.Operational, Uptime = 1, Total = observations, Failed = 0
+                    }]
+                }
+            }
+        };
+        var publication = new StatusApiResponse
+        {
+            Components = [new ComponentDto
+            {
+                Id = "group", Status = "unknown", History = [new HistoryDayDto { Date = day }],
+                Children =
+                [
+                    new() { Id = "observed", History = [new HistoryDayDto { Date = day }] },
+                    new() { Id = "missing", History = [] }
+                ]
+            }]
+        };
+        var group = Assert.Single(PublicationWorker.CorrectTodayHistory(publication, history).Components);
+        Assert.Equal("unknown", group.Status);
+        Assert.Equal(expected, Assert.Single(group.History).Status);
+        Assert.Equal(observations, Assert.Single(group.History).Total);
+        Assert.Equal(observations == 0 ? null : (double?)1, group.UptimeRatio);
+    }
+
     private string Token(string role, string scope, string caller, string? invalid = null) =>
         new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {

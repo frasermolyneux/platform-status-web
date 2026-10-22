@@ -130,8 +130,8 @@ public sealed class PublicationWorker(
             ?? new HistoryDayDto { Date = day.Date }).ToArray();
         var total = samples.Sum(sample => sample.Total ?? 0);
         var failures = samples.Sum(sample => sample.Failed ?? 0);
-        var state = new[] { "outage", "degraded", "maintenance", "unknown", "operational" }
-            .FirstOrDefault(status => samples.Any(sample => sample.Status == status)) ?? "unknown";
+        var state = new[] { "outage", "degraded", "maintenance", "operational" }
+            .FirstOrDefault(status => samples.Any(sample => sample.Total > 0 && sample.Status == status)) ?? "unknown";
         return day with { Status = state, Total = total, Failed = failures, Uptime = total == 0 ? null : 1d - (double)failures / total };
     }
 }

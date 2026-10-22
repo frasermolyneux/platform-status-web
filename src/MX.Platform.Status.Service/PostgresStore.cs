@@ -14,23 +14,31 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
     private NpgsqlDataSource Source => _source.Value;
     private NpgsqlDataSource Writer => options.WriterConnectionFile is null && options.WriterHost is null ? Source : _writer.Value;
 
-    private static string ConnectionString(RuntimeOptions options, bool writer)
+    internal static string ConnectionString(RuntimeOptions options, bool writer)
     {
-        var file = writer ? options.WriterConnectionFile ?? options.DatabaseConnectionFile : options.DatabaseConnectionFile;
-        if (file is not null) return File.ReadAllText(file).Trim();
-        return new NpgsqlConnectionStringBuilder
-        {
-            Host = (writer ? options.WriterHost ?? options.DatabaseHost : options.DatabaseHost)
+        if (writer && options.WriterConnectionFile is not null)
+            return File.ReadAllText(options.WriterConnectionFile).Trim();
+        var connection = options.DatabaseConnectionFile is not null
+            ? new NpgsqlConnectionStringBuilder(File.ReadAllText(options.DatabaseConnectionFile).Trim())
+            : new NpgsqlConnectionStringBuilder
+            {
+                Host = (writer ? options.WriterHost ?? options.DatabaseHost : options.DatabaseHost)
                 ?? throw new InvalidOperationException("Database is not configured."),
-            Port = writer && options.WriterHost is not null ? options.WriterPort : options.DatabasePort,
-            Database = "status",
-            Username = "status_app",
-            Password = File.ReadAllText(options.DatabasePasswordFile).Trim(),
-            Timeout = 5,
-            CommandTimeout = 15,
-            MaxPoolSize = 10,
-            SslMode = SslMode.Disable
-        }.ConnectionString;
+                Port = writer && options.WriterHost is not null ? options.WriterPort : options.DatabasePort,
+                Database = "status",
+                Username = "status_app",
+                Password = File.ReadAllText(options.DatabasePasswordFile).Trim(),
+                Timeout = 5,
+                CommandTimeout = 15,
+                MaxPoolSize = 10,
+                SslMode = SslMode.Disable
+            };
+        if (writer && options.WriterHost is not null)
+        {
+            connection.Host = options.WriterHost;
+            connection.Port = options.WriterPort;
+        }
+        return connection.ConnectionString;
     }
 
     public async Task InitializeAsync(CancellationToken ct)
