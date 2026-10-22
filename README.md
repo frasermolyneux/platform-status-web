@@ -126,6 +126,14 @@ never prints or stores values in GitHub, and never rotates an existing password.
 Disabled or expiring credentials fail explicitly and require an operator-led
 database/secret recovery or rotation. The same vault serves both origins.
 
+**Renew Status Origin TLS** issues a 365-day Cloudflare Origin CA certificate
+for both public names using the narrowly scoped edge token. The private key
+stays local to the protected runner until the validated key/certificate pair is
+stored as the single `origin-tls` Key Vault secret. It runs weekly, retaining
+valid certificates until the final 30 days and never changing DNS or routing.
+Platform-owned proxy reconciliation installs the bundle atomically and restarts
+Caddy after validation. Old certificates are not revoked during a rolling update.
+
 The old Functions project and `terraform\` are retained as shared domain code and
 the existing Azure state definition. Automatic legacy deployment and development
 destruction are disabled. Legacy deploy/destroy workflows require explicit

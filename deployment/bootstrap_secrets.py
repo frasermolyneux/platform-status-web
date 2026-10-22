@@ -29,16 +29,18 @@ def discover_vault():
     return matches[0]
 
 
-def set_secret(vault, name, value):
+def set_secret(vault, name, value, *, expires=None, tags=()):
     with tempfile.TemporaryDirectory(prefix="status-secret-") as directory:
         filename = Path(directory) / "value"
         filename.write_text(value, encoding="utf-8")
         filename.chmod(0o600)
-        subprocess.run(
-            ["az", "keyvault", "secret", "set", "--vault-name", vault, "--name", name,
-             "--file", str(filename), "--only-show-errors", "--output", "none"],
-            check=True,
-        )
+        command = ["az", "keyvault", "secret", "set", "--vault-name", vault, "--name", name,
+                   "--file", str(filename), "--only-show-errors", "--output", "none"]
+        if expires is not None:
+            command.extend(["--expires", expires])
+        if tags:
+            command.extend(["--tags", *tags])
+        subprocess.run(command, check=True)
 
 
 def seed_database(vault):
@@ -55,10 +57,14 @@ def seed_database(vault):
             print(f"Created {name}.")
 
 
-if __name__ == "__main__":
+def reviewed_vault():
     vault = discover_vault()
     policy = json.loads((Path(__file__).resolve().parents[1] / ".github" / "validation" / "policy.json").read_text())
     bindings = {entry["id"]: (entry["vaultName"], entry["vaultSecret"]) for entry in policy["allowedSecrets"]}
     if any(bindings.get(name) != (vault, name) for name in SECRET_NAMES):
         raise RuntimeError("Discovered status vault does not match the reviewed workload secret bindings.")
-    seed_database(vault)
+    return vault
+
+
+if __name__ == "__main__":
+    seed_database(reviewed_vault())
