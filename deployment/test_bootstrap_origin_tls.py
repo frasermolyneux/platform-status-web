@@ -47,7 +47,9 @@ class OriginTlsRenewalTests(unittest.TestCase):
                 bundle, expiry, _ = bootstrap_origin_tls.new_certificate("test-only-token")
             self.assertIn("BEGIN CERTIFICATE", bundle)
             self.assertIn("PRIVATE KEY", bundle)
-            self.assertGreater(datetime.fromisoformat(expiry), datetime.now(timezone.utc) + timedelta(days=300))
+            self.assertTrue(expiry.endswith("Z"))
+            self.assertGreater(datetime.fromisoformat(expiry.replace("Z", "+00:00")),
+                               datetime.now(timezone.utc) + timedelta(days=300))
 
             with patch.object(bootstrap_origin_tls, "request_certificate", return_value={
                 "certificate": ca.read_text(), "id": "wrong-key-and-names"
@@ -69,12 +71,12 @@ class OriginTlsRenewalTests(unittest.TestCase):
         with patch.object(bootstrap_origin_tls, "az_json", return_value=self.metadata(10)), \
                 patch.dict(bootstrap_origin_tls.os.environ, {"CLOUDFLARE_API_TOKEN": "test-only-token"}), \
                 patch.object(bootstrap_origin_tls, "new_certificate",
-                             return_value=("test-only-bundle", "2030-01-01T00:00:00+00:00", "test-certificate")), \
+                             return_value=("test-only-bundle", "2030-01-01T00:00:00Z", "test-certificate")), \
                 patch.object(bootstrap_origin_tls, "set_secret") as write:
             bootstrap_origin_tls.renew("test-vault")
         self.assertEqual(write.call_count, 1)
         self.assertEqual(write.call_args.args, ("test-vault", "origin-tls", "test-only-bundle"))
-        self.assertEqual(write.call_args.kwargs["expires"], "2030-01-01T00:00:00+00:00")
+        self.assertEqual(write.call_args.kwargs["expires"], "2030-01-01T00:00:00Z")
 
     def test_certificate_failure_never_replaces_the_current_bundle(self):
         with patch.object(bootstrap_origin_tls, "az_json", return_value=self.metadata(10)), \

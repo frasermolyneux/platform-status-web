@@ -27,6 +27,8 @@ def last_published_revision(repository):
             revisions = []
             legacy = False
             for artifact in artifacts["artifacts"]:
+                if artifact["expired"]:
+                    continue
                 match = re.fullmatch(r"status-image-digests-([0-9a-f]{40})", artifact["name"])
                 if match:
                     revisions.append(match[1])

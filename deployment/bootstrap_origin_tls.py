@@ -59,7 +59,7 @@ def new_certificate(token):
         expiry = datetime.strptime(
             openssl("x509", "-in", certificate, "-enddate", "-noout").strip().removeprefix("notAfter="),
             "%b %d %H:%M:%S %Y %Z",
-        ).replace(tzinfo=timezone.utc).isoformat()
+        ).replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return certificate.read_text() + "\n" + key.read_text(), expiry, issued["id"]
 
 

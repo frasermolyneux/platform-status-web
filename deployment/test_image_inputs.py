@@ -25,12 +25,20 @@ class ImageInputTests(unittest.TestCase):
         with patch.object(image_inputs, "gh_json", side_effect=[
             {"workflow_runs": [{"id": 2, "head_sha": "b" * 40}, {"id": 1, "head_sha": "c" * 40}]},
             {"total_count": 0, "artifacts": []},
-            {"total_count": 1, "artifacts": [{"name": f"status-image-digests-{PREVIOUS}"}]},
+            {"total_count": 1, "artifacts": [{"name": f"status-image-digests-{PREVIOUS}", "expired": False}]},
         ]):
             self.assertEqual(image_inputs.last_published_revision("owner/repo"), PREVIOUS)
 
     def test_missing_provenance_requires_a_full_publication(self):
         with patch.object(image_inputs, "last_published_revision", return_value=None):
+            self.assertTrue(image_inputs.should_publish("owner/repo", PATTERN))
+
+    def test_expired_digest_metadata_does_not_suppress_a_full_publication(self):
+        with patch.object(image_inputs, "gh_json", side_effect=[
+            {"workflow_runs": [{"id": 1}]},
+            {"total_count": 1, "artifacts": [{"name": f"status-image-digests-{PREVIOUS}", "expired": True}]},
+            {"workflow_runs": []},
+        ]):
             self.assertTrue(image_inputs.should_publish("owner/repo", PATTERN))
 
 
