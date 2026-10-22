@@ -11,6 +11,7 @@ def staged_plan():
             "steering_policy": "off", "session_affinity": "none",
         },
         "cloudflare_load_balancer_pool.status": {
+            "name": "platform-status-origins", "account_id": "account",
             "check_regions": ["ENAM"], "enabled": True, "minimum_origins": 1,
             "origin_steering": {"policy": "random"},
             "origins": [
@@ -18,11 +19,18 @@ def staged_plan():
                 {"name": "ns5019527", "address": "15.235.119.97", "enabled": True, "weight": 1},
             ],
         },
-        "cloudflare_load_balancer_monitor.status": {"allow_insecure": False, "type": "https", "interval": 60},
+        "cloudflare_load_balancer_monitor.status": {
+            "account_id": "account", "type": "https", "method": "GET", "path": "/health/ready",
+            "expected_codes": "200", "expected_body": "\"status\":\"ready\"",
+            "header": {"Host": ["mxstatus.io"]}, "probe_zone": "mxstatus.io",
+            "allow_insecure": False, "follow_redirects": False,
+            "interval": 60, "timeout": 5, "retries": 1, "consecutive_up": 2, "consecutive_down": 2,
+        },
     }
     for zone, hostname in (("mxstatus.io", "mxstatus.io"), ("xtremeidiots.com", "status.xtremeidiots.com")):
         values[f'cloudflare_ruleset.status_tls["{zone}"]'] = {
             "zone_id": "mx-zone" if zone == "mxstatus.io" else "xi-zone",
+            "name": "platform-status-origin-tls",
             "kind": "zone", "phase": "http_config_settings",
             "rules": [{
                 "action": "set_config", "enabled": True, "expression": f'http.host eq "{hostname}"',
@@ -35,7 +43,8 @@ def staged_plan():
             for address, after in values.items()
         ],
         "planned_values": {"outputs": {"status_edge_preflight": {"value": {
-            "mxstatus.io": {"zone_id": "mx-zone"}, "xtremeidiots.com": {"zone_id": "xi-zone"},
+            "mxstatus.io": {"zone_id": "mx-zone", "account_id": "account"},
+            "xtremeidiots.com": {"zone_id": "xi-zone", "account_id": "account"},
         }}}},
     }
 
@@ -124,5 +133,18 @@ class EdgePlanTests(unittest.TestCase):
             with self.subTest(key=key):
                 plan = staged_plan()
                 plan["resource_changes"][1]["change"]["after"]["origins"][0][key] = value
+                with self.assertRaises(ValueError):
+                    validate_plan(plan)
+
+    def test_rejects_liveness_or_weakened_publication_readiness_monitors(self):
+        for key, value in (
+            ("method", "HEAD"), ("path", "/health/live"), ("expected_codes", "2xx"),
+            ("expected_body", ""), ("expected_body", "\"status\":\"live\""),
+            ("header", {"Host": ["another.example"]}), ("probe_zone", "another.example"),
+            ("follow_redirects", True), ("allow_insecure", True), ("interval", 15), ("port", 8443),
+        ):
+            with self.subTest(key=key, value=value):
+                plan = staged_plan()
+                plan["resource_changes"][2]["change"]["after"][key] = value
                 with self.assertRaises(ValueError):
                     validate_plan(plan)
