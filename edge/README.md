@@ -13,13 +13,16 @@ balancer. Origins deliberately have no Host override, preserving brand isolation
 The monitor alone sends `Host: mxstatus.io`, validates origin TLS, and requires the
 actual local-publication readiness response.
 
-The load balancer is initially **disabled**. Its enabled pool can be monitored
-without replacing existing public routing. Before a separate reviewed activation,
+The load balancer was staged **disabled**, with its enabled pool monitored
+without replacing public routing. The separate activation change enables only
+that existing MX load balancer. Before applying activation,
 verify both origins' Cloudflare health, fresh non-bootstrap publications for both
-brands, Entra operations, replication, disk-cache survival, and existing services.
+brands, protected-operation authentication boundaries, replication, disk-cache
+survival, and existing services. Complete browser-based Entra operator sign-in
+after public HTTPS routing is active.
 Disabling the load balancer restores precedence to any retained matching DNS
-record. Actual preflight found no matching routing records for either status
-hostname, so there is currently no previous DNS route to restore.
+record. The initial preflight found no matching routing records for either status
+hostname, so no previous DNS route existed to restore.
 
 `status.xtremeidiots.com` must subsequently be a CNAME to `mxstatus.io` in the
 existing `platform-connectivity` zone configuration, not a second load balancer.
@@ -48,14 +51,28 @@ expressions. Never change the entire XtremeIdiots zone blindly.
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
 It never invokes the retained legacy Azure stack.
 
-Every saved plan is checked before it can be applied: only the five approved
-managed resources may exist, with create/no-op actions, no imports, and the load
-balancer still disabled. The check also retains exact-host strict TLS, exactly
-the two approved enabled equal-weight origins without Host overrides, one
-monitoring region, and strict 60-second HTTPS checks. Partial-apply retries may
-leave already-created resources unchanged; updates, replacements, deletes or
-extra resources stop for separate review. Public activation therefore needs an
-explicit reviewed change to both the desired routing and this staging guard.
+Pull requests and the main-only `activate` operation use a refresh-only preflight:
+the five staged resources must already exist, with no managed changes or
+unreviewed drift. A retry may accept only a known, verified false-to-true
+enablement change and its modification timestamp from an interrupted approved
+activation; all other resource drift remains blocked.
+The check retains exact-host strict TLS, exactly the two approved enabled
+equal-weight origins without Host overrides, one monitoring region, and strict
+60-second HTTPS checks. This plan is never applied to enable routing.
+
+Provider 5.22 makes optional routing fields unknown during a Terraform enablement
+update, so activation uses the separately approved API path instead of relaxing
+unknown-routing checks. After checking current Cloudflare readiness for both
+origins, `activate` sends only `PATCH {"enabled": true}` to the existing MX load
+balancer. It reads the result back and requires every other setting except its
+modification timestamp to be unchanged. Already-enabled retries recheck health
+without repeating the PATCH. Unexpected post-activation changes fail explicitly
+and require operator review; failure does not imply routing stayed disabled.
+
+The same protected operation then runs a normal Terraform plan against the
+reviewed enabled configuration, checks its saved plan, and reconciles state.
+No optional defaults are ignored or adopted. Imports, creations, replacements,
+deletes, unrelated changes, and unknown routing values remain blocked.
 Transient saved plans are removed even when a step fails.
 
 The `verify` operation only initializes the isolated state and reads the live

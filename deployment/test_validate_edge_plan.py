@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from validate_edge_plan import validate_plan
+from validate_edge_plan import validate_plan, validate_preflight
 
 
 def staged_plan():
@@ -52,7 +52,82 @@ def staged_plan():
     }
 
 
+def activation_plan():
+    plan = staged_plan()
+    for resource in plan["resource_changes"]:
+        change = resource["change"]
+        change["actions"] = ["no-op"]
+        change["before"] = copy.deepcopy(change["after"])
+    load_balancer = plan["resource_changes"][0]["change"]
+    load_balancer["actions"] = ["update"]
+    load_balancer["after"]["enabled"] = True
+    load_balancer["before"]["modified_on"] = "previous-timestamp"
+    load_balancer["after"]["modified_on"] = None
+    load_balancer["after_unknown"] = {"modified_on": True}
+    return plan
+
+
 class EdgePlanTests(unittest.TestCase):
+    def test_refresh_only_preflight_validates_actual_staged_values_without_resource_changes(self):
+        plan = staged_plan()
+        plan["planned_values"]["root_module"] = {"resources": [
+            {"address": resource["address"], "mode": resource["mode"], "values": resource["change"]["after"]}
+            for resource in plan.pop("resource_changes")
+        ]}
+        self.assertEqual(validate_preflight(plan), 0)
+        plan["prior_state"] = {"values": plan.pop("planned_values")}
+        plan["planned_values"] = {"root_module": {}}
+        self.assertEqual(validate_preflight(plan), 0)
+        plan["resource_drift"] = [{"address": "cloudflare_load_balancer_pool.status",
+                                  "mode": "managed", "change": {"actions": ["update"]}}]
+        with self.assertRaises(ValueError):
+            validate_preflight(plan)
+
+    def test_preflight_resumes_only_known_enablement_drift_after_interruption(self):
+        plan = activation_plan()
+        change = plan["resource_changes"][0]["change"]
+        change["after_unknown"] = {}
+        change["after"]["modified_on"] = "new-time"
+        plan["resource_drift"] = [copy.deepcopy(plan["resource_changes"][0])]
+        for resource in plan["resource_changes"]:
+            resource["change"]["actions"] = ["no-op"]
+        self.assertEqual(validate_preflight(plan), 0)
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+        drift = plan["resource_drift"][0]["change"]
+        for key, value in (("country_pools", {"US": ["another-pool"]}), ("enabled", False)):
+            with self.subTest(key=key):
+                changed = copy.deepcopy(plan)
+                changed["resource_drift"][0]["change"]["after"][key] = value
+                with self.assertRaises(ValueError):
+                    validate_preflight(changed)
+        drift["after_unknown"] = {"country_pools": True}
+        with self.assertRaises(ValueError):
+            validate_preflight(plan)
+        with self.assertRaises(ValueError):
+            validate_plan(plan, activate=True)
+
+    def test_reconciliation_rejects_unreviewed_drift_even_when_resource_actions_are_noop(self):
+        for index, field, value in (
+            (0, "country_pools", {"US": ["another-pool"]}),
+            (1, "description", "unreviewed-change"),
+        ):
+            with self.subTest(index=index, field=field):
+                plan = activation_plan()
+                for resource in plan["resource_changes"]:
+                    change = resource["change"]
+                    change["actions"] = ["no-op"]
+                    change["after_unknown"] = {}
+                    change["before"] = copy.deepcopy(change["after"])
+                resource = plan["resource_changes"][index]
+                resource["change"]["before"][field] = value
+                resource["change"]["after"][field] = value
+                drift = copy.deepcopy(resource)
+                drift["change"]["actions"] = ["update"]
+                drift["change"]["before"][field] = None
+                plan["resource_drift"] = [drift]
+                with self.assertRaises(ValueError):
+                    validate_plan(plan, activate=True)
+
     def test_rejects_detached_or_substituted_links_in_initial_and_partial_plans(self):
         for actions in (["create"], ["no-op"]):
             for index, field, value in (
@@ -108,6 +183,55 @@ class EdgePlanTests(unittest.TestCase):
         plan["resource_changes"].append(copy.deepcopy(plan["resource_changes"][0]))
         with self.assertRaises(ValueError):
             validate_plan(plan)
+
+    def test_accepts_only_staged_load_balancer_activation_and_unchanged_retry(self):
+        plan = activation_plan()
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+        plan["resource_changes"][0]["change"]["actions"] = ["no-op"]
+        plan["resource_changes"][0]["change"]["before"] = copy.deepcopy(
+            plan["resource_changes"][0]["change"]["after"])
+        plan["resource_changes"][0]["change"]["after_unknown"] = {}
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+
+    def test_activation_accepts_provider_computed_nonrouting_metadata_only(self):
+        plan = activation_plan()
+        change = plan["resource_changes"][0]["change"]
+        for key, before in (("created_on", "creation-timestamp"), ("zone_name", "mxstatus.io")):
+            change["before"][key] = before
+            change["after"][key] = None
+            change["after_unknown"][key] = True
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+
+    def test_activation_rejects_unknown_optional_nested_and_other_resource_settings(self):
+        for index, field, unknown in (
+            (0, "adaptive_routing", True), (0, "country_pools", {"US": [True]}),
+            (0, "new_optional_field", True), (1, "monitor", True),
+        ):
+            with self.subTest(index=index, field=field):
+                plan = activation_plan()
+                change = plan["resource_changes"][index]["change"]
+                change["before"][field] = None
+                change["after"].pop(field, None)
+                change.setdefault("after_unknown", {})[field] = unknown
+                with self.assertRaises(ValueError):
+                    validate_plan(plan, activate=True)
+
+    def test_refuses_activation_before_staging_and_changes_beyond_enablement(self):
+        with self.assertRaises(ValueError):
+            validate_plan(staged_plan(), activate=True)
+        for index, key, value in (
+            (0, "description", "unreviewed-change"),
+            (0, "default_pools", ["another-pool"]),
+        ):
+            with self.subTest(key=key):
+                plan = activation_plan()
+                plan["resource_changes"][index]["change"]["after"][key] = value
+                with self.assertRaises(ValueError):
+                    validate_plan(plan, activate=True)
+        plan = activation_plan()
+        plan["resource_changes"][1]["change"]["actions"] = ["update"]
+        with self.assertRaises(ValueError):
+            validate_plan(plan, activate=True)
 
     def test_rejects_activation_and_weakened_or_broadened_tls(self):
         plan = staged_plan()

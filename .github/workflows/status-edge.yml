@@ -9,12 +9,14 @@ on:
       - ".github/workflows/status-edge.yml"
       - "deployment/validate_edge_plan.py"
       - "deployment/test_validate_edge_plan.py"
+      - "deployment/activate_edge.py"
+      - "deployment/test_activate_edge.py"
   workflow_dispatch:
     inputs:
       operation:
-        description: Plan, apply reviewed main, or read live origin health
+        description: Plan, reconcile reviewed main, enable only the staged LB, or verify health
         type: choice
-        options: [plan, apply, verify]
+        options: [plan, apply, activate, verify]
         default: plan
         required: true
 
@@ -72,7 +74,11 @@ jobs:
         if: github.event_name == 'pull_request' || inputs.operation != 'verify'
         run: |
           set -euo pipefail
-          terraform -chdir=edge plan -input=false -lock-timeout=5m -out=edge.tfplan
+          mode=()
+          if [[ "${{ github.event_name }}" == "pull_request" || "${{ inputs.operation }}" == "activate" ]]; then
+            mode=(-refresh-only)
+          fi
+          terraform -chdir=edge plan "${mode[@]}" -input=false -lock-timeout=5m -out=edge.tfplan
           terraform -chdir=edge show -no-color edge.tfplan > "$RUNNER_TEMP/status-edge-plan.txt"
           {
             echo '## Status edge plan'
@@ -80,17 +86,32 @@ jobs:
             cat "$RUNNER_TEMP/status-edge-plan.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Enforce the approved disabled staging boundary
+      - name: Enforce the reviewed preflight or reconciliation boundary
         if: github.event_name == 'pull_request' || inputs.operation != 'verify'
-        run: terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py
+        run: |
+          mode=--activate
+          if [[ "${{ github.event_name }}" == "pull_request" || "${{ inputs.operation }}" == "activate" ]]; then
+            mode=--prepare-activation
+          fi
+          terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py "$mode"
+      - name: Enable only the existing healthy shared load balancer
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'activate'
+        run: python3 deployment/activate_edge.py
+      - name: Reconcile Terraform after the enablement-only API patch
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'activate'
+        run: |
+          set -euo pipefail
+          terraform -chdir=edge plan -input=false -lock-timeout=5m -out=edge.tfplan
+          terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py --activate
+          terraform -chdir=edge apply -input=false edge.tfplan
       - name: Apply reviewed main configuration
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
         run: terraform -chdir=edge apply -input=false edge.tfplan
       - name: Publish edge verification identifiers
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.operation == 'apply' || inputs.operation == 'verify')
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && contains(fromJSON('["apply","activate","verify"]'), inputs.operation)
         run: terraform -chdir=edge output -json status_edge >> "$GITHUB_STEP_SUMMARY"
       - name: Read live Cloudflare origin health without changing routing
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.operation == 'apply' || inputs.operation == 'verify')
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && contains(fromJSON('["apply","activate","verify"]'), inputs.operation)
         run: |
           python3 - <<'PY'
           import json
