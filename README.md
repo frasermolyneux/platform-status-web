@@ -47,6 +47,9 @@ writer addresses, and Entra metadata through read-only configuration. The CI
 policy in `.github\validation\policy.json` mirrors the permitted mounts, secrets,
 networks, resource limits, and primary-node Tailscale binding; it does not grant
 host privileges. The standby host policy supplies its own bind address.
+The protected main release validates it with the pinned private platform
+compiler, fetched using a repository-scoped, read-only GitHub App token. Public
+pull-request jobs do not receive private platform source or credentials.
 
 The private database bridge needs outbound access for replication over Tailscale.
 PostgreSQL does not join the shared public-proxy network. Its only published port
