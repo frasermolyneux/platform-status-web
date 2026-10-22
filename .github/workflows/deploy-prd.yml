@@ -91,7 +91,7 @@ jobs:
           set -euo pipefail
           az acr login --name acr7ca0fd3326df
           for image in service postgres; do
-            target="acr7ca0fd3326df.azurecr.io/workloads/platform-status-${image}"
+            target="acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/${image}"
             dockerfile=Dockerfile
             if [[ "$image" == postgres ]]; then dockerfile=deployment/postgres.Dockerfile; fi
             docker build --file "$dockerfile" --tag "${target}:sha-${IMAGE_REVISION}" .
