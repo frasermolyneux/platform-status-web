@@ -128,15 +128,41 @@ def validate_plan(plan, *, activate=False):
     return sum(resource["change"]["actions"] == ["create"] for resource in managed)
 
 
+def validate_preflight(plan):
+    if any(resource["mode"] == "managed" and resource["change"]["actions"] != ["no-op"]
+           for resource in plan.get("resource_drift", [])):
+        raise ValueError("Activation preflight must contain no unreviewed managed drift.")
+    if "resource_changes" not in plan:
+        plan = dict(plan, resource_changes=[
+            {"address": resource["address"], "mode": resource["mode"],
+             "change": {"actions": ["no-op"], "after": resource["values"]}}
+            for resource in plan["planned_values"]["root_module"]["resources"]
+        ])
+    managed = [resource for resource in plan["resource_changes"] if resource["mode"] == "managed"]
+    if any(resource["change"]["actions"] != ["no-op"] for resource in managed):
+        raise ValueError("Activation preflight must contain no managed changes.")
+    load_balancer = next(resource for resource in managed
+                         if resource["address"] == "cloudflare_load_balancer.status")
+    enabled = load_balancer["change"]["after"]["enabled"]
+    if not isinstance(enabled, bool):
+        raise ValueError("Activation preflight requires a known load-balancer enabled state.")
+    return validate_plan(plan, activate=enabled)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--activate", action="store_true")
+    parser.add_argument("--prepare-activation", action="store_true")
     args = parser.parse_args()
     plan = json.load(sys.stdin)
-    creations = validate_plan(plan, activate=args.activate)
-    if args.activate:
+    if args.prepare_activation:
+        validate_preflight(plan)
+        print("Verified unchanged staged resources; this refresh-only plan cannot enable routing.")
+    elif args.activate:
+        validate_plan(plan, activate=True)
         updates = sum(resource["mode"] == "managed" and resource["change"]["actions"] == ["update"]
                       for resource in plan["resource_changes"])
         print(f"Approved MX activation: {updates} enablement updates, {5 - updates} unchanged resources.")
     else:
+        creations = validate_plan(plan)
         print(f"Approved disabled edge stage: {creations} creations, {5 - creations} unchanged resources.")

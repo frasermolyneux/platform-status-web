@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from validate_edge_plan import validate_plan
+from validate_edge_plan import validate_plan, validate_preflight
 
 
 def staged_plan():
@@ -68,6 +68,17 @@ def activation_plan():
 
 
 class EdgePlanTests(unittest.TestCase):
+    def test_refresh_only_preflight_validates_actual_staged_values_without_resource_changes(self):
+        plan = staged_plan()
+        plan["planned_values"]["root_module"] = {"resources": [
+            {"address": resource["address"], "mode": resource["mode"], "values": resource["change"]["after"]}
+            for resource in plan.pop("resource_changes")
+        ]}
+        self.assertEqual(validate_preflight(plan), 0)
+        plan["resource_drift"] = [{"mode": "managed", "change": {"actions": ["update"]}}]
+        with self.assertRaises(ValueError):
+            validate_preflight(plan)
+
     def test_rejects_detached_or_substituted_links_in_initial_and_partial_plans(self):
         for actions in (["create"], ["no-op"]):
             for index, field, value in (

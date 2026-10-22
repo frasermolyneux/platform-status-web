@@ -87,11 +87,5 @@ resource "cloudflare_load_balancer" "status" {
 
   lifecycle {
     prevent_destroy = true
-    # Preserve staged API defaults: provider 5.22 otherwise makes these unknown on any update.
-    ignore_changes = [
-      adaptive_routing, country_pools, location_strategy, networks, pop_pools,
-      random_steering, region_pools, rules, session_affinity_attributes,
-      session_affinity_ttl, ttl,
-    ]
   }
 }

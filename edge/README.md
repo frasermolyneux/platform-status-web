@@ -51,20 +51,25 @@ expressions. Never change the entire XtremeIdiots zone blindly.
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
 It never invokes the retained legacy Azure stack.
 
-Every saved plan is checked before it can be applied: the five staged managed
-resources must already exist, and the only permitted change is enabling the
-existing MX load balancer. All other load-balancer settings and the existing
-pool, monitor and TLS entrypoints must remain unchanged. The check retains
-exact-host strict TLS, exactly the two approved enabled equal-weight origins
-without Host overrides, one monitoring region, and strict 60-second HTTPS checks.
-An unchanged retry is safe; imports, creations, replacements, deletes, unrelated
-updates or extra resources stop for separate review.
-Cloudflare provider 5.22 marks omitted optional/computed routing defaults unknown
-on every update. Activation therefore preserves those staged defaults using
-explicit `ignore_changes`; it does not silently accept unknown routing. Altering
-these settings later requires a reviewed lifecycle/configuration change. Only
-the provider's computed creation/modification timestamps and zone-name metadata
-may remain unknown. Every behavior-affecting setting must be known and unchanged.
+Pull requests and the main-only `activate` operation use a refresh-only preflight:
+the five staged resources must already exist, with no managed changes or drift.
+The check retains exact-host strict TLS, exactly the two approved enabled
+equal-weight origins without Host overrides, one monitoring region, and strict
+60-second HTTPS checks. This plan is never applied to enable routing.
+
+Provider 5.22 makes optional routing fields unknown during a Terraform enablement
+update, so activation uses the separately approved API path instead of relaxing
+unknown-routing checks. After checking current Cloudflare readiness for both
+origins, `activate` sends only `PATCH {"enabled": true}` to the existing MX load
+balancer. It reads the result back and requires every other setting except its
+modification timestamp to be unchanged. Already-enabled retries recheck health
+without repeating the PATCH. Unexpected post-activation changes fail explicitly
+and require operator review; failure does not imply routing stayed disabled.
+
+The same protected operation then runs a normal Terraform plan against the
+reviewed enabled configuration, checks its saved plan, and reconciles state.
+No optional defaults are ignored or adopted. Imports, creations, replacements,
+deletes, unrelated changes, and unknown routing values remain blocked.
 Transient saved plans are removed even when a step fails.
 
 The `verify` operation only initializes the isolated state and reads the live
