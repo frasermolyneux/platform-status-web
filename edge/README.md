@@ -24,6 +24,13 @@ existing `platform-connectivity` zone configuration, not a second load balancer.
 Both zones must belong to the same account. Confirm suitable Full (strict) TLS
 and existing apex/CNAME compatibility before activation.
 
+The plan's `status_edge_preflight` output reads both active zones through the
+expected account, their actual SSL modes, and existing status-name routing
+records. These data sources never adopt or modify DNS or zone settings.
+Read-only DNS and zone-settings permissions are required. A non-strict mode or
+SaaS/custom-hostname CNAME needs an explicit compatibility review before
+activation; never change the entire XtremeIdiots zone blindly.
+
 ## State and delivery
 
 `Status Edge` plans same-repository pull requests with Production OIDC. It applies
