@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Plan, or apply the reviewed main configuration
+        description: Plan, apply reviewed main, or read live origin health
         type: choice
-        options: [plan, apply]
+        options: [plan, apply, verify]
         default: plan
         required: true
 
@@ -67,6 +67,7 @@ jobs:
       - name: Validate edge configuration
         run: terraform -chdir=edge validate
       - name: Plan only Cloudflare edge resources
+        if: github.event_name == 'pull_request' || inputs.operation != 'verify'
         run: |
           set -euo pipefail
           terraform -chdir=edge plan -input=false -lock-timeout=5m -out=edge.tfplan
@@ -81,5 +82,28 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
         run: terraform -chdir=edge apply -input=false edge.tfplan
       - name: Publish edge verification identifiers
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.operation == 'apply' || inputs.operation == 'verify')
         run: terraform -chdir=edge output -json status_edge >> "$GITHUB_STEP_SUMMARY"
+      - name: Read live Cloudflare origin health without changing routing
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.operation == 'apply' || inputs.operation == 'verify')
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from urllib.request import Request, urlopen
+
+          edge = json.loads(subprocess.check_output(
+              ["terraform", "-chdir=edge", "output", "-json", "status_edge"], text=True))
+          request = Request(
+              f"https://api.cloudflare.com/client/v4/accounts/{edge['account_id']}/load_balancers/pools/{edge['pool_id']}/health",
+              headers={"Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"]})
+          with urlopen(request, timeout=30) as response:
+              health = json.load(response)
+          if health["success"] is not True:
+              raise RuntimeError("Cloudflare pool-health request failed: " + json.dumps(health["errors"]))
+          report = json.dumps(health["result"], indent=2)
+          print(report)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("\n## Live origin health\n```json\n" + report + "\n```\n")
+          PY

@@ -42,6 +42,13 @@ output "status_edge_preflight" {
       account_id = var.cloudflare_account_id
       zone_id    = site.zone_id
       ssl_mode   = data.cloudflare_zone_setting.ssl[zone].value
+      configuration_entrypoints = [
+        for ruleset in data.cloudflare_rulesets.status_configuration[zone].rulesets : {
+          id   = ruleset.id
+          name = ruleset.name
+          kind = ruleset.kind
+        } if ruleset.phase == "http_config_settings"
+      ]
       records = [
         for record in data.cloudflare_dns_records.status[zone].result : {
           id      = record.id

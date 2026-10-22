@@ -1,8 +1,9 @@
 # Public status edge
 
-This stack owns only one Cloudflare load balancer, one two-origin pool, and one
-HTTPS readiness monitor. It does not own the subscription, existing DNS records,
-zone settings, or retained Azure resources. The scoped Production API token is
+This stack owns one Cloudflare load balancer, one two-origin pool, one HTTPS
+readiness monitor, and hostname-scoped strict TLS configuration entrypoints for
+the two status zones. It does not own the subscription, existing DNS records,
+global zone settings, or retained Azure resources. The scoped Production API token is
 provided as `CLOUDFLARE_API_TOKEN`; its environment secret is named
 `CLOUDFLARE_API_KEY`.
 
@@ -17,25 +18,42 @@ without replacing existing public routing. Before a separate reviewed activation
 verify both origins' Cloudflare health, fresh non-bootstrap publications for both
 brands, Entra operations, replication, disk-cache survival, and existing services.
 Disabling the load balancer restores precedence to any retained matching DNS
-record; do not delete that rollback record during this rollout.
+record. Actual preflight found no matching routing records for either status
+hostname, so there is currently no previous DNS route to restore.
 
 `status.xtremeidiots.com` must subsequently be a CNAME to `mxstatus.io` in the
 existing `platform-connectivity` zone configuration, not a second load balancer.
-Both zones must belong to the same account. Confirm suitable Full (strict) TLS
-and existing apex/CNAME compatibility before activation.
+Both zones must belong to the same account. The two configuration rules set
+`ssl = "strict"` only for `mxstatus.io` and `status.xtremeidiots.com`; both global
+zone SSL modes remain unchanged. Configuration Rules are available on the free
+plan, and each status zone uses one rule. Confirm existing apex/CNAME
+compatibility before activation.
 
 The plan's `status_edge_preflight` output reads both active zones through the
-expected account, their actual SSL modes, and existing status-name routing
-records. These data sources never adopt or modify DNS or zone settings.
-Read-only DNS and zone-settings permissions are required. A non-strict mode or
-SaaS/custom-hostname CNAME needs an explicit compatibility review before
-activation; never change the entire XtremeIdiots zone blindly.
+expected account, their actual global SSL modes, status-name routing records,
+and existing configuration entrypoints. These data sources never adopt or
+modify DNS or zone settings. Read-only DNS and zone-settings permissions plus
+Config Settings Write on these two zones are required.
+
+The entrypoint precondition refuses an existing configuration ruleset with a
+different owner name; Cloudflare also rejects duplicate zone-phase creation.
+Never import an existing entrypoint or discard its rules just to make this plan
+apply. Stop for a separately reviewed preservation/adoption change instead.
+Subsequent plans must preserve the stack-owned entrypoints and the exact-host
+expressions. Never change the entire XtremeIdiots zone blindly.
 
 ## State and delivery
 
 `Status Edge` plans same-repository pull requests with Production OIDC. It applies
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
 It never invokes the retained legacy Azure stack.
+
+The `verify` operation only initializes the isolated state and reads the live
+Cloudflare pool-health report; it does not plan or apply resources. Both `apply`
+and `verify` publish that report without exposing the token. New pools may need
+two successful 60-second checks before both origins report healthy. Inspect the
+actual report before activation; successful API retrieval alone is not proof
+that the origins are healthy.
 
 The edge backend reuses the approved storage location, **not its state key**.
 Both backend files must be passed in this order:

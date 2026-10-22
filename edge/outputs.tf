@@ -7,5 +7,8 @@ output "status_edge" {
     pool_id          = cloudflare_load_balancer_pool.status.id
     load_balancer_id = cloudflare_load_balancer.status.id
     enabled          = cloudflare_load_balancer.status.enabled
+    strict_tls_ruleset_ids = {
+      for zone, ruleset in cloudflare_ruleset.status_tls : zone => ruleset.id
+    }
   }
 }
