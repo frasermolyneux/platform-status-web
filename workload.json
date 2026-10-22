@@ -9,7 +9,7 @@
   "services": [
     {
       "name": "platform-status-service",
-      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-service@sha256:c1854d61beef8b8970bc4955286b76c5a0086916c19bf1407105ebde82c1b8a7",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/service@sha256:11129a8c58cab5cddcac962ea1568972834be2c6adc169972a678618bb5a2d44",
       "runAs": "10001:10001",
       "environment": {
         "STATUS_RUNTIME_FILE": "/node/runtime.json"
@@ -34,7 +34,7 @@
     },
     {
       "name": "platform-status-postgres",
-      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-postgres@sha256:fa85b7bda60490d73ea5d3608c50e46b86f4809fdeeb9e25f9ed20d62a8848fd",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/postgres@sha256:ea31555ad85323d30e7889e9786fa95deb4730ba2058f0ac52debe3862cab454",
       "runAs": "999:10001",
       "networks": ["database"],
       "mounts": [
