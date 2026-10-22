@@ -9,9 +9,11 @@ def staged_plan():
         "cloudflare_load_balancer.status": {
             "enabled": False, "name": "mxstatus.io", "zone_id": "mx-zone", "proxied": True,
             "steering_policy": "off", "session_affinity": "none",
+            "default_pools": ["pool-id"], "fallback_pool": "pool-id",
         },
         "cloudflare_load_balancer_pool.status": {
             "name": "platform-status-origins", "account_id": "account",
+            "id": "pool-id", "monitor": "monitor-id",
             "check_regions": ["ENAM"], "enabled": True, "minimum_origins": 1,
             "origin_steering": {"policy": "random"},
             "origins": [
@@ -21,6 +23,7 @@ def staged_plan():
         },
         "cloudflare_load_balancer_monitor.status": {
             "account_id": "account", "type": "https", "method": "GET", "path": "/health/ready",
+            "id": "monitor-id",
             "expected_codes": "200", "expected_body": "\"status\":\"ready\"",
             "header": {"Host": ["mxstatus.io"]}, "probe_zone": "mxstatus.io",
             "allow_insecure": False, "follow_redirects": False,
@@ -50,6 +53,42 @@ def staged_plan():
 
 
 class EdgePlanTests(unittest.TestCase):
+    def test_rejects_detached_or_substituted_links_in_initial_and_partial_plans(self):
+        for actions in (["create"], ["no-op"]):
+            for index, field, value in (
+                (1, "monitor", None), (1, "monitor", "another-monitor"),
+                (0, "default_pools", []), (0, "default_pools", ["another-pool"]),
+                (0, "fallback_pool", "another-pool"),
+            ):
+                with self.subTest(actions=actions, field=field, value=value):
+                    plan = staged_plan()
+                    plan["resource_changes"][2]["change"]["actions"] = actions
+                    plan["resource_changes"][index]["change"]["after"][field] = value
+                    with self.assertRaises(ValueError):
+                        validate_plan(plan)
+
+    def test_unknown_monitor_id_requires_exact_reference_and_unknown_association(self):
+        plan = staged_plan()
+        monitor = plan["resource_changes"][2]["change"]
+        monitor["after"].pop("id")
+        monitor["after_unknown"] = {"id": True}
+        pool = plan["resource_changes"][1]["change"]
+        pool["after"]["monitor"] = None
+        pool["after_unknown"] = {"monitor": True}
+        expression = {"references": [
+            "cloudflare_load_balancer_monitor.status.id", "cloudflare_load_balancer_monitor.status"]}
+        plan["configuration"] = {"root_module": {"resources": [{
+            "address": "cloudflare_load_balancer_pool.status", "expressions": {"monitor": expression},
+        }]}}
+        self.assertEqual(validate_plan(plan), 5)
+        pool["after_unknown"]["monitor"] = False
+        with self.assertRaises(ValueError):
+            validate_plan(plan)
+        pool["after_unknown"]["monitor"] = True
+        expression["references"] = ["cloudflare_load_balancer_monitor.other.id"]
+        with self.assertRaises(ValueError):
+            validate_plan(plan)
+
     def test_accepts_disabled_stage_and_safe_partial_apply_retry(self):
         plan = staged_plan()
         self.assertEqual(validate_plan(plan), 5)

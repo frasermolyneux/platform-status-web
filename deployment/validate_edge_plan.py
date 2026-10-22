@@ -16,11 +16,34 @@ def validate_plan(plan):
     if len(managed) != len(expected) or {resource["address"] for resource in managed} != expected:
         raise ValueError("The edge stage must contain only the five approved managed resources.")
     resources = {}
+    changes = {resource["address"]: resource["change"] for resource in managed}
     for resource in managed:
         change = resource["change"]
         if change["actions"] not in (["create"], ["no-op"]) or change.get("importing") is not None:
             raise ValueError(f"Unapproved update, deletion, replacement or import: {resource['address']}")
         resources[resource["address"]] = change["after"]
+    configuration = {
+        resource["address"]: resource
+        for resource in plan.get("configuration", {}).get("root_module", {}).get("resources", [])
+    }
+    for owner, field, target, many in (
+        ("cloudflare_load_balancer_pool.status", "monitor", "cloudflare_load_balancer_monitor.status", False),
+        ("cloudflare_load_balancer.status", "default_pools", "cloudflare_load_balancer_pool.status", True),
+        ("cloudflare_load_balancer.status", "fallback_pool", "cloudflare_load_balancer_pool.status", False),
+    ):
+        target_id = resources[target].get("id")
+        if target_id:
+            expected_value = [target_id] if many else target_id
+            if resources[owner].get(field) != expected_value:
+                raise ValueError(f"The approved association is required: {owner}.{field} -> {target}")
+        else:
+            unknown = changes[owner].get("after_unknown", {}).get(field)
+            references = configuration.get(owner, {}).get("expressions", {}).get(field, {}).get("references", [])
+            if (changes[target].get("after_unknown", {}).get("id") is not True
+                    or not (unknown is True or (many and unknown == [True]))
+                    or f"{target}.id" not in references
+                    or not set(references) <= {target, f"{target}.id"}):
+                raise ValueError(f"Unknown IDs require the exact approved configuration reference: {owner}.{field}")
     load_balancer = resources["cloudflare_load_balancer.status"]
     if (load_balancer["enabled"] is not False or load_balancer["name"] != "mxstatus.io"
             or load_balancer["proxied"] is not True or load_balancer["steering_policy"] != "off"
