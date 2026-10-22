@@ -35,6 +35,23 @@ def database_sql(container, sql):
                   input=sql)
 
 
+def verify_database_restart_recovery(primary, standby, urls):
+    snapshots = {label: request(url, "/api/status")[1]["generatedAt"] for label, url in urls.items()}
+    for container in (primary, standby):
+        docker("restart", container)
+        wait_for(lambda: database_ready(container), f"{container} restart recovery")
+        assert database_sql(primary, "SELECT pg_is_in_recovery();") == "f"
+        assert database_sql(standby, "SELECT pg_is_in_recovery();") == "t"
+        lsn = database_sql(primary, "SELECT pg_current_wal_lsn();")
+        wait_for(lambda: database_sql(standby,
+                 f"SELECT pg_last_wal_replay_lsn() >= '{lsn}'::pg_lsn;") == "t",
+                 f"standby replay after {container} restart")
+    for label, url in urls.items():
+        wait_for(lambda: published(url) and
+                 request(url, "/api/status")[1]["generatedAt"] > snapshots[label],
+                 f"{label} fresh publication after database restarts")
+
+
 @contextmanager
 def database_lock(container, key):
     process = subprocess.Popen(
@@ -219,6 +236,7 @@ def main():
                 assert request(url, "/ops")[0] == 200
                 assert request(url, "/feed.xml")[0] == 200
                 assert request(url, "/api/status", "unexpected.example")[0] == 404
+            verify_database_restart_recovery(f"{name}-primary", f"{name}-standby", urls)
             verify_publisher_fencing(f"{name}-primary")
             verify_historic_thresholds(f"{name}-primary", urls)
             command = {
@@ -307,9 +325,11 @@ def main():
 
 def database_ready(container):
     try:
+        # The temporary bootstrap server listens only on loopback.
         return docker("exec", container, "sh", "-ec",
                       'PGPASSWORD="$(cat /run/secrets/app-password)" psql '
-                      '-h 127.0.0.1 -U status_app -d status -Atc "SELECT 1"') == "1"
+                      '-h "$1" -U status_app -d status -Atc "SELECT 1"',
+                      "runtime-readiness", container) == "1"
     except subprocess.CalledProcessError:
         if docker("inspect", "--format", "{{.State.Running}}", container) != "true":
             raise RuntimeError(f"Database container exited before becoming ready: {container}")

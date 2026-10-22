@@ -23,6 +23,13 @@ for file in postgres-password app-password replication-password; do
 done
 chmod 0700 "$PGDATA"
 
+# Keep the bootstrap server and normal server compatible with standby recovery.
+postgres_options=(
+    -c unix_socket_directories=/tmp
+    -c wal_level=replica -c max_wal_senders=10 -c max_replication_slots=2
+    -c hot_standby=on -c shared_buffers=128MB
+)
+
 export PGUSER=status_admin
 export PGPASSWORD
 PGPASSWORD="$(cat /run/secrets/postgres-password)"
@@ -67,7 +74,7 @@ host replication status_replicator $peer/32 scram-sha-256
 EOF
 
 if [[ "$role" == primary ]]; then
-    pg_ctl --pgdata="$PGDATA" --wait --options="-c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp" start
+    pg_ctl --pgdata="$PGDATA" --wait --options="-c listen_addresses=127.0.0.1 ${postgres_options[*]}" start
     trap 'pg_ctl --pgdata="$PGDATA" --mode=fast --wait stop' EXIT
     psql --host=127.0.0.1 --dbname=postgres --no-password --set=ON_ERROR_STOP=1 <<'SQL'
 SET log_min_error_statement=panic;
@@ -85,6 +92,4 @@ SQL
 fi
 unset PGPASSWORD
 exec postgres -D "$PGDATA" \
-    -c listen_addresses='*' -c unix_socket_directories=/tmp \
-    -c wal_level=replica -c max_wal_senders=4 -c max_replication_slots=2 \
-    -c max_slot_wal_keep_size=1GB -c hot_standby=on -c shared_buffers=128MB
+    -c listen_addresses='*' "${postgres_options[@]}" -c max_slot_wal_keep_size=1GB
