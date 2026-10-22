@@ -80,20 +80,7 @@ public static class ServiceProgram
             context.Response.Headers.CacheControl = "no-store";
             await context.Response.WriteAsJsonAsync(new { error = "Status operation unavailable. Public publications remain independent." });
         }));
-        app.Use(async (context, next) =>
-        {
-            context.Response.Headers.XContentTypeOptions = "nosniff";
-            context.Response.Headers["Referrer-Policy"] = "no-referrer";
-            context.Response.Headers.CacheControl = context.Request.Path.StartsWithSegments("/api/ops")
-                || context.Request.Path.StartsWithSegments("/api/integrations") ? "private, no-store" : "no-store";
-            if (!context.Request.Path.StartsWithSegments("/health")
-                && catalog.FindHost(context.Request.Host.Host) is null)
-            {
-                context.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
-            await next();
-        });
+        UseRequestBoundary(app, catalog);
         app.UseAuthentication();
         app.UseAuthorization();
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
@@ -141,6 +128,24 @@ public static class ServiceProgram
         app.MapFallbackToFile("/component/{id}", "index.html");
         app.MapFallbackToFile("index.html");
         return app;
+    }
+
+    private static void UseRequestBoundary(WebApplication app, StatusCatalog catalog)
+    {
+        app.Use(async (context, next) =>
+        {
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            context.Response.Headers["Referrer-Policy"] = "no-referrer";
+            context.Response.Headers.CacheControl = context.Request.Path.StartsWithSegments("/api/ops")
+                || context.Request.Path.StartsWithSegments("/api/integrations") ? "private, no-store" : "no-store";
+            if (!context.Request.Path.StartsWithSegments("/health")
+                && catalog.FindHost(context.Request.Host.Host) is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+            await next();
+        });
     }
 
     private static void ConfigureIdentity(IServiceCollection services, RuntimeOptions options)

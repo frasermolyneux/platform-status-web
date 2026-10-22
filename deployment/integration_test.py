@@ -103,8 +103,7 @@ def main():
                        "--mount", f"type=bind,src={root / node},dst=/node,readonly",
                        "--mount", f"type=bind,src={root / 'secrets'},dst=/run/secrets,readonly",
                        "status-service:ci")
-                port = docker("port", container, "8080/tcp").split(":")[-1]
-                urls[label] = f"http://127.0.0.1:{port}"
+                urls[label] = origin_url(container)
             for label, url in urls.items():
                 wait_for(lambda: published(url), f"{label} persisted publication")
                 assert request(url, "/api/status", "status.xtremeidiots.com")[1]["site"]["id"] == "xi"
@@ -177,6 +176,7 @@ def main():
             docker("stop", f"{name}-primary", f"{name}-standby")
             for label, url in urls.items():
                 docker("restart", f"{name}-{label}")
+                urls[label] = url = origin_url(f"{name}-{label}")
                 wait_for(lambda: request(url, "/health/ready")[0] == 200, f"{label} independent restart", seconds=30)
                 publication = request(url, "/api/status")[1]
                 assert any(item["title"] == "Integration incident" for item in publication["incidents"])
@@ -203,6 +203,11 @@ def database_ready(container):
         if docker("inspect", "--format", "{{.State.Running}}", container) != "true":
             raise RuntimeError(f"Database container exited before becoming ready: {container}")
         return False
+
+
+def origin_url(container):
+    port = docker("port", container, "8080/tcp").split(":")[-1]
+    return f"http://127.0.0.1:{port}"
 
 
 def request(url, path, host="mxstatus.io"):
