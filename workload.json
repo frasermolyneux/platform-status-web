@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "id": "platform-status-web",
+  "applicationType": "container",
+  "networks": [
+    {"name": "database", "internetAccess": true},
+    {"name": "public-proxy", "internetAccess": true}
+  ],
+  "services": [
+    {
+      "name": "platform-status-service",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-service@sha256:c1854d61beef8b8970bc4955286b76c5a0086916c19bf1407105ebde82c1b8a7",
+      "runAs": "10001:10001",
+      "environment": {
+        "STATUS_RUNTIME_FILE": "/node/runtime.json"
+      },
+      "networks": ["database", "public-proxy"],
+      "mounts": [
+        {"id": "publications", "target": "/data", "readOnly": false},
+        {"id": "configuration", "target": "/node", "readOnly": true}
+      ],
+      "secrets": [
+        {"id": "app-password", "target": "app-password"}
+      ],
+      "tmpfs": ["/tmp"],
+      "resources": {"cpus": 0.5, "memoryMb": 512, "pids": 128},
+      "health": {
+        "test": ["CMD", "dotnet", "MX.Platform.Status.Service.dll", "--healthcheck"],
+        "intervalSeconds": 15,
+        "timeoutSeconds": 5,
+        "retries": 3,
+        "startPeriodSeconds": 30
+      }
+    },
+    {
+      "name": "platform-status-postgres",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-postgres@sha256:fa85b7bda60490d73ea5d3608c50e46b86f4809fdeeb9e25f9ed20d62a8848fd",
+      "runAs": "999:10001",
+      "networks": ["database"],
+      "mounts": [
+        {"id": "postgres", "target": "/var/lib/postgresql/data", "readOnly": false},
+        {"id": "configuration", "target": "/node", "readOnly": true}
+      ],
+      "secrets": [
+        {"id": "postgres-password", "target": "postgres-password"},
+        {"id": "app-password", "target": "app-password"},
+        {"id": "replication-password", "target": "replication-password"}
+      ],
+      "tmpfs": ["/tmp"],
+      "resources": {"cpus": 0.5, "memoryMb": 512, "pids": 128},
+      "health": {
+        "test": ["CMD", "pg_isready", "--host=127.0.0.1", "--username=status_app", "--dbname=status"],
+        "intervalSeconds": 10,
+        "timeoutSeconds": 5,
+        "retries": 6,
+        "startPeriodSeconds": 60
+      }
+    }
+  ],
+  "ingress": [
+    {
+      "scope": "tailscale",
+      "hostname": "status-database.mxstatus.io",
+      "service": "platform-status-postgres",
+      "containerPort": 5432
+    }
+  ],
+  "deployment": {
+    "healthTimeoutSeconds": 300,
+    "healthPollSeconds": 3,
+    "rollbackOnFailure": true
+  }
+}

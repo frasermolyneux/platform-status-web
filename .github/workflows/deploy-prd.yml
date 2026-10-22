@@ -29,12 +29,30 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 2
+      - name: Detect image input changes
+        id: inputs
+        env:
+          FORCE_PUBLISH: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only HEAD^ HEAD)"
+          if [[ "$FORCE_PUBLISH" == true ]] ||
+            grep --extended-regexp --quiet '^(Dockerfile$|\.dockerignore$|src/|deployment/postgres[-.]|\.github/workflows/deploy-prd\.yml$)' <<<"$changed"; then
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+            echo "No image inputs changed; retaining the published image digests." >>"$GITHUB_STEP_SUMMARY"
+          fi
       - uses: azure/login@v3
+        if: steps.inputs.outputs.publish == 'true'
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Publish immutable application and database images
+        if: steps.inputs.outputs.publish == 'true'
         env:
           IMAGE_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
         shell: bash
@@ -52,6 +70,7 @@ jobs:
             printf '%s\n' "$digest" >>"$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@v7
+        if: steps.inputs.outputs.publish == 'true'
         with:
           name: status-image-digests
           path: "*-image.txt"
