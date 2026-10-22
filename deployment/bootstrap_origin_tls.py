@@ -50,6 +50,10 @@ def new_certificate(token):
                 "-addext", "subjectAltName=" + ",".join(f"DNS:{name}" for name in HOSTNAMES))
         issued = request_certificate(token, csr.read_text())
         certificate.write_text(issued["certificate"], encoding="ascii")
+        # Older OpenSSL versions can report an invalid key with exit status zero.
+        if openssl("pkey", "-in", key, "-check", "-noout").strip() != "Key is valid":
+            raise RuntimeError("Origin TLS private key failed its consistency check.")
+        openssl("verify", "-partial_chain", "-trusted", certificate, "-purpose", "sslserver", certificate)
         if openssl("x509", "-in", certificate, "-pubkey", "-noout") != openssl("pkey", "-in", key, "-pubout"):
             raise RuntimeError("Origin certificate does not match its locally generated private key.")
         names = re.findall(r"\bDNS:([^,\s]+)", openssl("x509", "-in", certificate, "-noout", "-ext", "subjectAltName"))
