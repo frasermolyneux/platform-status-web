@@ -49,6 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         with:
@@ -68,7 +69,7 @@ jobs:
       - name: Plan only Cloudflare edge resources
         run: |
           set -euo pipefail
-          terraform -chdir=edge plan -input=false -out=edge.tfplan
+          terraform -chdir=edge plan -input=false -lock-timeout=5m -out=edge.tfplan
           terraform -chdir=edge show -no-color edge.tfplan > "$RUNNER_TEMP/status-edge-plan.txt"
           {
             echo '## Status edge plan'
