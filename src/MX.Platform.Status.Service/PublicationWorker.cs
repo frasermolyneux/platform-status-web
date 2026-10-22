@@ -46,10 +46,10 @@ public sealed class PublicationWorker(
             throw new InvalidOperationException("Publisher database is in recovery; refusing publication.");
         await using var publisherLock = await database.TryPublisherLockAsync(ct)
             ?? throw new InvalidOperationException("Another publisher holds the database lock.");
-        await PublishAsync(ct);
+        await PublishAsync(publisherLock, ct);
     }
 
-    private async Task PublishAsync(CancellationToken ct)
+    private async Task PublishAsync(PublisherLease publisherLock, CancellationToken ct)
     {
         foreach (var site in catalog.Sites)
         {
@@ -83,16 +83,16 @@ public sealed class PublicationWorker(
                     && i.State != IncidentState.Resolved && i.ScheduledStart <= now && i.ScheduledEnd > now
                     && i.Components.Any(id => StatusCatalog.Flatten(site.Components.Components)
                         .Where(c => c.Id == id).SelectMany(c => StatusCatalog.Flatten([c])).Any(c => c.Id == component)));
-                if (!maintenance) await database.RecordProbeAsync(site.Site.Id, component, success, ct);
+                if (!maintenance) await publisherLock.RecordProbeAsync(site.Site.Id, component, success, ct);
                 live[component] = new ComponentLiveTelemetry(1, success ? 0 : 1, now, null);
             }
 
-            var history = await database.ReadHistoryAsync(site.Site.Id, ct);
+            var history = await database.ReadHistoryAsync(site, ct);
             var publication = new StatusMerger().Merge(site.Snapshot, live, history,
                 incidents.Select(i => i.ToPublicIncident()),
                 incidents.Where(i => i.Severity == Severity.Maintenance).Select(i => i.ToMaintenance(DateTimeOffset.UtcNow)));
             publication = CorrectTodayHistory(publication, history);
-            await database.SavePublicationAsync(publication, ct);
+            await publisherLock.SavePublicationAsync(publication, ct);
             await files.WriteAsync(publication, ct);
         }
     }

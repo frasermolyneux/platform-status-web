@@ -166,18 +166,6 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
         return record;
     }
 
-    public async Task SavePublicationAsync(StatusApiResponse publication, CancellationToken ct)
-    {
-        await using var command = Source.CreateCommand("""
-            INSERT INTO status_publications VALUES($1,$2,$3)
-            ON CONFLICT(site_id) DO UPDATE SET generated_at=excluded.generated_at,document=excluded.document
-            """);
-        command.Parameters.AddWithValue(publication.Site.Id);
-        command.Parameters.AddWithValue(publication.GeneratedAt);
-        command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(publication, StatusJson.Options));
-        await command.ExecuteNonQueryAsync(ct);
-    }
-
     public async Task<StatusApiResponse?> ReadPublicationAsync(string site, CancellationToken ct)
     {
         await using var command = Source.CreateCommand("SELECT document::text FROM status_publications WHERE site_id=$1");
@@ -186,28 +174,17 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
         return json is null ? null : JsonSerializer.Deserialize<StatusApiResponse>(json, StatusJson.Options);
     }
 
-    public async Task RecordProbeAsync(string site, string component, bool success, CancellationToken ct)
+    public async Task<HistoryDocument> ReadHistoryAsync(SiteDefinition site, CancellationToken ct)
     {
-        await using var command = Source.CreateCommand("""
-            INSERT INTO status_probe_days VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,1,$3)
-            ON CONFLICT(site_id,component_id,day) DO UPDATE
-            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures
-            """);
-        command.Parameters.AddWithValue(site);
-        command.Parameters.AddWithValue(component);
-        command.Parameters.AddWithValue(success ? 0 : 1);
-        await command.ExecuteNonQueryAsync(ct);
-    }
-
-    public async Task<HistoryDocument> ReadHistoryAsync(string site, CancellationToken ct)
-    {
-        var history = new HistoryDocument { Site = site, GeneratedAt = DateTimeOffset.UtcNow };
+        var components = StatusCatalog.Flatten(site.Components.Components).ToDictionary(component => component.Id);
+        var history = new HistoryDocument { Site = site.Site.Id, GeneratedAt = DateTimeOffset.UtcNow };
         await using var command = Source.CreateCommand("SELECT component_id,day,total,failures FROM status_probe_days WHERE site_id=$1 AND day >= (now() AT TIME ZONE 'UTC')::date-89 ORDER BY day");
-        command.Parameters.AddWithValue(site);
+        command.Parameters.AddWithValue(site.Site.Id);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
             var component = reader.GetString(0);
+            if (!components.TryGetValue(component, out var definition)) continue;
             if (!history.ComponentsById.TryGetValue(component, out var record))
                 history.ComponentsById[component] = record = new ComponentHistoryRecord();
             var total = reader.GetInt32(2);
@@ -219,7 +196,7 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
                 Total = total,
                 Failed = failures,
                 Uptime = uptime,
-                Status = ComponentStatusCalculator.ClassifyHistoricStatus(total, uptime, new SlaDefinition())
+                Status = ComponentStatusCalculator.ClassifyHistoricStatus(total, uptime, definition.Sla)
             });
         }
         return history;
@@ -266,6 +243,31 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
 
 public sealed class PublisherLease(NpgsqlConnection connection) : IAsyncDisposable
 {
+    public async Task SavePublicationAsync(StatusApiResponse publication, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO status_publications VALUES($1,$2,$3)
+            ON CONFLICT(site_id) DO UPDATE SET generated_at=excluded.generated_at,document=excluded.document
+            """, connection);
+        command.Parameters.AddWithValue(publication.Site.Id);
+        command.Parameters.AddWithValue(publication.GeneratedAt);
+        command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(publication, StatusJson.Options));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RecordProbeAsync(string site, string component, bool success, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO status_probe_days VALUES($1,$2,(now() AT TIME ZONE 'UTC')::date,1,$3)
+            ON CONFLICT(site_id,component_id,day) DO UPDATE
+            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures
+            """, connection);
+        command.Parameters.AddWithValue(site);
+        command.Parameters.AddWithValue(component);
+        command.Parameters.AddWithValue(success ? 0 : 1);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async ValueTask DisposeAsync()
     {
         try

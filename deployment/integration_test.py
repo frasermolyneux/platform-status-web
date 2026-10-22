@@ -28,6 +28,108 @@ def wait_for(check, description, seconds=180):
     raise AssertionError(f"Timed out waiting for {description}")
 
 
+def database_sql(container, sql):
+    return docker("exec", "--interactive", container, "sh", "-ec",
+                  'PGCONNECT_TIMEOUT=5 PGPASSWORD="$(cat /run/secrets/app-password)" psql '
+                  '-h 127.0.0.1 -U status_app -d status -Atq --set=ON_ERROR_STOP=1',
+                  input=sql)
+
+
+@contextmanager
+def database_lock(container, key):
+    process = subprocess.Popen(
+        ["docker", "exec", "--interactive", container, "sh", "-ec",
+         'PGCONNECT_TIMEOUT=5 PGPASSWORD="$(cat /run/secrets/app-password)" psql '
+         '-h 127.0.0.1 -U status_app -d status -Atq --set=ON_ERROR_STOP=1'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        process.stdin.write(f"SELECT pg_try_advisory_lock({key});\n")
+        process.stdin.flush()
+        assert process.stdout.readline().strip() == "t", f"Could not acquire test lock {key}"
+
+        def release():
+            process.stdin.write(f"SELECT pg_advisory_unlock({key});\n")
+            process.stdin.flush()
+
+        yield release
+    finally:
+        _, errors = process.communicate("\\q\n", timeout=15)
+        assert process.returncode == 0, errors
+
+
+def verify_publisher_fencing(container):
+    with database_lock(container, 814233108) as release_probe:
+        database_sql(container, """
+            CREATE FUNCTION pause_status_probe() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                PERFORM pg_advisory_xact_lock(814233108);
+                RETURN NEW;
+            END $$;
+            CREATE TRIGGER pause_status_probe BEFORE INSERT ON status_probe_days
+                FOR EACH ROW EXECUTE FUNCTION pause_status_probe();
+            """)
+        try:
+            wait_for(lambda: database_sql(container, """
+                SELECT EXISTS(SELECT FROM pg_locks
+                    WHERE locktype='advisory' AND objid=814233108 AND NOT granted);
+                """) == "t", "publisher blocked during a probe")
+            snapshot_sql = """
+                SELECT coalesce(sum(total),0)::text || ':' ||
+                    (SELECT string_agg(generated_at::text,',' ORDER BY site_id) FROM status_publications)
+                FROM status_probe_days;
+                """
+            snapshot = database_sql(container, snapshot_sql)
+            assert database_sql(container, """
+                SELECT pg_terminate_backend(pid) FROM pg_locks
+                WHERE locktype='advisory' AND objid=814233107 AND granted;
+                """) == "t"
+            wait_for(lambda: database_sql(container, """
+                SELECT NOT EXISTS(SELECT FROM pg_locks
+                    WHERE locktype='advisory' AND objid=814233107 AND granted);
+                """) == "t", "lost publisher lock released")
+            with database_lock(container, 814233107):
+                release_probe()
+                wait_for(lambda: database_sql(container, """
+                    SELECT NOT EXISTS(SELECT FROM pg_locks
+                        WHERE locktype='advisory' AND objid=814233108 AND NOT granted);
+                    """) == "t", "interrupted probe unblocked")
+                time.sleep(5)
+                assert database_sql(container, snapshot_sql) == snapshot, \
+                    "A publisher wrote probes or publications after losing its lock session"
+        finally:
+            database_sql(container, """
+                DROP TRIGGER pause_status_probe ON status_probe_days;
+                DROP FUNCTION pause_status_probe();
+                """)
+
+
+def verify_historic_thresholds(container, urls):
+    day = database_sql(container, "SELECT ((now() AT TIME ZONE 'UTC')::date-1)::text;")
+    expected = {
+        "mx.sitewatch.molyneux-me": "degraded",
+        "mx.sitewatch.geo-location-web": "operational",
+        "mx.sitewatch.geo-location-api": "outage",
+    }
+    for component in expected:
+        database_sql(container, f"""
+            INSERT INTO status_probe_days VALUES('mx','{component}','{day}',100,15)
+            ON CONFLICT(site_id,component_id,day) DO UPDATE SET total=100,failures=15;
+            """)
+    for label, url in urls.items():
+        def correct_history():
+            publication = request(url, "/api/status")[1]
+            components = {component["id"]: component for component in publication.get("components", [])}
+            for component, status in expected.items():
+                days = components.get(component, {}).get("history", [])
+                sample = next((sample for sample in days if sample["date"] == day), None)
+                if sample is None or sample["status"] != status or sample.get("total") != 100:
+                    return False
+                assert sample["failed"] == 15 and sample["uptime"] == 0.85
+            return True
+        wait_for(correct_history, f"{label} configured and default historic SLA thresholds")
+
+
 @contextmanager
 def runtime_directory(containers):
     temporary = tempfile.TemporaryDirectory(prefix="status-integration-")
@@ -59,6 +161,10 @@ def main():
             for filename in ("postgres-password", "app-password", "replication-password"):
                 (root / "secrets" / filename).write_text(secrets.token_hex(32))
                 (root / "secrets" / filename).chmod(0o640)
+            catalog_path = Path(__file__).resolve().parents[1] / "src" / "MX.Platform.Status.Service" / "catalog.json"
+            catalog = json.loads(catalog_path.read_text())
+            for component, degraded in zip(catalog[0]["components"]["components"][:2], (0.95, 0.8)):
+                component["sla"] = {"outageBelow": 0.5, "degradedBelow": degraded}
             for directory, role, peer in (
                 ("writer-node", "primary", "100.120.200.11"),
                 ("reader-node", "standby", "100.120.200.10"),
@@ -68,10 +174,12 @@ def main():
                 (node / "primary-host").write_text(f"{name}-primary")
                 (node / "primary-port").write_text("5432")
                 (node / "peer-address").write_text(peer)
+                (node / "catalog.json").write_text(json.dumps(catalog))
                 (node / "runtime.json").write_text(json.dumps({"Status": {
                     "Publisher": role == "primary", "RefreshSeconds": 30, "StaleAfterSeconds": 60,
                     "DataDirectory": "/data", "DatabaseHost": f"{name}-{role}",
                     "WriterHost": f"{name}-primary", "WriterPort": 5432,
+                    "CatalogPath": "/node/catalog.json",
                 }}))
             docker("run", "--rm", "--user", "0:0", "--entrypoint", "sh",
                    "--mount", f"type=bind,src={root},dst=/init", "status-service:ci", "-ec",
@@ -111,6 +219,8 @@ def main():
                 assert request(url, "/ops")[0] == 200
                 assert request(url, "/feed.xml")[0] == 200
                 assert request(url, "/api/status", "unexpected.example")[0] == 404
+            verify_publisher_fencing(f"{name}-primary")
+            verify_historic_thresholds(f"{name}-primary", urls)
             command = {
                 "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],
                 "severity": "outage", "state": "investigating",
@@ -188,7 +298,8 @@ def main():
                 assert stale["dataFreshness"]["stale"]
                 assert stale["summary"]["status"] == "unknown"
                 assert "Integration incident" in request(url, "/feed.xml")[1]
-            print("Primary/standby publishing, draft privacy, standby writes, and database-independent restart passed.")
+            print("Publisher fencing, historic SLA thresholds, primary/standby publishing, draft privacy, "
+                  "standby writes, and database-independent restart passed.")
     finally:
         if network_created:
             subprocess.run(["docker", "network", "rm", name], capture_output=True, check=False)
