@@ -18,9 +18,11 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
     {
         if (writer && options.WriterConnectionFile is not null)
             return File.ReadAllText(options.WriterConnectionFile).Trim();
-        var connection = options.DatabaseConnectionFile is not null
-            ? new NpgsqlConnectionStringBuilder(File.ReadAllText(options.DatabaseConnectionFile).Trim())
-            : new NpgsqlConnectionStringBuilder
+        NpgsqlConnectionStringBuilder connection;
+        if (options.DatabaseConnectionFile is not null)
+            connection = new NpgsqlConnectionStringBuilder(File.ReadAllText(options.DatabaseConnectionFile).Trim());
+        else
+            connection = new NpgsqlConnectionStringBuilder
             {
                 Host = (writer ? options.WriterHost ?? options.DatabaseHost : options.DatabaseHost)
                 ?? throw new InvalidOperationException("Database is not configured."),
