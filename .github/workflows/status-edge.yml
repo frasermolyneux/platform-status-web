@@ -7,6 +7,8 @@ on:
     paths:
       - "edge/**"
       - ".github/workflows/status-edge.yml"
+      - "deployment/validate_edge_plan.py"
+      - "deployment/test_validate_edge_plan.py"
   workflow_dispatch:
     inputs:
       operation:
