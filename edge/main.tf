@@ -78,7 +78,7 @@ resource "cloudflare_load_balancer" "status" {
   zone_id          = data.cloudflare_zone.status.id
   name             = "mxstatus.io"
   description      = "Shared public status routing for Molyneux and XtremeIdiots"
-  enabled          = false
+  enabled          = true
   proxied          = true
   default_pools    = [cloudflare_load_balancer_pool.status.id]
   fallback_pool    = cloudflare_load_balancer_pool.status.id

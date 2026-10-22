@@ -33,6 +33,21 @@ def staged_plan():
     }
 
 
+def activation_plan():
+    plan = staged_plan()
+    for resource in plan["resource_changes"]:
+        change = resource["change"]
+        change["actions"] = ["no-op"]
+        change["before"] = copy.deepcopy(change["after"])
+    load_balancer = plan["resource_changes"][0]["change"]
+    load_balancer["actions"] = ["update"]
+    load_balancer["after"]["enabled"] = True
+    load_balancer["before"]["modified_on"] = "previous-timestamp"
+    load_balancer["after"]["modified_on"] = None
+    load_balancer["after_unknown"] = {"modified_on": True}
+    return plan
+
+
 class EdgePlanTests(unittest.TestCase):
     def test_accepts_disabled_stage_and_safe_partial_apply_retry(self):
         plan = staged_plan()
@@ -53,6 +68,31 @@ class EdgePlanTests(unittest.TestCase):
         plan["resource_changes"].append(copy.deepcopy(plan["resource_changes"][0]))
         with self.assertRaises(ValueError):
             validate_plan(plan)
+
+    def test_accepts_only_staged_load_balancer_activation_and_unchanged_retry(self):
+        plan = activation_plan()
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+        plan["resource_changes"][0]["change"]["actions"] = ["no-op"]
+        plan["resource_changes"][0]["change"]["before"] = copy.deepcopy(
+            plan["resource_changes"][0]["change"]["after"])
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+
+    def test_refuses_activation_before_staging_and_changes_beyond_enablement(self):
+        with self.assertRaises(ValueError):
+            validate_plan(staged_plan(), activate=True)
+        for index, key, value in (
+            (0, "description", "unreviewed-change"),
+            (0, "default_pools", ["another-pool"]),
+        ):
+            with self.subTest(key=key):
+                plan = activation_plan()
+                plan["resource_changes"][index]["change"]["after"][key] = value
+                with self.assertRaises(ValueError):
+                    validate_plan(plan, activate=True)
+        plan = activation_plan()
+        plan["resource_changes"][1]["change"]["actions"] = ["update"]
+        with self.assertRaises(ValueError):
+            validate_plan(plan, activate=True)
 
     def test_rejects_activation_and_weakened_or_broadened_tls(self):
         plan = staged_plan()

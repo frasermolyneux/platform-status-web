@@ -13,13 +13,16 @@ balancer. Origins deliberately have no Host override, preserving brand isolation
 The monitor alone sends `Host: mxstatus.io`, validates origin TLS, and requires the
 actual local-publication readiness response.
 
-The load balancer is initially **disabled**. Its enabled pool can be monitored
-without replacing existing public routing. Before a separate reviewed activation,
+The load balancer was staged **disabled**, with its enabled pool monitored
+without replacing public routing. The separate activation change enables only
+that existing MX load balancer. Before applying activation,
 verify both origins' Cloudflare health, fresh non-bootstrap publications for both
-brands, Entra operations, replication, disk-cache survival, and existing services.
+brands, protected-operation authentication boundaries, replication, disk-cache
+survival, and existing services. Complete browser-based Entra operator sign-in
+after public HTTPS routing is active.
 Disabling the load balancer restores precedence to any retained matching DNS
-record. Actual preflight found no matching routing records for either status
-hostname, so there is currently no previous DNS route to restore.
+record. The initial preflight found no matching routing records for either status
+hostname, so no previous DNS route existed to restore.
 
 `status.xtremeidiots.com` must subsequently be a CNAME to `mxstatus.io` in the
 existing `platform-connectivity` zone configuration, not a second load balancer.
@@ -48,13 +51,13 @@ expressions. Never change the entire XtremeIdiots zone blindly.
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
 It never invokes the retained legacy Azure stack.
 
-Every saved plan is checked before it can be applied: only the five approved
-managed resources may exist, with create/no-op actions, no imports, and the load
-balancer still disabled. The check also retains exact-host strict TLS, one
-monitoring region, and strict 60-second HTTPS checks. Partial-apply retries may
-leave already-created resources unchanged; updates, replacements, deletes or
-extra resources stop for separate review. Public activation therefore needs an
-explicit reviewed change to both the desired routing and this staging guard.
+Every saved plan is checked before it can be applied: the five staged managed
+resources must already exist, and the only permitted change is enabling the
+existing MX load balancer. All other load-balancer settings and the existing
+pool, monitor and TLS entrypoints must remain unchanged. The check retains
+exact-host strict TLS, one monitoring region, and strict 60-second HTTPS checks.
+An unchanged retry is safe; imports, creations, replacements, deletes, unrelated
+updates or extra resources stop for separate review.
 Transient saved plans are removed even when a step fails.
 
 The `verify` operation only initializes the isolated state and reads the live

@@ -80,9 +80,9 @@ jobs:
             cat "$RUNNER_TEMP/status-edge-plan.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Enforce the approved disabled staging boundary
+      - name: Enforce the approved single-load-balancer activation boundary
         if: github.event_name == 'pull_request' || inputs.operation != 'verify'
-        run: terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py
+        run: terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py --activate
       - name: Apply reviewed main configuration
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
         run: terraform -chdir=edge apply -input=false edge.tfplan
