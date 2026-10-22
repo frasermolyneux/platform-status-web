@@ -130,7 +130,22 @@ class EdgePlanTests(unittest.TestCase):
         plan["resource_changes"][0]["change"]["actions"] = ["no-op"]
         plan["resource_changes"][0]["change"]["before"] = copy.deepcopy(
             plan["resource_changes"][0]["change"]["after"])
+        plan["resource_changes"][0]["change"]["after_unknown"] = {}
         self.assertEqual(validate_plan(plan, activate=True), 0)
+
+    def test_activation_rejects_unknown_optional_nested_and_other_resource_settings(self):
+        for index, field, unknown in (
+            (0, "adaptive_routing", True), (0, "country_pools", {"US": [True]}),
+            (0, "new_optional_field", True), (1, "monitor", True),
+        ):
+            with self.subTest(index=index, field=field):
+                plan = activation_plan()
+                change = plan["resource_changes"][index]["change"]
+                change["before"][field] = None
+                change["after"].pop(field, None)
+                change.setdefault("after_unknown", {})[field] = unknown
+                with self.assertRaises(ValueError):
+                    validate_plan(plan, activate=True)
 
     def test_refuses_activation_before_staging_and_changes_beyond_enablement(self):
         with self.assertRaises(ValueError):

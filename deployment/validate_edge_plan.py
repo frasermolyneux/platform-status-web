@@ -5,6 +5,14 @@ import json
 import sys
 
 
+def contains_unknown(value):
+    if isinstance(value, dict):
+        return any(contains_unknown(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_unknown(item) for item in value)
+    return value is True
+
+
 def validate_plan(plan, *, activate=False):
     expected = {
         "cloudflare_load_balancer.status",
@@ -25,6 +33,13 @@ def validate_plan(plan, *, activate=False):
             allowed = (["no-op"], ["update"]) if resource["address"] == "cloudflare_load_balancer.status" else (["no-op"],)
         if change["actions"] not in allowed or change.get("importing") is not None:
             raise ValueError(f"Unapproved update, deletion, replacement or import: {resource['address']}")
+        if activate:
+            unknowns = dict(change.get("after_unknown", {}))
+            if resource["address"] == "cloudflare_load_balancer.status" and change["actions"] == ["update"]:
+                if unknowns.get("modified_on") is True:
+                    unknowns.pop("modified_on")
+            if contains_unknown(unknowns):
+                raise ValueError(f"Activation requires known settings except the computed modification timestamp: {resource['address']}")
         if activate and change["actions"] == ["update"]:
             before, after = change["before"], change["after"]
             if before["enabled"] is not False or after["enabled"] is not True:
