@@ -96,21 +96,30 @@ jobs:
           import json
           import os
           import subprocess
+          from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
           edge = json.loads(subprocess.check_output(
               ["terraform", "-chdir=edge", "output", "-json", "status_edge"], text=True))
-          request = Request(
-              f"https://api.cloudflare.com/client/v4/accounts/{edge['account_id']}/load_balancers/pools/{edge['pool_id']}/health",
-              headers={"Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"]})
-          with urlopen(request, timeout=30) as response:
-              health = json.load(response)
-          if health["success"] is not True:
-              raise RuntimeError("Cloudflare pool-health request failed: " + json.dumps(health["errors"]))
-          report = json.dumps(health["result"], indent=2)
-          print(report)
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write("\n## Live origin health\n```json\n" + report + "\n```\n")
+          base = f"https://api.cloudflare.com/client/v4/accounts/{edge['account_id']}/load_balancers"
+          for suffix in (f"/pools/{edge['pool_id']}", f"/monitors/{edge['monitor_id']}",
+                         f"/pools/{edge['pool_id']}/health"):
+              request = Request(base + suffix,
+                  headers={"Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"]})
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      result = json.load(response)
+              except HTTPError as error:
+                  details = json.load(error)
+                  raise RuntimeError(
+                      f"Cloudflare verification failed at {suffix}: HTTP {error.code}; "
+                      + json.dumps(details.get("errors", []))) from error
+              if result["success"] is not True:
+                  raise RuntimeError("Cloudflare verification failed: " + json.dumps(result["errors"]))
+              report = json.dumps(result["result"], indent=2)
+              print(suffix + "\n" + report)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write(f"\n## Cloudflare verification: {suffix}\n```json\n" + report + "\n```\n")
           PY
       - name: Remove transient edge plan files
         if: always()

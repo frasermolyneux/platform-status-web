@@ -64,6 +64,10 @@ and `verify` publish that report without exposing the token. New pools may need
 two successful 60-second checks before both origins report healthy. Inspect the
 actual report before activation; successful API retrieval alone is not proof
 that the origins are healthy.
+Verification first reads the actual pool and monitor, then requests pool health.
+Provider error codes are surfaced without credentials. If health is unavailable,
+the workflow fails explicitly; a successful Terraform apply is not health
+acceptance and must not be repeated merely to retry verification.
 
 The edge backend reuses the approved storage location, **not its state key**.
 Both backend files must be passed in this order:
