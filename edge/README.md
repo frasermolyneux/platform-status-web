@@ -50,7 +50,8 @@ It never invokes the retained legacy Azure stack.
 
 Every saved plan is checked before it can be applied: only the five approved
 managed resources may exist, with create/no-op actions, no imports, and the load
-balancer still disabled. The check also retains exact-host strict TLS, one
+balancer still disabled. The check also retains exact-host strict TLS, exactly
+the two approved enabled equal-weight origins without Host overrides, one
 monitoring region, and strict 60-second HTTPS checks. Partial-apply retries may
 leave already-created resources unchanged; updates, replacements, deletes or
 extra resources stop for separate review. Public activation therefore needs an
