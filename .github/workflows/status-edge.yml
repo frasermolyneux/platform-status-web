@@ -1,0 +1,82 @@
+name: Status Edge
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "edge/**"
+      - ".github/workflows/status-edge.yml"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Plan, or apply the reviewed main configuration
+        type: choice
+        options: [plan, apply]
+        default: plan
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: status-edge-prd
+  cancel-in-progress: false
+
+jobs:
+  edge:
+    if: >-
+      github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: Production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_AZUREAD: "true"
+      ARM_USE_OIDC: "true"
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_KEY }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+      - name: Check edge formatting
+        run: terraform -chdir=edge fmt -check -recursive
+      - name: Initialize isolated edge state
+        run: |
+          set -euo pipefail
+          terraform -chdir=edge init -input=false \
+            -backend-config=../terraform/backends/prd.backend.hcl \
+            -backend-config=backends/prd.backend.hcl
+          jq -e '.backend.config.key == "status-edge-prd.tfstate"' edge/.terraform/terraform.tfstate
+      - name: Validate edge configuration
+        run: terraform -chdir=edge validate
+      - name: Plan only Cloudflare edge resources
+        run: |
+          set -euo pipefail
+          terraform -chdir=edge plan -input=false -out=edge.tfplan
+          terraform -chdir=edge show -no-color edge.tfplan > "$RUNNER_TEMP/status-edge-plan.txt"
+          {
+            echo '## Status edge plan'
+            echo '```terraform'
+            cat "$RUNNER_TEMP/status-edge-plan.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply reviewed main configuration
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
+        run: terraform -chdir=edge apply -input=false edge.tfplan
+      - name: Publish edge verification identifiers
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
+        run: terraform -chdir=edge output -json status_edge >> "$GITHUB_STEP_SUMMARY"
