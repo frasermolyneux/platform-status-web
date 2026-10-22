@@ -30,7 +30,7 @@ export function renderOverview(data: StatusResponse): void {
 
   const summaryInfo = getStatusInfo(data.summary.status);
   const staleWarning = data.dataFreshness?.stale
-    ? '<div class="stale-warning">⚠ Showing cached data — live query unavailable</div>'
+    ? '<div class="stale-warning">Live observations are unavailable; incident updates remain visible.</div>'
     : '';
 
   let html = `
@@ -39,18 +39,19 @@ export function renderOverview(data: StatusResponse): void {
       <span class="summary-icon">${getStatusDotHtml(data.summary.status)}</span>
       <span class="summary-text">${data.summary.message ? escapeHtml(data.summary.message) : summaryInfo.label}</span>
     </div>
-    <div class="updated-at">Updated ${formatRelative(data.generatedAt)}</div>
+    <div class="updated-at">${new Date(data.generatedAt).getTime() <= 0 ? 'Awaiting first observation' : `Updated ${formatRelative(data.generatedAt)}`}</div>
   `;
 
   // Components
   html += '<section class="components-section"><h2>Components</h2>';
   for (const c of data.components) {
     html += renderComponentRow(c);
+    for (const child of flattenComponents(c.children || [])) html += renderComponentRow(child);
   }
   html += '</section>';
 
   // Active incidents
-  const activeIncidents = data.incidents.filter(i => i.state !== 'resolved');
+  const activeIncidents = data.incidents.filter(i => i.state !== 'resolved' && i.severity !== 'maintenance');
   if (activeIncidents.length > 0) {
     html += '<section class="incidents-section"><h2>Active Incidents</h2>';
     for (const inc of activeIncidents) {
@@ -60,11 +61,12 @@ export function renderOverview(data: StatusResponse): void {
   }
 
   // Maintenance
-  if (data.maintenance.length > 0) {
+  const upcomingMaintenance = data.maintenance.filter(m => m.state !== 'completed');
+  if (upcomingMaintenance.length > 0) {
     html += '<section class="maintenance-section"><h2>Scheduled Maintenance</h2>';
-    for (const m of data.maintenance) {
+    for (const m of upcomingMaintenance) {
       html += `<div class="maintenance-card">
-        <h3>${escapeHtml(m.title)}</h3>
+        <h3><a href="/incident/${escapeHtml(String(m.id))}">${escapeHtml(m.title)}</a></h3>
         <p>${formatDateTime(m.scheduledStart)} — ${formatDateTime(m.scheduledEnd)}</p>
         <span class="badge badge-maintenance">${escapeHtml(m.state)}</span>
       </div>`;
@@ -134,7 +136,7 @@ function renderHistoryBars(c: ComponentDto): string {
 export function renderComponent(data: StatusResponse, componentId: string): void {
   const app = document.getElementById('app');
   if (!app) return;
-  const component = data.components.find(c => c.id === componentId);
+  const component = flattenComponents(data.components).find(c => c.id === componentId);
   if (!component) {
     app.innerHTML = safeHtml('<p>Component not found.</p>');
     return;
@@ -158,9 +160,12 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
     app.innerHTML = safeHtml('<p>Incident not found.</p>');
     return;
   }
+
+  const maintenance = data.maintenance.find(window => window.id === incident.id);
   let html = `
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(incident.title)}</h2>
+    ${maintenance ? `<p>Maintenance: ${formatDateTime(maintenance.scheduledStart)} — ${formatDateTime(maintenance.scheduledEnd)} (${escapeHtml(maintenance.state)})</p>` : ''}
     <div class="incident-meta">
       <span class="badge badge-${escapeHtml(incident.severity)}">${escapeHtml(incident.severity)}</span>
       <span class="badge badge-state">${escapeHtml(incident.state)}</span>
@@ -177,4 +182,22 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
   }
   html += '</div>';
   app.innerHTML = safeHtml(html);
+}
+
+function flattenComponents(components: ComponentDto[]): ComponentDto[] {
+  return components.flatMap(component => [component, ...flattenComponents(component.children || [])]);
+}
+
+export function renderHistory(data: StatusResponse): void {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const incidents = [...data.incidents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  app.innerHTML = safeHtml(`
+    <nav class="breadcrumb"><a href="/">Back to current status</a></nav>
+    <h2>Incident and maintenance history</h2>
+    <p>Availability is based on observed checks. Grey periods have no data and are not counted as healthy.</p>
+    ${data.dataFreshness?.stale ? '<div class="stale-warning">Live collection is unavailable; showing the last publication.</div>' : ''}
+    <section>${flattenComponents(data.components).filter(c => c.kind === 'leaf').map(renderHistoryBars).join('')}</section>
+    <section>${incidents.length ? incidents.map(renderIncidentCard).join('') : '<p>No published incidents.</p>'}</section>
+  `);
 }

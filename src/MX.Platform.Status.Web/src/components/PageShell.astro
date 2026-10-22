@@ -21,6 +21,12 @@ const { title, description = 'System status and incident history.' } = Astro.pro
     <div class="container">
       <h1 class="site-title" id="site-title">Status</h1>
       <p class="site-tagline" id="site-tagline"></p>
+      <nav class="site-nav" aria-label="Status navigation">
+        <a href="/">Current status</a>
+        <a href="/history">History</a>
+        <a href="/feed.xml">RSS</a>
+        <a href="/ops">Operator sign-in</a>
+      </nav>
     </div>
   </header>
   <main class="container" id="app">

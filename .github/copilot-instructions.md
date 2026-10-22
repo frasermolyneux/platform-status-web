@@ -2,14 +2,19 @@
 
 ## Repository overview
 
-`platform-status-web` is an Azure Static Web App + .NET Function App that serves multi-site public status pages. It reads App Insights availability telemetry from `platform-sitewatch-func` and GitHub Issues from a `status-pages` content repo.
+`platform-status-web` now has an independent ASP.NET Core service serving Astro
+assets and durable local publications. Public reads must never depend on Azure,
+GitHub, Entra, or PostgreSQL. The old Function App is retained only for domain
+reuse and legacy state; its architecture below does not describe the new host.
 
 ## Architecture
 
 - **Frontend**: Astro static shell with vanilla TypeScript (~200 lines). No React/Preact/Vue. Target <10KB JS gzipped.
-- **Backend**: .NET 10 Azure Functions (isolated worker) — `status-api` (HTTP) and `status-rollup` (Timer).
-- **Infrastructure**: Terraform in `terraform/` — Azure resources in Sweden Central only.
-- **Multi-site**: Routed by resolved public hostname (`X-Forwarded-Host` when present and valid, else `Host`), not URL path — see `RequestHostResolver`.
+- **Backend**: .NET 10 ASP.NET Core in `MX.Platform.Status.Service`; reuse domain logic from the legacy App assembly.
+- **Infrastructure**: Existing `terraform/` retains Azure state; host/runtime policies belong to `platform-baremetal`, DNS ownership to `platform-connectivity`.
+- **Multi-site**: The independent service uses actual `Host`, never arbitrary forwarded-host headers. Preserve Host at the reverse proxy.
+- **Persistence**: Single publisher, asynchronous PostgreSQL standby, atomic local publications. No automatic promotion without fencing.
+- **Visibility**: Azure evidence stays private; operators explicitly approve public incidents.
 
 ## Key conventions
 

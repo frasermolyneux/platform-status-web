@@ -5,14 +5,18 @@ Execution brief for coding agents. For architecture detail beyond this file, rea
 
 ## What this repo is
 
-Multi-site public status page: Astro static frontend on Azure Static Web Apps, backed
-by a .NET Azure Function App (BYOFA), with Terraform-managed Azure infrastructure.
+Multi-site public status page: Astro frontend served by an independent ASP.NET Core
+service, with durable local publications and PostgreSQL primary/standby persistence.
+Legacy Azure Functions and Terraform remain for shared domain reuse and retained
+Azure state; they are not the new runtime or an approved retirement operation.
 
 ## Archetype: mixed .NET + frontend/static + Terraform
 
 | Area | Path | Toolchain | Notes |
 |---|---|---|---|
 | Backend | `src/MX.Platform.Status.App/` | .NET 10 (`src/global.json` pins SDK `10.0.100`) | Isolated worker; `status-api` (HTTP) + `status-rollup` (Timer) |
+| Independent service | `src/MX.Platform.Status.Service/` | .NET 10 | Host-isolated public files, publisher, private evidence, Entra operations |
+| Container runtime | `Dockerfile`, `deployment/` | Docker + Python integration test | Non-root service and PostgreSQL images; local publications must survive database loss |
 | Tests | `src/MX.Platform.Status.Tests/` | .NET 10 via `dotnet test` | Backend only |
 | Frontend | `src/MX.Platform.Status.Web/` | Node 22.x, Astro 7 + vanilla TS | Maintained source: `src/pages/`, `src/client/`, `src/components/`. `dist/` is generated — gitignored, never hand-edit |
 | Infrastructure | `terraform/` | Terraform >= 1.15, AzureRM | SWA, Linux Function App, Storage, Key Vault, App Insights; remote-state from `platform-monitoring`/`platform-hosting` |

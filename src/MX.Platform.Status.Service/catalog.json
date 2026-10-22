@@ -1,0 +1,50 @@
+[
+  {
+    "site": {
+      "id": "mx",
+      "displayName": "Molyneux.IO Status",
+      "tagline": "Service availability and incident updates",
+      "domains": ["mxstatus.io"],
+      "links": [{"label": "Molyneux.IO", "href": "https://molyneux.io"}]
+    },
+    "components": {
+      "components": [
+        {"id": "mx.sitewatch.molyneux-me", "name": "Molyneux website", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "mx.sitewatch.geo-location-web", "name": "Geolocation website", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "mx.sitewatch.geo-location-api", "name": "Geolocation API", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "mx.sitewatch.bishopsbees", "name": "Bishops Bees", "kind": "leaf", "source": {"kind": "probe"}}
+      ]
+    },
+    "probes": {
+      "mx.sitewatch.molyneux-me": "https://www.molyneux.me/",
+      "mx.sitewatch.geo-location-web": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live",
+      "mx.sitewatch.geo-location-api": "https://app-geo-location-api-prd-swedencentral-6f10eaac01a0.azurewebsites.net/v1.0/health/live",
+      "mx.sitewatch.bishopsbees": "https://bishopsbees.co.uk/"
+    }
+  },
+  {
+    "site": {
+      "id": "xi",
+      "displayName": "XtremeIdiots Status",
+      "tagline": "Community service availability and incident updates",
+      "domains": ["status.xtremeidiots.com"],
+      "links": [{"label": "XtremeIdiots", "href": "https://www.xtremeidiots.com"}]
+    },
+    "components": {
+      "components": [
+        {"id": "xi.sitewatch.forums-web", "name": "Community forums", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "xi.sitewatch.portal-web", "name": "XtremeIdiots Portal", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "xi.sitewatch.repository-api-v1", "name": "Repository API v1", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "xi.sitewatch.repository-api-v2", "name": "Repository API v2", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "xi.sitewatch.redirect", "name": "Community redirects", "kind": "leaf", "source": {"kind": "probe"}}
+      ]
+    },
+    "probes": {
+      "xi.sitewatch.forums-web": "https://www.xtremeidiots.com/",
+      "xi.sitewatch.portal-web": "https://app-portal-web-prd-uksouth-fe584e15256a.azurewebsites.net/api/health/live",
+      "xi.sitewatch.repository-api-v1": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/live",
+      "xi.sitewatch.repository-api-v2": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/live",
+      "xi.sitewatch.redirect": "https://redirect.xtremeidiots.net/"
+    }
+  }
+]

@@ -1,0 +1,13 @@
+**/node_modules
+**/bin
+**/obj
+**/dist
+**/.astro
+**/.terraform
+.git
+.github
+data
+*.pfx
+*.pem
+*.key
+*.tfstate*
