@@ -133,10 +133,15 @@ def validate_preflight(plan):
            for resource in plan.get("resource_drift", [])):
         raise ValueError("Activation preflight must contain no unreviewed managed drift.")
     if "resource_changes" not in plan:
+        values = plan["planned_values"]
+        if "resources" not in values.get("root_module", {}):
+            values = plan["prior_state"]["values"]
+            print("No-change refresh-only plan: validating its saved prior state after the no-drift check.")
+            plan = dict(plan, planned_values=values)
         plan = dict(plan, resource_changes=[
             {"address": resource["address"], "mode": resource["mode"],
              "change": {"actions": ["no-op"], "after": resource["values"]}}
-            for resource in plan["planned_values"]["root_module"]["resources"]
+            for resource in values["root_module"]["resources"]
         ])
     managed = [resource for resource in plan["resource_changes"] if resource["mode"] == "managed"]
     if any(resource["change"]["actions"] != ["no-op"] for resource in managed):

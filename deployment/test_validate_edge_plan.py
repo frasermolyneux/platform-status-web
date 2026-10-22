@@ -75,6 +75,9 @@ class EdgePlanTests(unittest.TestCase):
             for resource in plan.pop("resource_changes")
         ]}
         self.assertEqual(validate_preflight(plan), 0)
+        plan["prior_state"] = {"values": plan.pop("planned_values")}
+        plan["planned_values"] = {"root_module": {}}
+        self.assertEqual(validate_preflight(plan), 0)
         plan["resource_drift"] = [{"mode": "managed", "change": {"actions": ["update"]}}]
         with self.assertRaises(ValueError):
             validate_preflight(plan)
