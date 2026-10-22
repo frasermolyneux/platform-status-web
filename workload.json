@@ -34,7 +34,7 @@
     },
     {
       "name": "platform-status-postgres",
-      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/postgres@sha256:ea31555ad85323d30e7889e9786fa95deb4730ba2058f0ac52debe3862cab454",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/postgres@sha256:fa036c6ec207ecfc522ab5169ddfe2ce0ce6ac308f628a4e0fe9cfd0f9eb7a0d",
       "runAs": "999:10001",
       "networks": ["database"],
       "mounts": [
