@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "workloadId": "platform-status-web",
+  "allowedMounts": [
+    {
+      "id": "publications",
+      "hostPath": "/srv/workloads/platform-status-web/publications",
+      "sourceType": "directory",
+      "readOnly": false
+    },
+    {
+      "id": "postgres",
+      "hostPath": "/srv/workloads/platform-status-web/postgres",
+      "sourceType": "directory",
+      "readOnly": false
+    },
+    {
+      "id": "configuration",
+      "hostPath": "/srv/workloads/platform-status-web/config",
+      "sourceType": "directory",
+      "readOnly": true
+    }
+  ],
+  "allowedSecrets": [
+    {
+      "id": "postgres-password",
+      "hostPath": "/etc/platform-workloads/platform-status-web/postgres-password",
+      "vaultName": "kv-platform-prd-0b924e",
+      "vaultSecret": "postgres-password",
+      "groupId": 10001,
+      "mode": "0640"
+    },
+    {
+      "id": "app-password",
+      "hostPath": "/etc/platform-workloads/platform-status-web/app-password",
+      "vaultName": "kv-platform-prd-0b924e",
+      "vaultSecret": "app-password",
+      "groupId": 10001,
+      "mode": "0640"
+    },
+    {
+      "id": "replication-password",
+      "hostPath": "/etc/platform-workloads/platform-status-web/replication-password",
+      "vaultName": "kv-platform-prd-0b924e",
+      "vaultSecret": "replication-password",
+      "groupId": 10001,
+      "mode": "0640"
+    }
+  ],
+  "allowedNetworks": [
+    {"name": "database", "internetAccess": true},
+    {"name": "public-proxy", "internetAccess": true, "externalName": "platform-ingress"}
+  ],
+  "allowedIngress": [
+    {
+      "scope": "tailscale",
+      "hostname": "status-database.mxstatus.io",
+      "containerPorts": [5432],
+      "bindAddress": "100.94.115.109",
+      "hostPort": 15432
+    }
+  ],
+  "resourceCeiling": {"cpus": 1, "memoryMb": 512, "pids": 128}
+}

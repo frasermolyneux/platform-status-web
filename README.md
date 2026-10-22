@@ -41,6 +41,22 @@ the database password from `DatabasePasswordFile`, defaulting to
 `/run/secrets/app-password`. Never put passwords in the runtime JSON.
 The database process runs as `999:10001`; the service runs as `10001:10001`.
 
+The root `workload.json` pins the published application and PostgreSQL digests and
+is identical on both origins. The platform supplies the different node roles,
+writer addresses, and Entra metadata through read-only configuration. The CI
+policy in `.github\validation\policy.json` mirrors the permitted mounts, secrets,
+networks, resource limits, and primary-node Tailscale binding; it does not grant
+host privileges. The standby host policy supplies its own bind address.
+The protected main release validates it with the pinned private platform
+compiler, fetched using a repository-scoped, read-only GitHub App token. Public
+pull-request jobs do not receive private platform source or credentials.
+
+The private database bridge needs outbound access for replication over Tailscale.
+PostgreSQL does not join the shared public-proxy network. Its only published port
+is Tailscale TCP 15432, further restricted to the peer origin by host and tailnet
+policy. `status-database.mxstatus.io` is the manifest's logical private ingress
+identifier, not a requirement to publish a public database DNS record.
+
 The database image requires read-only `/node` configuration files:
 `database-role` (`primary` or `standby`), `primary-host`, `primary-port`, and
 `peer-address` (the other origin's Tailscale IPv4 address). Mount its writable
@@ -95,9 +111,32 @@ draft privacy, writes through the standby application, local-cache survival afte
 database loss and application restart, and truthful staleness.
 
 Successful `main` CI publishes immutable images to the existing platform ACR.
+Manifest-only and documentation-only changes do not rebuild images while a source
+publication record is retained. Gating compares all inputs with the last recorded
+build source, not just the final commit, so skipped or overlapping CI runs cannot
+lose source changes. Missing or expired provenance requires one full publication;
+source-specific digest artifacts are retained for 90 days. Manual image
+publication can explicitly refresh base images. Published digests still require a
+reviewed `workload.json` update before origins pull them.
 Publishing an image does not enable a server deployment or change public DNS.
 Platform policies, secret access, ingress, approved digest manifests, Entra
 registration, and Cloudflare routing must be provisioned before cutover.
+
+Before the first host deployment, run **Bootstrap Status Database Credentials**
+from reviewed `main`. Its Production OIDC identity discovers the one tagged
+runtime vault in the status resource group and verifies the reviewed policy
+binding. It generates only missing database credentials directly into Key Vault,
+never prints or stores values in GitHub, and never rotates an existing password.
+Disabled or expiring credentials fail explicitly and require an operator-led
+database/secret recovery or rotation. The same vault serves both origins.
+
+**Renew Status Origin TLS** issues a 365-day Cloudflare Origin CA certificate
+for both public names using the narrowly scoped edge token. The private key
+stays local to the protected runner until the validated key/certificate pair is
+stored as the single `origin-tls` Key Vault secret. It runs weekly, retaining
+valid certificates until the final 30 days and never changing DNS or routing.
+Platform-owned proxy reconciliation installs the bundle atomically and restarts
+Caddy after validation. Old certificates are not revoked during a rolling update.
 
 The old Functions project and `terraform\` are retained as shared domain code and
 the existing Azure state definition. Automatic legacy deployment and development

@@ -9,7 +9,46 @@ on:
 permissions: {}
 
 jobs:
+  validate-contract:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.head_branch == 'main' &&
+         github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    environment: Production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Create read-only platform contract token
+        id: platform-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: platform-baremetal
+          permission-contents: read
+      - name: Check out approved private platform contract
+        uses: actions/checkout@v7
+        with:
+          repository: frasermolyneux/platform-baremetal
+          ref: 285d279cfd99bbc28498068246f8c0affe99b848
+          path: .platform-contract
+          token: ${{ steps.platform-token.outputs.token }}
+          persist-credentials: false
+      - name: Validate constrained workload contract
+        uses: ./.platform-contract/.github/actions/validate-workload-manifest
+        with:
+          policy-path: .github/validation/policy.json
+
   publish:
+    needs: validate-contract
     if: >-
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' ||
       github.event_name == 'workflow_run' &&
@@ -24,17 +63,27 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - name: Detect image input changes
+        id: inputs
+        env:
+          FORCE_PUBLISH: ${{ github.event_name == 'workflow_dispatch' }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deployment/image_inputs.py
       - uses: azure/login@v3
+        if: steps.inputs.outputs.publish == 'true'
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Publish immutable application and database images
+        if: steps.inputs.outputs.publish == 'true'
         env:
           IMAGE_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
         shell: bash
@@ -52,7 +101,8 @@ jobs:
             printf '%s\n' "$digest" >>"$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@v7
+        if: steps.inputs.outputs.publish == 'true'
         with:
-          name: status-image-digests
+          name: status-image-digests-${{ github.event.workflow_run.head_sha || github.sha }}
           path: "*-image.txt"
-          retention-days: 30
+          retention-days: 90
