@@ -110,10 +110,16 @@ jobs:
                   with urlopen(request, timeout=30) as response:
                       result = json.load(response)
               except HTTPError as error:
-                  details = json.load(error)
+                  try:
+                      details = json.load(error)
+                  except (json.JSONDecodeError, UnicodeDecodeError):
+                      diagnostic = "No structured JSON error details were returned."
+                  else:
+                      diagnostic = (json.dumps(details.get("errors", [])) if isinstance(details, dict)
+                                    else "The JSON error response was not an object.")
                   raise RuntimeError(
                       f"Cloudflare verification failed at {suffix}: HTTP {error.code}; "
-                      + json.dumps(details.get("errors", []))) from error
+                      + diagnostic) from error
               if result["success"] is not True:
                   raise RuntimeError("Cloudflare verification failed: " + json.dumps(result["errors"]))
               report = json.dumps(result["result"], indent=2)
