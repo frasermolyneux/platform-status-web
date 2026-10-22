@@ -133,6 +133,15 @@ class EdgePlanTests(unittest.TestCase):
         plan["resource_changes"][0]["change"]["after_unknown"] = {}
         self.assertEqual(validate_plan(plan, activate=True), 0)
 
+    def test_activation_accepts_provider_computed_nonrouting_metadata_only(self):
+        plan = activation_plan()
+        change = plan["resource_changes"][0]["change"]
+        for key, before in (("created_on", "creation-timestamp"), ("zone_name", "mxstatus.io")):
+            change["before"][key] = before
+            change["after"][key] = None
+            change["after_unknown"][key] = True
+        self.assertEqual(validate_plan(plan, activate=True), 0)
+
     def test_activation_rejects_unknown_optional_nested_and_other_resource_settings(self):
         for index, field, unknown in (
             (0, "adaptive_routing", True), (0, "country_pools", {"US": [True]}),

@@ -5,6 +5,9 @@ import json
 import sys
 
 
+COMPUTED_LB_METADATA = {"created_on", "modified_on", "zone_name"}
+
+
 def contains_unknown(value):
     if isinstance(value, dict):
         return any(contains_unknown(item) for item in value.values())
@@ -36,17 +39,18 @@ def validate_plan(plan, *, activate=False):
         if activate:
             unknowns = dict(change.get("after_unknown", {}))
             if resource["address"] == "cloudflare_load_balancer.status" and change["actions"] == ["update"]:
-                if unknowns.get("modified_on") is True:
-                    unknowns.pop("modified_on")
+                for key in COMPUTED_LB_METADATA:
+                    if unknowns.get(key) is True:
+                        unknowns.pop(key)
             if contains_unknown(unknowns):
-                raise ValueError(f"Activation requires known settings except the computed modification timestamp: {resource['address']}")
+                raise ValueError(f"Activation requires known settings except computed non-routing metadata: {resource['address']}")
         if activate and change["actions"] == ["update"]:
             before, after = change["before"], change["after"]
             if before["enabled"] is not False or after["enabled"] is not True:
                 raise ValueError("The only approved update enables the previously staged MX load balancer.")
             for key in before.keys() | after.keys():
                 if key == "enabled" or (
-                    key == "modified_on" and change.get("after_unknown", {}).get(key) is True
+                    key in COMPUTED_LB_METADATA and change.get("after_unknown", {}).get(key) is True
                 ):
                     continue
                 if before.get(key) != after.get(key):

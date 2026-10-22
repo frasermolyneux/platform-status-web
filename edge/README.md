@@ -59,6 +59,12 @@ exact-host strict TLS, exactly the two approved enabled equal-weight origins
 without Host overrides, one monitoring region, and strict 60-second HTTPS checks.
 An unchanged retry is safe; imports, creations, replacements, deletes, unrelated
 updates or extra resources stop for separate review.
+Cloudflare provider 5.22 marks omitted optional/computed routing defaults unknown
+on every update. Activation therefore preserves those staged defaults using
+explicit `ignore_changes`; it does not silently accept unknown routing. Altering
+these settings later requires a reviewed lifecycle/configuration change. Only
+the provider's computed creation/modification timestamps and zone-name metadata
+may remain unknown. Every behavior-affecting setting must be known and unchanged.
 Transient saved plans are removed even when a step fails.
 
 The `verify` operation only initializes the isolated state and reads the live
