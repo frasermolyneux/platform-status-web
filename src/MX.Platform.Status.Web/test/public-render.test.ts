@@ -3,18 +3,19 @@ import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { evidenceCards } from '../src/client/evidence';
 
-test('public announcements remain plain text across overview and incident views', async () => {
+test('public rendering keeps announcements plain text and incident excerpts readable', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
   for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
     Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
-  const { renderOverview, renderIncident } = await import('../src/client/render');
+  const { renderOverview, renderIncident, renderHistory } = await import('../src/client/render');
   const data = {
     schemaVersion: 1, site: { id: 'mx', displayName: 'MX status' }, generatedAt: '2026-10-23T08:00:00Z',
     summary: { status: 'operational' }, components: [], maintenance: [],
     banners: [{ id: 1, title: '<script>not executable</script>', message: '<img src=x onerror=alert(1)>', tone: 'warning' as const, updatedAt: '2026-10-23T08:00:00Z' }],
     incidents: [{
       id: 1, title: 'Incident', components: [], severity: 'outage', state: 'investigating', url: '/incident/1',
-      createdAt: '2026-10-23T08:00:00Z', updates: [],
+      createdAt: '2026-10-23T08:00:00Z',
+      updates: [{ at: '2026-10-23T08:00:00Z', state: 'investigating', body: 'Service unavailable<br>Next update at 10:00' }],
     }],
   };
   for (const render of [() => renderOverview(data), () => renderIncident(data, '1')]) {
@@ -23,6 +24,10 @@ test('public announcements remain plain text across overview and incident views'
     assert.equal(document.querySelector('.announcement img'), null);
     assert.match(document.querySelector('.announcement')?.textContent || '', /<script>not executable/);
     assert.match(document.querySelector('.announcement')?.textContent || '', /<img/);
+  }
+  for (const render of [renderOverview, renderHistory]) {
+    render(data);
+    assert.equal(document.querySelector('.incident-latest')?.textContent, 'Service unavailable Next update at 10:00');
   }
 });
 

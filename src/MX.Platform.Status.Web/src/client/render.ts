@@ -27,6 +27,7 @@ function announcements(data: StatusResponse): string {
 function excerpt(html: string): string {
   const content = document.createElement('div');
   content.innerHTML = safeHtml(html);
+  content.querySelectorAll('br').forEach(lineBreak => lineBreak.replaceWith(' '));
   const text = content.textContent || '';
   return escapeHtml(text.slice(0, 220)) + (text.length > 220 ? '...' : '');
 }
