@@ -230,7 +230,8 @@ public sealed partial class IndependentServiceTests
         {
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Status:TrafficConfigurationFile"] = configuration, ["Status:TrafficTokenFile"] = token
+                ["Status:TrafficConfigurationFile"] = configuration,
+                ["Status:TrafficTokenFile"] = token
             });
             builder.Services.AddSingleton<IHttpClientFactory>(edge);
         });
@@ -288,12 +289,16 @@ public sealed partial class IndependentServiceTests
             {
                 var zoneId = uri.AbsolutePath.Split('/')[4];
                 var rows = Routes.Values.Where(route => zoneId == new string('b', 32) || route.Pattern.StartsWith("www.xtremeidiots.com", StringComparison.Ordinal));
-                return Json(new { success = true, result = rows.Select(route =>
+                return Json(new
+                {
+                    success = true,
+                    result = rows.Select(route =>
                 {
                     var value = new Dictionary<string, object?> { ["id"] = route.Id, ["pattern"] = route.Pattern, ["script"] = route.Script };
                     if (ExposeFailureMode) value["request_limit_fail_open"] = route.RequestLimitFailOpen;
                     return value;
-                }) });
+                })
+                });
             }
             Mutations++;
             if (request.Method == HttpMethod.Delete)

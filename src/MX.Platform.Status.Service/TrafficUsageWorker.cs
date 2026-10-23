@@ -21,7 +21,9 @@ public sealed class TrafficUsageWorker(RuntimeOptions options, StatusCatalog cat
                     await database.SaveEvidenceAsync("cloudflare-workers-usage", configuration.AccountId, quota.ObservedAt,
                         JsonSerializer.SerializeToElement(new
                         {
-                            status, quota.Requests, quota.FreeDailyAllowance,
+                            status,
+                            quota.Requests,
+                            quota.FreeDailyAllowance,
                             summary = quota.Error ?? (quota.Warning
                                 ? "Workers account usage is approaching or exceeding the shared free daily allowance. Maintenance routes must remain fail closed."
                                 : "Workers account usage is below the warning threshold."),

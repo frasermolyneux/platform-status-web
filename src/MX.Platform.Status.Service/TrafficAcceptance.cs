@@ -10,7 +10,10 @@ public static class TrafficAcceptance
         var canary = configuration.Hosts.Single(host => host.Canary);
         if (catalog.Sites.SelectMany(site => site.Probes.Values).Any(target => new Uri(target).Host == canary.Hostname))
             throw new InvalidOperationException("Acceptance cannot intercept a monitored production application.");
-        var current = (await controller.ReadAsync(canary.Site, ct)).Hosts.Single(host => host.Hostname == canary.Hostname);
+        var workspace = await controller.ReadAsync(canary.Site, ct);
+        if (!restoreOnly && workspace.Quota?.Requests is null)
+            throw new InvalidDataException(workspace.Quota?.Error ?? "The live account usage estimate is unavailable.");
+        var current = workspace.Hosts.Single(host => host.Hostname == canary.Hostname);
         if (!restoreOnly && current.Mode != "normal")
             throw new InvalidOperationException("The isolated canary is already intercepted. Inspect it and explicitly restore before acceptance.");
         if (!restoreOnly) await RequireBaselineAsync();

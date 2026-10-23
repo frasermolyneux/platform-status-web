@@ -109,9 +109,13 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
         {
             logger.LogWarning(exception, "Traffic operation failed for {Hostname}; no automatic reopening is permitted.", hostname);
             using var auditTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await lease.SaveAsync(pending with { Phase = "failed", UpdatedAt = DateTimeOffset.UtcNow,
+            await lease.SaveAsync(pending with
+            {
+                Phase = "failed",
+                UpdatedAt = DateTimeOffset.UtcNow,
                 Error = exception is TrafficConflictException or InvalidDataException ? exception.Message
-                    : "The traffic change could not be confirmed. Refresh to inspect the live Cloudflare route; no automatic reopening was performed." }, auditTimeout.Token);
+                    : "The traffic change could not be confirmed. Refresh to inspect the live Cloudflare route; no automatic reopening was performed."
+            }, auditTimeout.Token);
             throw new TrafficConflictException("The traffic change could not be confirmed. Refresh to inspect the live route. Maintenance was not automatically removed.");
         }
     }
