@@ -10,6 +10,8 @@ public sealed record TrafficRoute(string Id, string Pattern, string? Script, boo
 
 public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions options, ILogger<CloudflareTraffic> logger)
 {
+    private static readonly Uri ApiRoot = new UriBuilder(Uri.UriSchemeHttps, "api.cloudflare.com", -1, "/client/v4/").Uri;
+
     private async Task<AuthenticationHeaderValue> AuthorizationAsync(CancellationToken ct)
     {
         var token = (await File.ReadAllTextAsync(options.TrafficTokenFile
@@ -23,7 +25,7 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
     private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct,
         Func<CancellationToken, Task>? requireLease = null)
     {
-        using var request = new HttpRequestMessage(method, "https://api.cloudflare.com/client/v4/" + path);
+        using var request = new HttpRequestMessage(method, new Uri(ApiRoot, path));
         request.Headers.Authorization = await AuthorizationAsync(ct);
         if (body is not null) request.Content = JsonContent.Create(body);
         if (requireLease is not null) await requireLease(ct);
@@ -101,7 +103,7 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
         if (mode == "normal")
         {
             if (previous is not null)
-                await SendAsync(HttpMethod.Delete, path + "/" + previous.Id, null, ct, requireLease);
+                await SendAsync(HttpMethod.Delete, $"{path}/{previous.Id}", null, ct, requireLease);
             return;
         }
         var payload = new { pattern = host.Hostname + "/*", script = configuration.Scripts[mode], request_limit_fail_open = false };
@@ -114,9 +116,9 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
                 || installed[0].Script != configuration.Scripts[mode])
                 throw new TrafficConflictException("The created route changed before fail-closed verification. No later route was overwritten.");
             // The provider omits this API flag; explicitly set and read it back rather than trusting defaults.
-            await SendAsync(HttpMethod.Put, path + "/" + id, payload, ct, requireLease);
+            await SendAsync(HttpMethod.Put, $"{path}/{id}", payload, ct, requireLease);
         }
-        else await SendAsync(HttpMethod.Put, path + "/" + previous.Id, payload, ct, requireLease);
+        else await SendAsync(HttpMethod.Put, $"{path}/{previous.Id}", payload, ct, requireLease);
     }
 
     public async Task<(bool Matches, int Status)> ProbeAsync(TrafficHost host, string mode, string statusUrl, CancellationToken ct)
@@ -142,7 +144,7 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cloudflare.com/client/v4/graphql");
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiRoot, "graphql"));
             request.Headers.Authorization = await AuthorizationAsync(ct);
             var start = DateTimeOffset.UtcNow.Date.ToString("yyyy-MM-dd'T'00:00:00'Z'", System.Globalization.CultureInfo.InvariantCulture);
             request.Content = JsonContent.Create(new

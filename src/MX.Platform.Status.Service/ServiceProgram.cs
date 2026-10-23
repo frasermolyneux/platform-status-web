@@ -22,11 +22,7 @@ public static class ServiceProgram
     {
         if (args is ["--healthcheck"])
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            var healthUri = new UriBuilder(Uri.UriSchemeHttp, IPAddress.Loopback.ToString(), 8080, "/health/ready").Uri;
-            try { return (await client.GetAsync(healthUri)).IsSuccessStatusCode ? 0 : 1; }
-            catch (HttpRequestException) { return 1; }
-            catch (TaskCanceledException) { return 1; }
+            return await HealthcheckAsync();
         }
         if (args is ["--verify-maintenance-edge"] or ["--restore-maintenance-canary"])
         {
@@ -55,6 +51,15 @@ public static class ServiceProgram
         }
         await Build(args).RunAsync();
         return 0;
+    }
+
+    private static async Task<int> HealthcheckAsync()
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        var healthUri = new UriBuilder(Uri.UriSchemeHttp, IPAddress.Loopback.ToString(), 8080, "/health/ready").Uri;
+        try { return (await client.GetAsync(healthUri)).IsSuccessStatusCode ? 0 : 1; }
+        catch (HttpRequestException) { return 1; }
+        catch (TaskCanceledException) { return 1; }
     }
 
     public static WebApplication Build(string[] args, Action<WebApplicationBuilder>? configure = null)
@@ -155,15 +160,7 @@ public static class ServiceProgram
             .RequireAuthorization(ReaderPolicy);
         app.MapPost("/api/ops/traffic/{hostname}", async (string hostname, TrafficCommand command, HttpContext context,
             TrafficController traffic, CancellationToken ct) =>
-        {
-            if (command.Validate(hostname) is { } error) return Results.BadRequest(new { error });
-            try
-            {
-                return Results.Ok(await traffic.ChangeAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, hostname,
-                    command, context.User.FindFirstValue("oid")!, ct));
-            }
-            catch (TrafficConflictException exception) { return Results.Conflict(new { error = exception.Message }); }
-        }).RequireAuthorization("traffic-operator");
+            await SaveTrafficAsync(hostname, command, context, traffic, catalog, ct)).RequireAuthorization("traffic-operator");
         app.MapPost("/api/ops/banners", (HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
             SaveBannerAsync(context, command, null, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPut("/api/ops/banners/{id:int}", (int id, HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
@@ -204,6 +201,18 @@ public static class ServiceProgram
             }
             await next();
         });
+    }
+
+    private static async Task<IResult> SaveTrafficAsync(string hostname, TrafficCommand command, HttpContext context,
+        TrafficController traffic, StatusCatalog catalog, CancellationToken ct)
+    {
+        if (command.Validate(hostname) is { } error) return Results.BadRequest(new { error });
+        try
+        {
+            return Results.Ok(await traffic.ChangeAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, hostname,
+                command, context.User.FindFirstValue("oid")!, ct));
+        }
+        catch (TrafficConflictException exception) { return Results.Conflict(new { error = exception.Message }); }
     }
 
     private static void ConfigureIdentity(IServiceCollection services, RuntimeOptions options)
