@@ -3,8 +3,7 @@ namespace MX.Platform.Status.Service;
 public sealed class TrafficController(RuntimeOptions options, StatusCatalog catalog, PostgresStore database,
     CloudflareTraffic cloudflare, ILogger<TrafficController> logger)
 {
-    private TrafficConfiguration? Configuration => options.TrafficConfigurationFile is null || options.TrafficTokenFile is null
-        ? null : TrafficConfiguration.Read(options.TrafficConfigurationFile, catalog);
+    private TrafficConfiguration? Configuration => TrafficConfiguration.Read(options, catalog);
 
     private string StatusUrl(TrafficHost host) => $"https://{catalog.Get(host.Site).Site.Domains[0]}/";
 
@@ -33,7 +32,8 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
         var mode = route is null ? "normal" : configuration.Scripts.Single(script => script.Value == route.Script).Key;
         if (route is not null && route.RequestLimitFailOpen != false)
             return new(host.Hostname, mode, "unsafe", false, route.Id, record?.Revision ?? 0, StatusUrl(host), null,
-                "Fail-closed behaviour is not confirmed. Review the route failure mode in Cloudflare before relying on maintenance.", record);
+                "Fail-closed behaviour is not confirmed. Review the route failure mode in Cloudflare before relying on maintenance.", record,
+                CloudflareTraffic.Fingerprint(route));
         var verified = route is null;
         int? status = null;
         string? error = null;
@@ -54,7 +54,8 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
             if (state == "unconfirmed") error ??= "A previous operation did not record completion. Review the live route before explicitly retrying or restoring.";
         }
         if (record?.Phase == "failed") error ??= record.Error;
-        return new(host.Hostname, mode, state, verified, route?.Id, record?.Revision ?? 0, StatusUrl(host), status, error, record);
+        return new(host.Hostname, mode, state, verified, route?.Id, record?.Revision ?? 0, StatusUrl(host), status, error, record,
+            CloudflareTraffic.Fingerprint(route));
     }
 
     public async Task<TrafficRow> ChangeAsync(string site, string hostname, TrafficCommand command, string actor, CancellationToken ct)
@@ -68,12 +69,15 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
         var previous = await lease.ReadAsync(hostname, ct);
         if (command.Revision != (previous?.Revision ?? 0))
             throw new TrafficConflictException("The traffic control changed. Refresh before submitting another operation.");
+        if (previous?.Phase is "enabling" or "restoring"
+            && DateTimeOffset.UtcNow - previous.UpdatedAt < TimeSpan.FromMinutes(2))
+            throw new TrafficConflictException("A previous traffic operation is still within its bounded reconciliation window. Refresh before retrying.");
         var routes = await cloudflare.RoutesAsync(host.ZoneId, ct);
         var affected = routes.Where(route => CloudflareTraffic.AffectsHost(route, hostname)).ToArray();
         if (affected.Any(route => !CloudflareTraffic.Owned(route, host, configuration)) || affected.Length > 1)
             throw new TrafficConflictException("Another Worker route affects this hostname. It will not be overwritten.");
         var current = affected.SingleOrDefault();
-        if (command.RouteId != current?.Id)
+        if (command.RouteId != current?.Id || command.RouteFingerprint != CloudflareTraffic.Fingerprint(current))
             throw new TrafficConflictException("The live Cloudflare route changed outside this view. Refresh before changing traffic.");
         var pending = new TrafficRecord(hostname, site, (previous?.Revision ?? 0) + 1, command.Mode,
             command.Mode == "normal" ? "restoring" : "enabling", actor, command.Reason.Trim(), current?.Id, DateTimeOffset.UtcNow);
@@ -83,39 +87,50 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
         try
         {
             if (command.Mode != "normal") await cloudflare.RequireProxiedAsync(host, operation.Token);
-            await cloudflare.SetAsync(host, current, command.Mode, configuration, operation.Token);
+            await cloudflare.SetAsync(host, current, command.Mode, configuration,
+                token => lease.RequireOwnershipAsync(pending, token), operation.Token);
             TrafficRow? result = null;
             for (var attempt = 0; attempt < 6; attempt++)
             {
                 var updated = await cloudflare.RoutesAsync(host.ZoneId, operation.Token);
                 result = await RowAsync(host, updated, null, configuration, operation.Token);
                 if (result.State is "unsafe" or "conflict") throw new InvalidDataException(result.Error);
+                if (result.Mode == "normal" && command.Mode == "normal")
+                {
+                    var probe = await cloudflare.ProbeAsync(host, "normal", StatusUrl(host), operation.Token);
+                    result = result with { Verified = probe.Matches, HttpStatus = probe.Status };
+                }
                 if (result.Mode == command.Mode && result.Verified && result.State is "normal" or "active") break;
                 await Task.Delay(TimeSpan.FromSeconds(2), operation.Token);
             }
             if (result is null || result.Mode != command.Mode || !result.Verified)
                 throw new InvalidDataException("The requested edge response is not confirmed. No automatic rollback or reopening was performed; refresh to inspect the live route.");
-            if (command.Mode == "normal")
-            {
-                var verified = await cloudflare.ProbeAsync(host, "normal", StatusUrl(host), operation.Token);
-                if (!verified.Matches) throw new InvalidDataException("The route was removed, but the public response still shows maintenance. Refresh after edge propagation.");
-            }
             var completed = pending with { Phase = command.Mode == "normal" ? "normal" : "active", RouteId = result.RouteId, UpdatedAt = DateTimeOffset.UtcNow };
+            await lease.RequireOwnershipAsync(pending, operation.Token);
             await lease.SaveAsync(completed, operation.Token);
             return result with { Revision = completed.Revision, LastOperation = completed };
         }
         catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or InvalidDataException
-            or UnauthorizedAccessException or TrafficConflictException or System.Text.Json.JsonException)
+            or UnauthorizedAccessException or TrafficConflictException or System.Text.Json.JsonException or Npgsql.NpgsqlException)
         {
             logger.LogWarning(exception, "Traffic operation failed for {Hostname}; no automatic reopening is permitted.", hostname);
             using var auditTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await lease.SaveAsync(pending with
+            try
             {
-                Phase = "failed",
-                UpdatedAt = DateTimeOffset.UtcNow,
-                Error = exception is TrafficConflictException or InvalidDataException ? exception.Message
-                    : "The traffic change could not be confirmed. Refresh to inspect the live Cloudflare route; no automatic reopening was performed."
-            }, auditTimeout.Token);
+                await lease.RequireOwnershipAsync(pending, auditTimeout.Token);
+                await lease.SaveAsync(pending with
+                {
+                    Phase = "failed",
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    Error = exception is TrafficConflictException or InvalidDataException ? exception.Message
+                        : "The traffic change could not be confirmed. Refresh to inspect the live Cloudflare route; no automatic reopening was performed."
+                }, auditTimeout.Token);
+            }
+            catch (Exception auditFailure) when (auditFailure is Npgsql.NpgsqlException or TrafficConflictException
+                or InvalidOperationException or OperationCanceledException)
+            {
+                logger.LogWarning(auditFailure, "Traffic failure completion could not be recorded for {Hostname}; the durable intent remains unconfirmed and no newer operation is overwritten.", hostname);
+            }
             throw new TrafficConflictException("The traffic change could not be confirmed. Refresh to inspect the live route. Maintenance was not automatically removed.");
         }
     }

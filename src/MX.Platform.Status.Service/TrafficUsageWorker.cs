@@ -8,13 +8,14 @@ public sealed class TrafficUsageWorker(RuntimeOptions options, StatusCatalog cat
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Publisher || options.TrafficConfigurationFile is null || options.TrafficTokenFile is null) return;
+        if (!options.Publisher || options.TrafficConfigurationFile is null && options.TrafficTokenFile is null) return;
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(15));
         do
         {
             try
             {
-                var configuration = TrafficConfiguration.Read(options.TrafficConfigurationFile, catalog);
+                var configuration = TrafficConfiguration.Read(options, catalog)
+                    ?? throw new InvalidDataException("Traffic controls are not configured.");
                 var quota = await cloudflare.QuotaAsync(configuration.AccountId, stoppingToken);
                 var status = quota.Error is not null ? "unavailable" : quota.Warning ? "warning" : "healthy";
                 if (await database.IsWritableAsync(stoppingToken))

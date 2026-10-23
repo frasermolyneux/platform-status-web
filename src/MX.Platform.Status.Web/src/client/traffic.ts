@@ -7,6 +7,7 @@ interface TrafficRow {
   state: string;
   verified: boolean;
   routeId: string | null;
+  routeFingerprint: string | null;
   revision: number;
   statusUrl: string;
   httpStatus: number | null;
@@ -21,13 +22,14 @@ interface TrafficWorkspace {
 }
 
 export async function renderTraffic(root: HTMLElement, request: (path: string, init?: RequestInit) => Promise<Response>,
-  canControl: boolean, writable: boolean, current: () => boolean): Promise<void> {
+  canControl: boolean, writable: () => boolean, current: () => boolean): Promise<() => Promise<void>> {
   const notice = element('p', 'Loading live Cloudflare traffic controls...', 'operator-notice');
   notice.setAttribute('role', 'status');
   const list = element('div', undefined, 'traffic-hosts');
   const editor = element('section', undefined, 'editor-panel');
   editor.hidden = true;
   const quota = element('p', undefined, 'operator-notice');
+  const writerNotice = element('p', 'The audit writer is unavailable. Changes are disabled; use the documented Cloudflare dashboard override for an emergency.', 'operator-notice error');
   let changing = false;
   let workspace: TrafficWorkspace;
   const refresh = button('Refresh traffic controls', () => {
@@ -39,7 +41,8 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
     link('Manage public announcements', '/ops/banners'), document.createTextNode(' / '),
     link('Manage incidents and maintenance', '/ops/incidents'), quota, refresh, notice, editor, list);
   if (!canControl) root.insertBefore(element('p', 'Changing traffic requires both Status.Operator and the separately assigned Status.TrafficOperator role. Sign in again after a role assignment.', 'operator-notice'), refresh);
-  if (!writable) root.insertBefore(element('p', 'The audit writer is unavailable. Changes are disabled; use the documented Cloudflare dashboard override for an emergency.', 'operator-notice error'), refresh);
+  root.insertBefore(writerNotice, refresh);
+  writerNotice.hidden = writable();
 
   function showError(error: unknown): void {
     if (!current()) return;
@@ -48,6 +51,7 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
   }
 
   function render(): void {
+    writerNotice.hidden = writable();
     list.replaceChildren();
     if (!workspace.enabled) {
       notice.textContent = 'Traffic controls are not configured on this deployment.';
@@ -72,12 +76,12 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
       }
       const actions = element('div', undefined, 'operator-actions');
       const enable = button(host.mode === 'normal' ? 'Enable maintenance' : 'Change maintenance', () => open(host, false));
-      enable.disabled = !canControl || !writable || changing || host.mode === 'conflict';
+      enable.disabled = !canControl || !writable() || changing || host.mode === 'conflict';
       enable.setAttribute('aria-label', `Configure maintenance for ${host.hostname}`);
       actions.append(enable);
       if (host.mode !== 'normal' && host.mode !== 'conflict') {
         const restore = button('Restore traffic', () => open(host, true));
-        restore.disabled = !canControl || !writable || changing;
+        restore.disabled = !canControl || !writable() || changing;
         restore.setAttribute('aria-label', `Restore traffic for ${host.hostname}`);
         actions.append(restore);
       }
@@ -135,7 +139,8 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
       refresh.disabled = true;
       render();
       const fields = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>('input,select,textarea,button'));
-      const body = JSON.stringify({ mode: mode.value, reason: reason.value, confirmation: confirmation.value, revision: host.revision, routeId: host.routeId });
+      const body = JSON.stringify({ mode: mode.value, reason: reason.value, confirmation: confirmation.value,
+        revision: host.revision, routeId: host.routeId, routeFingerprint: host.routeFingerprint });
       fields.forEach(control => { control.disabled = true; });
       notice.className = 'operator-notice';
       notice.textContent = `${restoring ? 'Restoring traffic' : 'Enabling maintenance'} for ${host.hostname}. Waiting for Cloudflare and public verification...`;
@@ -169,4 +174,8 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
     await load();
     if (current() && workspace!.enabled) notice.textContent = 'Live Cloudflare configuration loaded. No traffic is changed until you explicitly confirm an operation.';
   } catch (error) { showError(error); }
+  return async () => {
+    if (changing) { render(); return; }
+    try { await load(); } catch (error) { showError(error); }
+  };
 }

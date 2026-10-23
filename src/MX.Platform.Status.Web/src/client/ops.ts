@@ -160,6 +160,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     let runtime: Runtime = await runtimeResponse.json();
     let evidence: EvidenceRecord[] = await evidenceResponse.json();
     let health: ComponentHealth[] = await healthResponse.json();
+    let refreshTraffic: (() => Promise<void>) | undefined;
     const evidenceDraftPrefix = `status-evidence-draft:${account.homeAccountId}:${status.site.id}:`;
     const overview = element('div', undefined, 'operator-stats');
     const editor = element('section', undefined, 'editor-panel');
@@ -583,7 +584,10 @@ export async function renderOperations(navigateTo: (path: string) => void = path
           request('/api/ops/incidents'), request('/api/ops/banners'), request('/api/ops/runtime'), request('/api/ops/evidence'), request('/api/ops/health'),
         ]);
         [incidents, banners, runtime, evidence, health] = await Promise.all(responses.map(response => response.json()));
-        if (current()) renderLists();
+        if (current()) {
+          renderLists();
+          await refreshTraffic?.();
+        }
       } catch (error) {
         message(error instanceof Error ? error.message : 'The workspace could not be refreshed.', true);
         throw error;
@@ -593,7 +597,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     if (page === 'traffic') {
       const trafficSection = element('section', undefined, 'panel');
       root.append(trafficSection);
-      await renderTraffic(trafficSection, request, canWrite && Array.isArray(roles) && roles.includes('Status.TrafficOperator'), runtime.writable, current);
+      refreshTraffic = await renderTraffic(trafficSection, request,
+        canWrite && Array.isArray(roles) && roles.includes('Status.TrafficOperator'), () => runtime.writable, current);
     }
     const draftId = new URLSearchParams(location.search).get('draft');
     if (page === 'incidents' && draftId) {

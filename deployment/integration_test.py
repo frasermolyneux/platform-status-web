@@ -8,6 +8,7 @@ import secrets
 import subprocess
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -250,11 +251,21 @@ def main():
                 f"Host=127.0.0.1;Port={connection_port};Database=status;Username=status_app;"
                 f"Password={credentials['app-password']}"
             )
+            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "ProbeDiagnosticsPersist",
+                            "TrafficControlsPersist", "TrafficFailuresRemain", "TrafficConcurrencyRejects")
+            native_results = root / "native-results"
             subprocess.run([
                 "dotnet", "test", "src/MX.Platform.Status.Tests/MX.Platform.Status.Tests.csproj",
                 "--configuration", "Release", "--no-build", "--nologo",
-                "--filter", "FullyQualifiedName~BannerApiPersists|FullyQualifiedName~GitHubSourceKeeps|FullyQualifiedName~ProbeDiagnosticsPersist|FullyQualifiedName~TrafficControlsPersist|FullyQualifiedName~TrafficFailuresRemain",
+                "--filter", "|".join(f"FullyQualifiedName~{name}" for name in native_cases),
+                "--logger", "trx;LogFileName=native-status.trx", "--results-directory", str(native_results),
             ], check=True, env=integration_environment)
+            results = ET.parse(native_results / "native-status.trx").findall(".//{*}UnitTestResult")
+            assert len(results) == len(native_cases), "Every required native PostgreSQL case must execute."
+            for name in native_cases:
+                matches = [result for result in results if result.attrib["testName"].split(".")[-1].startswith(name)]
+                assert len(matches) == 1 and matches[0].attrib["outcome"] == "Passed", name
+            print(f"All {len(native_cases)} required native PostgreSQL cases executed and passed without skips.")
             command = {
                 "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],
                 "severity": "outage", "state": "investigating",

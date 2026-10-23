@@ -13,6 +13,14 @@ public sealed record TrafficConfiguration
     public Dictionary<string, string> Scripts { get; init; } = [];
     public TrafficHost[] Hosts { get; init; } = [];
 
+    public static TrafficConfiguration? Read(RuntimeOptions options, StatusCatalog catalog)
+    {
+        if (options.TrafficConfigurationFile is null && options.TrafficTokenFile is null) return null;
+        if (string.IsNullOrWhiteSpace(options.TrafficConfigurationFile) || string.IsNullOrWhiteSpace(options.TrafficTokenFile))
+            throw new InvalidDataException("Traffic configuration and credential file paths must be configured together.");
+        return Read(options.TrafficConfigurationFile, catalog);
+    }
+
     public static TrafficConfiguration Read(string path, StatusCatalog catalog)
     {
         var configuration = JsonSerializer.Deserialize<TrafficConfiguration>(File.ReadAllText(path), StatusJson.Options)
@@ -41,7 +49,8 @@ public sealed record TrafficConfiguration
     }
 }
 
-public sealed record TrafficCommand(string Mode, string Reason, string Confirmation, int Revision = 0, string? RouteId = null)
+public sealed record TrafficCommand(string Mode, string Reason, string Confirmation, int Revision = 0, string? RouteId = null,
+    string? RouteFingerprint = null)
 {
     public string? Validate(string hostname) =>
         Mode is not ("normal" or "page" or "redirect") ? "Choose normal traffic, a maintenance page, or a temporary browser redirect."
@@ -55,7 +64,7 @@ public sealed record TrafficRecord(string Hostname, string Site, int Revision, s
     string Actor, string Reason, string? RouteId, DateTimeOffset UpdatedAt, string? Error = null);
 
 public sealed record TrafficRow(string Hostname, string Mode, string State, bool Verified, string? RouteId,
-    int Revision, string StatusUrl, int? HttpStatus, string? Error, TrafficRecord? LastOperation);
+    int Revision, string StatusUrl, int? HttpStatus, string? Error, TrafficRecord? LastOperation, string? RouteFingerprint = null);
 
 public sealed record TrafficQuota(long? Requests, DateTimeOffset ObservedAt, string? Error)
 {

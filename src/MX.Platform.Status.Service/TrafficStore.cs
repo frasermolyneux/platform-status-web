@@ -41,6 +41,25 @@ public sealed partial class PostgresStore
 
     public sealed class TrafficLease(NpgsqlConnection connection) : IAsyncDisposable
     {
+        public async Task RequireOwnershipAsync(TrafficRecord pending, CancellationToken ct)
+        {
+            if (connection.State != System.Data.ConnectionState.Open)
+                throw new TrafficConflictException("The traffic lease connection was lost. No further mutation is permitted.");
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS(SELECT FROM pg_locks
+                    WHERE locktype='advisory' AND granted AND pid=pg_backend_pid()
+                    AND classid=814233110::oid AND objsubid=2
+                    AND objid=(hashtext($1)::bigint & 4294967295)::oid)
+                AND EXISTS(SELECT FROM status_traffic WHERE hostname=$1
+                    AND (document->>'revision')::integer=$2 AND document->>'phase'=$3)
+                """, connection);
+            command.Parameters.AddWithValue(pending.Hostname);
+            command.Parameters.AddWithValue(pending.Revision);
+            command.Parameters.AddWithValue(pending.Phase);
+            if (!(bool)(await command.ExecuteScalarAsync(ct))!)
+                throw new TrafficConflictException("The traffic lease or intent changed. No stale operation may mutate the edge.");
+        }
+
         public async Task<TrafficRecord?> ReadAsync(string hostname, CancellationToken ct)
         {
             await using var command = new NpgsqlCommand("SELECT document::text FROM status_traffic WHERE hostname=$1", connection);
@@ -74,8 +93,11 @@ public sealed partial class PostgresStore
             // Session locks must not survive return to the connection pool.
             try
             {
-                await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", connection);
-                await command.ExecuteNonQueryAsync();
+                if (connection.State == System.Data.ConnectionState.Open)
+                {
+                    await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", connection);
+                    await command.ExecuteNonQueryAsync();
+                }
             }
             finally { await connection.DisposeAsync(); }
         }

@@ -5,8 +5,8 @@ public static class TrafficAcceptance
     public static async Task RunAsync(RuntimeOptions options, StatusCatalog catalog, TrafficController controller,
         IHttpClientFactory clients, bool restoreOnly, CancellationToken ct)
     {
-        var configuration = TrafficConfiguration.Read(options.TrafficConfigurationFile
-            ?? throw new InvalidOperationException("Traffic controls are not configured."), catalog);
+        var configuration = TrafficConfiguration.Read(options, catalog)
+            ?? throw new InvalidOperationException("Traffic controls are not configured.");
         var canary = configuration.Hosts.Single(host => host.Canary);
         if (catalog.Sites.SelectMany(site => site.Probes.Values).Any(target => new Uri(target).Host == canary.Hostname))
             throw new InvalidOperationException("Acceptance cannot intercept a monitored production application.");
@@ -20,7 +20,7 @@ public static class TrafficAcceptance
         foreach (var mode in restoreOnly ? new[] { "normal" } : new[] { "page", "redirect", "normal" })
         {
             current = await controller.ChangeAsync(canary.Site, canary.Hostname,
-                new(mode, "Isolated maintenance canary acceptance", canary.Hostname, current.Revision, current.RouteId),
+                new(mode, "Isolated maintenance canary acceptance", canary.Hostname, current.Revision, current.RouteId, current.RouteFingerprint),
                 "acceptance:local-administrator", ct);
             if (mode != "normal")
             {

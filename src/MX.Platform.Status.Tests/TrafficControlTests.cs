@@ -74,6 +74,22 @@ public sealed partial class IndependentServiceTests
         Assert.True(edge.VerificationWasAnonymous);
     }
 
+    [Fact]
+    public async Task PartialTrafficConfigurationFailsPrivatelyWithoutStoppingPublicPublications()
+    {
+        await using var app = Build(configuredIdentity: true, configure: builder =>
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Status:TrafficTokenFile"] = "configured-without-registry"
+            }));
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Host = "mxstatus.io";
+        client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Reader", "Status.Access", _ingestor));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.GetAsync("/api/ops/traffic")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/status")).StatusCode);
+    }
+
     [PostgresFact]
     public async Task TrafficControlsPersistAuditsFenceOperationsAndFollowLiveCloudflareState()
     {
@@ -100,7 +116,13 @@ public sealed partial class IndependentServiceTests
             Assert.Equal(2, edge.Mutations);
             Assert.False(edge.Routes.Single().Value.RequestLimitFailOpen);
             Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + hostname, command)).StatusCode);
-            var restore = command with { Mode = "normal", Revision = active.Revision, RouteId = active.RouteId };
+            var restore = command with
+            {
+                Mode = "normal",
+                Revision = active.Revision,
+                RouteId = active.RouteId,
+                RouteFingerprint = active.RouteFingerprint
+            };
             await using (var lease = await database.TryTrafficLockAsync(hostname, default))
             {
                 Assert.NotNull(lease);
@@ -111,6 +133,7 @@ public sealed partial class IndependentServiceTests
             Assert.Single(other.Hosts);
             Assert.Equal("normal", other.Hosts[0].Mode);
             client.DefaultRequestHeaders.Host = "mxstatus.io";
+            edge.StaleNormalResponses = 1;
             response = await client.PostAsJsonAsync("/api/ops/traffic/" + hostname, restore);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Empty(edge.Routes);
@@ -211,7 +234,141 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("unsafe", row.State);
             edge.ExposeFailureMode = true;
             var restored = await client.PostAsJsonAsync("/api/ops/traffic/bishopsbees.co.uk",
-                command with { Mode = "normal", Revision = 1, RouteId = edge.Routes.Single().Key });
+                command with
+                {
+                    Mode = "normal",
+                    Revision = 1,
+                    RouteId = edge.Routes.Single().Key,
+                    RouteFingerprint = CloudflareTraffic.Fingerprint(edge.Routes.Single().Value)
+                });
+            Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+            Assert.Empty(edge.Routes);
+            var pending = new TrafficRecord(command.Confirmation, "mx", 3, "page", "enabling",
+                _ingestor.ToString(), "Interrupted operation", null, DateTimeOffset.UtcNow);
+            await using (var lease = await database.TryTrafficLockAsync(command.Confirmation, default))
+                await lease!.SaveAsync(pending, default);
+            var mutations = edge.Mutations;
+            var retry = await client.PostAsJsonAsync("/api/ops/traffic/" + command.Confirmation, command with { Revision = 3 });
+            Assert.Equal(HttpStatusCode.Conflict, retry.StatusCode);
+            Assert.Contains("reconciliation window", await retry.Content.ReadAsStringAsync());
+            Assert.Equal(mutations, edge.Mutations);
+            await using (var lease = await database.TryTrafficLockAsync(command.Confirmation, default))
+                await lease!.SaveAsync(pending with { UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-3) }, default);
+            var resumed = await client.PostAsJsonAsync("/api/ops/traffic/" + command.Confirmation, command with { Revision = 3 });
+            Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+        }
+        finally { await CleanupTrafficAsync(); }
+    }
+
+    [Fact]
+    public async Task MalformedTrafficCredentialsArePrivateUnavailabilityWithoutAnApiRequest()
+    {
+        using var edge = new TrafficHttp();
+        var tokenFile = Path.Combine(_directory, "traffic-token");
+        await File.WriteAllTextAsync(tokenFile, "malformed\ncredential");
+        var api = new CloudflareTraffic(edge, new() { TrafficTokenFile = tokenFile }, NullLogger<CloudflareTraffic>.Instance);
+        var quota = await api.QuotaAsync(new('a', 32), default);
+        Assert.Null(quota.Requests);
+        Assert.NotNull(quota.Error);
+        Assert.Equal(0, edge.ApiCalls);
+    }
+
+    [PostgresFact]
+    public async Task TrafficConcurrencyRejectsDashboardEditsAndStopsAfterLeaseSessionLoss()
+    {
+        using var edge = new TrafficHttp();
+        await using var app = BuildTraffic(edge);
+        await app.StartAsync();
+        var database = app.Services.GetRequiredService<PostgresStore>();
+        await database.InitializeAsync(default);
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Host = "mxstatus.io";
+        client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Operator Status.TrafficOperator", "Status.Access", _ingestor));
+        const string host = "bishopsbees.co.uk";
+        var command = new TrafficCommand("page", "Concurrency regression", host);
+        try
+        {
+            var enabled = await client.PostAsJsonAsync("/api/ops/traffic/" + host, command);
+            Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+            var active = (await enabled.Content.ReadFromJsonAsync<TrafficRow>(StatusJson.Options))!;
+            edge.Routes[active.RouteId!] = edge.Routes[active.RouteId!] with { Script = "platform-maintenance-redirect" };
+            var stale = command with
+            {
+                Mode = "normal",
+                Revision = active.Revision,
+                RouteId = active.RouteId,
+                RouteFingerprint = active.RouteFingerprint
+            };
+            Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + host, stale)).StatusCode);
+            Assert.Equal("platform-maintenance-redirect", edge.Routes[active.RouteId!].Script);
+            Assert.Equal(2, edge.Mutations);
+
+            var refreshed = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
+            edge.BeforeApi = request =>
+            {
+                if (request.RequestUri!.AbsolutePath.EndsWith("/dns_records", StringComparison.Ordinal))
+                {
+                    edge.Routes[active.RouteId!] = edge.Routes[active.RouteId!] with
+                    { Pattern = "unregistered.example/*", Script = "foreign-worker" };
+                    edge.BeforeApi = null;
+                }
+                return Task.CompletedTask;
+            };
+            var changed = await client.PostAsJsonAsync("/api/ops/traffic/" + host,
+                command with { Revision = refreshed.Revision, RouteId = refreshed.RouteId, RouteFingerprint = refreshed.RouteFingerprint });
+            Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
+            Assert.Equal("foreign-worker", edge.Routes[active.RouteId!].Script);
+            Assert.Equal(2, edge.Mutations);
+
+            edge.Routes.Clear();
+            enabled = await client.PostAsJsonAsync("/api/ops/traffic/" + host, command with { Revision = 2 });
+            Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+            active = (await enabled.Content.ReadFromJsonAsync<TrafficRow>(StatusJson.Options))!;
+            edge.BeforeApi = async request =>
+            {
+                if (!request.RequestUri!.AbsolutePath.EndsWith("/workers/routes", StringComparison.Ordinal)) return;
+                var pending = (await database.ReadTrafficAsync("mx", default))[host];
+                if (pending.Phase != "restoring") return;
+                edge.BeforeApi = null;
+                await using var source = Npgsql.NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION")!);
+                await using var kill = source.CreateCommand("""
+                    SELECT pg_terminate_backend(pid,5000) FROM pg_locks
+                    WHERE locktype='advisory' AND classid=814233110::oid AND objsubid=2
+                    AND objid=(hashtext($1)::bigint & 4294967295)::oid AND pid<>pg_backend_pid()
+                    """);
+                kill.Parameters.AddWithValue(host);
+                Assert.True((bool)(await kill.ExecuteScalarAsync())!);
+                await using var newer = await database.TryTrafficLockAsync(host, default);
+                Assert.NotNull(newer);
+                await newer.SaveAsync(pending with
+                {
+                    Revision = pending.Revision + 1,
+                    Phase = "active",
+                    Mode = "page",
+                    Reason = "Newer operation after interrupted session",
+                    UpdatedAt = DateTimeOffset.UtcNow
+                }, default);
+            };
+            var mutations = edge.Mutations;
+            var interrupted = await client.PostAsJsonAsync("/api/ops/traffic/" + host,
+                command with
+                {
+                    Mode = "normal",
+                    Revision = active.Revision,
+                    RouteId = active.RouteId,
+                    RouteFingerprint = active.RouteFingerprint
+                });
+            Assert.Equal(HttpStatusCode.Conflict, interrupted.StatusCode);
+            Assert.Single(edge.Routes);
+            Assert.Equal(mutations, edge.Mutations);
+            var retained = (await database.ReadTrafficAsync("mx", default))[host];
+            Assert.Equal(5, retained.Revision);
+            Assert.Equal("active", retained.Phase);
+            Assert.Equal("Newer operation after interrupted session", retained.Reason);
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/status")).StatusCode);
+            var live = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
+            var restored = await client.PostAsJsonAsync("/api/ops/traffic/" + host,
+                command with { Mode = "normal", Revision = live.Revision, RouteId = live.RouteId, RouteFingerprint = live.RouteFingerprint });
             Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
             Assert.Empty(edge.Routes);
         }
@@ -257,6 +414,9 @@ public sealed partial class IndependentServiceTests
         public string? OverrideResponse { get; init; }
         public bool RelativeRedirect { get; init; }
         public long Requests { get; init; } = 123;
+        public int StaleNormalResponses { get; set; }
+        public int ApiCalls { get; private set; }
+        public Func<HttpRequestMessage, Task>? BeforeApi { get; set; }
         public HttpClient CreateClient(string name) => new(this, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(2) };
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -267,6 +427,11 @@ public sealed partial class IndependentServiceTests
                 VerificationWasAnonymous = request.Headers.Authorization is null;
                 Assert.True(VerificationWasAnonymous);
                 var route = Routes.Values.SingleOrDefault(route => route.Pattern == uri.Host + "/*");
+                if (route is null && StaleNormalResponses > 0)
+                {
+                    StaleNormalResponses--;
+                    route = new("stale-edge", uri.Host + "/*", "platform-maintenance-page", false);
+                }
                 var response = new HttpResponseMessage(route is null ? HttpStatusCode.OK
                     : route.Script!.EndsWith("-page", StringComparison.Ordinal) ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.Found);
                 if (route is not null)
@@ -278,7 +443,9 @@ public sealed partial class IndependentServiceTests
                 }
                 return response;
             }
+            ApiCalls++;
             Assert.Equal("unit-test-credential", request.Headers.Authorization?.Parameter);
+            if (BeforeApi is not null) await BeforeApi(request);
             if (OverrideResponse is not null)
                 return new(HttpStatusCode.OK) { Content = new StringContent(OverrideResponse) };
             if (uri.AbsolutePath.EndsWith("/graphql", StringComparison.Ordinal))

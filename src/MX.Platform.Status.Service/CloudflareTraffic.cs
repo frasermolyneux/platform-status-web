@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -9,13 +10,23 @@ public sealed record TrafficRoute(string Id, string Pattern, string? Script, boo
 
 public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions options, ILogger<CloudflareTraffic> logger)
 {
-    private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    private async Task<AuthenticationHeaderValue> AuthorizationAsync(CancellationToken ct)
+    {
+        var token = (await File.ReadAllTextAsync(options.TrafficTokenFile
+            ?? throw new InvalidOperationException("The traffic credential is not configured."), ct)).Trim();
+        if (token.Length is 0 or > 4096 || !Regex.IsMatch(token, @"\A[A-Za-z0-9._~+/-]+=*\z",
+            RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)))
+            throw new InvalidDataException("The traffic credential does not have valid bearer-token formatting.");
+        return new AuthenticationHeaderValue("Bearer", token);
+    }
+
+    private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct,
+        Func<CancellationToken, Task>? requireLease = null)
     {
         using var request = new HttpRequestMessage(method, "https://api.cloudflare.com/client/v4/" + path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer",
-            (await File.ReadAllTextAsync(options.TrafficTokenFile
-                ?? throw new InvalidOperationException("The traffic credential is not configured."), ct)).Trim());
+        request.Headers.Authorization = await AuthorizationAsync(ct);
         if (body is not null) request.Content = JsonContent.Create(body);
+        if (requireLease is not null) await requireLease(ct);
         using var response = await clients.CreateClient("cloudflare-traffic").SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -65,6 +76,9 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
     internal static bool Owned(TrafficRoute route, TrafficHost host, TrafficConfiguration configuration) =>
         route.Pattern == host.Hostname + "/*" && route.Script is not null && configuration.Scripts.Values.Contains(route.Script);
 
+    internal static string? Fingerprint(TrafficRoute? route) =>
+        route is null ? null : Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(route)));
+
     public async Task RequireProxiedAsync(TrafficHost host, CancellationToken ct)
     {
         var result = await SendAsync(HttpMethod.Get, $"zones/{host.ZoneId}/dns_records?name={Uri.EscapeDataString(host.Hostname)}&per_page=100", null, ct);
@@ -77,28 +91,32 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
     }
 
     public async Task SetAsync(TrafficHost host, TrafficRoute? previous, string mode,
-        TrafficConfiguration configuration, CancellationToken ct)
+        TrafficConfiguration configuration, Func<CancellationToken, Task> requireLease, CancellationToken ct)
     {
         var path = $"zones/{host.ZoneId}/workers/routes";
+        var affected = (await RoutesAsync(host.ZoneId, ct)).Where(route => AffectsHost(route, host.Hostname)).ToArray();
+        if (affected.Length != (previous is null ? 0 : 1)
+            || previous is not null && Fingerprint(affected.SingleOrDefault()) != Fingerprint(previous))
+            throw new TrafficConflictException("The live routes changed during this operation. Refresh before changing traffic.");
         if (mode == "normal")
         {
             if (previous is not null)
-            {
-                var current = (await RoutesAsync(host.ZoneId, ct)).SingleOrDefault(route => route.Id == previous.Id);
-                if (current is null || !Owned(current, host, configuration) || current.Script != previous.Script)
-                    throw new TrafficConflictException("The maintenance route changed outside this operation. Refresh before restoring.");
-                await SendAsync(HttpMethod.Delete, path + "/" + previous.Id, null, ct);
-            }
+                await SendAsync(HttpMethod.Delete, path + "/" + previous.Id, null, ct, requireLease);
             return;
         }
         var payload = new { pattern = host.Hostname + "/*", script = configuration.Scripts[mode], request_limit_fail_open = false };
         if (previous is null)
         {
-            var created = await SendAsync(HttpMethod.Post, path, payload, ct);
+            var created = await SendAsync(HttpMethod.Post, path, payload, ct, requireLease);
+            var id = RequiredString(created, "id");
+            var installed = (await RoutesAsync(host.ZoneId, ct)).Where(route => AffectsHost(route, host.Hostname)).ToArray();
+            if (installed.Length != 1 || installed[0].Id != id || installed[0].Pattern != host.Hostname + "/*"
+                || installed[0].Script != configuration.Scripts[mode])
+                throw new TrafficConflictException("The created route changed before fail-closed verification. No later route was overwritten.");
             // The provider omits this API flag; explicitly set and read it back rather than trusting defaults.
-            await SendAsync(HttpMethod.Put, path + "/" + RequiredString(created, "id"), payload, ct);
+            await SendAsync(HttpMethod.Put, path + "/" + id, payload, ct, requireLease);
         }
-        else await SendAsync(HttpMethod.Put, path + "/" + previous.Id, payload, ct);
+        else await SendAsync(HttpMethod.Put, path + "/" + previous.Id, payload, ct, requireLease);
     }
 
     public async Task<(bool Matches, int Status)> ProbeAsync(TrafficHost host, string mode, string statusUrl, CancellationToken ct)
@@ -125,8 +143,7 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.cloudflare.com/client/v4/graphql");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer",
-                (await File.ReadAllTextAsync(options.TrafficTokenFile!, ct)).Trim());
+            request.Headers.Authorization = await AuthorizationAsync(ct);
             var start = DateTimeOffset.UtcNow.Date.ToString("yyyy-MM-dd'T'00:00:00'Z'", System.Globalization.CultureInfo.InvariantCulture);
             request.Content = JsonContent.Create(new
             {

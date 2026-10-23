@@ -9,9 +9,11 @@ let loginCount = 0;
 let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
 let saveGate: Promise<void> | undefined;
+let writerWritable = true;
 function trafficRow(mode = 'normal', revision = 0) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
-    verified: true, routeId: mode === 'normal' ? null : 'route-1', statusUrl: 'https://mxstatus.io/',
+    verified: true, routeId: mode === 'normal' ? null : 'route-1',
+    routeFingerprint: mode === 'normal' ? null : 'observed-route-fingerprint', statusUrl: 'https://mxstatus.io/',
     httpStatus: null, error: null, lastOperation: null };
 }
 let trafficRows = [trafficRow()];
@@ -53,6 +55,7 @@ beforeEach(() => {
   existingBanners = [];
   existingHealth = [];
   saveGate = undefined;
+  writerWritable = true;
   trafficRows = [trafficRow()];
   globalThis.fetch = async (input, init) => {
     const path = String(input);
@@ -74,7 +77,7 @@ beforeEach(() => {
         site: { id: 'mx', displayName: 'MX status' }, summary: { status: 'operational' },
         components: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website', kind: 'leaf', children: [] }],
       },
-      '/api/ops/runtime': { publisher: true, writable: true, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
+      '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
       '/api/ops/incidents': [{
         id: 1, title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
         sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
@@ -114,7 +117,7 @@ test('traffic changes require an additional role and exact-host confirmation, wi
   document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
   assert.deepEqual(writes[0], { path: '/api/ops/traffic/bishopsbees.co.uk',
-    body: { mode: 'page', reason: 'Private investigation', confirmation: 'bishopsbees.co.uk', revision: 0, routeId: null } });
+    body: { mode: 'page', reason: 'Private investigation', confirmation: 'bishopsbees.co.uk', revision: 0, routeId: null, routeFingerprint: null } });
   assert.equal(writes.length, 1);
   assert.match(document.querySelector('.traffic-state')?.textContent || '', /active \/ page/);
 });
@@ -135,9 +138,29 @@ test('restoring traffic sends the observed route and revision and freezes confir
   assert.equal(writes[0].body.mode, 'normal');
   assert.equal(writes[0].body.revision, 7);
   assert.equal(writes[0].body.routeId, 'route-1');
+  assert.equal(writes[0].body.routeFingerprint, 'observed-route-fingerprint');
   complete();
   await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
   assert.match(document.querySelector('.traffic-state')?.textContent || '', /normal \/ normal/);
+});
+
+test('workspace refresh re-enables traffic controls after the audit writer recovers without replacing an editor', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  writerWritable = false;
+  await renderOperations();
+  const enable = () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Enable maintenance')!;
+  assert.equal(enable().disabled, true);
+  writerWritable = true;
+  click('Refresh workspace');
+  await until(() => enable().disabled === false);
+  click('Enable maintenance');
+  setValue('reason', 'Retain this draft during refresh');
+  const form = document.querySelector('form');
+  click('Refresh workspace');
+  await until(() => !Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh workspace')!.disabled);
+  assert.equal(document.querySelector('form'), form);
+  assert.equal(document.querySelector<HTMLTextAreaElement>('textarea')?.value, 'Retain this draft during refresh');
 });
 
 test('an uncertain edge change keeps the form and error visible and never sends a reopening request', async () => {

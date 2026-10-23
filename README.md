@@ -138,11 +138,16 @@ does not withdraw public communications or imply the underlying app is healthy.
 Existing connections, browser caches and direct-origin access are outside this
 new-request interception boundary.
 
-Per-host writer advisory locks and revision checks serialize changes. Intent is
+Per-host writer advisory locks, intent revisions and observed route fingerprints
+serialize changes. Every edge mutation checks the original database session still
+holds its lock and intent; interrupted intents retain a bounded reconciliation
+window before an explicit retry. Intent is
 audited durably before external mutation, followed by completion or failure.
 The UI distinguishes the live route from the last requested operation; manual
 Cloudflare changes are not automatically reversed. The two operations are not a
-distributed transaction. Audit unavailability disables application controls;
+distributed transaction. Fresh route checks narrow dashboard races, but Cloudflare
+does not provide an atomic compare-and-write here: coordinate dashboard overrides
+with operators. Audit unavailability disables application controls;
 an explicitly authorised administrator can still use Cloudflare's dashboard.
 
 `TrafficConfigurationFile` and `TrafficTokenFile` are read-only secret mounts
