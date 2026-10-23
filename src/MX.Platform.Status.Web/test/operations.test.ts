@@ -10,11 +10,14 @@ let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
 let saveGate: Promise<void> | undefined;
 let writerWritable = true;
-function trafficRow(mode = 'normal', revision = 0) {
+let trafficReadGate: Promise<void> | undefined;
+let trafficReadStarted = 0;
+function trafficRow(mode = 'normal', revision = 0,
+  lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
     verified: true, routeId: mode === 'normal' ? null : 'route-1',
     routeFingerprint: mode === 'normal' ? null : 'observed-route-fingerprint', statusUrl: 'https://mxstatus.io/',
-    httpStatus: null, error: null, lastOperation: null };
+    httpStatus: null, error: null, lastOperation };
 }
 let trafficRows = [trafficRow()];
 const account = {
@@ -57,6 +60,8 @@ beforeEach(() => {
   saveGate = undefined;
   writerWritable = true;
   trafficRows = [trafficRow()];
+  trafficReadGate = undefined;
+  trafficReadStarted = 0;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
@@ -71,6 +76,13 @@ beforeEach(() => {
       }
       return Response.json(rejectSave ? { error: 'Banner changed. Reload before editing.' } : { id: 2, revision: 1 }, { status: rejectSave ? 409 : 201 });
     }
+    if (path === '/api/ops/traffic') {
+      const hosts = structuredClone(trafficRows);
+      trafficReadStarted++;
+      await trafficReadGate;
+      return Response.json({ enabled: true, hosts,
+        quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null } });
+    }
     const fixtures: Record<string, unknown> = {
       '/api/auth/config': { enabled: true, clientId: 'client', tenantId: 'tenant', scope: 'Status.Access' },
       '/api/status': {
@@ -84,9 +96,6 @@ beforeEach(() => {
       }],
       '/api/ops/banners': existingBanners,
       '/api/ops/health': existingHealth,
-      '/api/ops/traffic': {
-        enabled: true, hosts: trafficRows, quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null },
-      },
       '/api/ops/evidence': [{
         source: 'azure-alert', id: 'alert-1', observedAt: timestamp,
         evidence: { data: { essentials: { alertRule: 'Database availability', description: 'The database needs attention.', severity: 'Sev1', monitorCondition: 'Fired' } } },
@@ -179,6 +188,45 @@ test('an uncertain edge change keeps the form and error visible and never sends 
   assert.equal(document.querySelector<HTMLElement>('.editor-panel')!.hidden, false);
   assert.ok(document.querySelector<HTMLButtonElement>('form button[type="submit"]')!.disabled);
   assert.match(document.body.textContent || '', /Reopen this hostname's controls before retrying/);
+});
+
+test('a pre-mutation traffic read cannot overwrite the confirmed edge result', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  await renderOperations();
+  click('Enable maintenance');
+  setValue('reason', 'Block independently of an older refresh');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  let complete!: () => void;
+  trafficReadGate = new Promise(resolve => { complete = resolve; });
+  click('Refresh traffic controls');
+  await until(() => trafficReadStarted === 2);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => (document.querySelector('.traffic-state')?.textContent || '').includes('active / page'));
+  complete();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.match(document.querySelector('.traffic-state')?.textContent || '', /active \/ page/);
+  assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Restore traffic'));
+});
+
+test('an ambiguous mutation exposes reconciliation of only its original requested mode', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  trafficRows = [{ ...trafficRow('page', 8, {
+    actor: 'operator', reason: 'Previous restore timed out', updatedAt: timestamp, phase: 'uncertain', mode: 'normal',
+  }), state: 'uncertain' }];
+  await renderOperations();
+  assert.equal(Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Restore traffic'), false);
+  click('Reconcile previous request');
+  assert.equal(document.querySelector<HTMLSelectElement>('[name="mode"]')!.options.length, 1);
+  assert.equal(document.querySelector<HTMLSelectElement>('[name="mode"]')!.value, 'normal');
+  setValue('reason', 'Observe completion of the earlier restore');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.mode, 'normal');
+  assert.match(document.body.textContent || '', /No additional edge mutation was sent/);
 });
 
 function click(text: string): void {

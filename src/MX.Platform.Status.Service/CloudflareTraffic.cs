@@ -29,18 +29,28 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
         request.Headers.Authorization = await AuthorizationAsync(ct);
         if (body is not null) request.Content = JsonContent.Create(body);
         if (requireLease is not null) await requireLease(ct);
-        using var response = await clients.CreateClient("cloudflare-traffic").SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
+        var refused = false;
+        try
         {
-            logger.LogWarning("Cloudflare traffic API refused {Method} with HTTP {Status}.", method, (int)response.StatusCode);
-            throw new HttpRequestException($"Cloudflare refused the traffic operation (HTTP {(int)response.StatusCode}). Check the scoped token and retry after refreshing.");
+            using var response = await clients.CreateClient("cloudflare-traffic").SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                refused = (int)response.StatusCode < 500;
+                logger.LogWarning("Cloudflare traffic API refused {Method} with HTTP {Status}.", method, (int)response.StatusCode);
+                throw new HttpRequestException($"Cloudflare refused the traffic operation (HTTP {(int)response.StatusCode}). Check the scoped token and retry after refreshing.");
+            }
+            using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("success", out var success) || success.ValueKind != JsonValueKind.True
+                || !root.TryGetProperty("result", out var result))
+                throw new InvalidDataException("Cloudflare did not confirm the traffic operation.");
+            return result.Clone();
         }
-        using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("success", out var success) || success.ValueKind != JsonValueKind.True
-            || !root.TryGetProperty("result", out var result))
-            throw new InvalidDataException("Cloudflare did not confirm the traffic operation.");
-        return result.Clone();
+        catch (Exception exception) when (requireLease is not null && !refused
+            && exception is HttpRequestException or OperationCanceledException or IOException or JsonException or InvalidDataException)
+        {
+            throw new TrafficUncertainException("Cloudflare may still complete the dispatched mutation. Reconcile its original requested outcome before any further traffic change.", exception);
+        }
     }
 
     public async Task<TrafficRoute[]> RoutesAsync(string zoneId, CancellationToken ct)

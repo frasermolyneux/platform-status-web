@@ -77,3 +77,5 @@ public sealed record TrafficQuota(long? Requests, DateTimeOffset ObservedAt, str
 public sealed record TrafficWorkspace(bool Enabled, TrafficRow[] Hosts, TrafficQuota? Quota);
 
 public sealed class TrafficConflictException(string message) : Exception(message);
+
+public sealed class TrafficUncertainException(string message, Exception innerException) : IOException(message, innerException);

@@ -4,6 +4,10 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
     CloudflareTraffic cloudflare, ILogger<TrafficController> logger)
 {
     private const string Normal = "normal";
+    private const string Active = "active";
+    private const string Uncertain = "uncertain";
+    private const string Enabling = "enabling";
+    private const string Restoring = "restoring";
     private TrafficConfiguration? Configuration => TrafficConfiguration.Read(options, catalog);
 
     private string StatusUrl(TrafficHost host) => $"https://{catalog.Get(host.Site).Site.Domains[0]}/";
@@ -36,14 +40,19 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
                 "Fail-closed behaviour is not confirmed. Review the route failure mode in Cloudflare before relying on maintenance.", record,
                 CloudflareTraffic.Fingerprint(route));
         var (verified, status, error) = await ObserveAsync(host, route, mode, ct);
-        var state = route is null ? Normal : "active";
+        var state = route is null ? Normal : Active;
         if (!verified) state = "unverified";
-        if (record?.Phase is "enabling" or "restoring")
+        if (record?.Phase is Enabling or Restoring)
         {
-            state = DateTimeOffset.UtcNow - record.UpdatedAt < TimeSpan.FromMinutes(2) ? record.Phase : "unconfirmed";
-            if (state == "unconfirmed") error ??= "A previous operation did not record completion. Review the live route before explicitly retrying or restoring.";
+            state = DateTimeOffset.UtcNow - record.UpdatedAt < TimeSpan.FromMinutes(2) ? record.Phase : Uncertain;
+            if (state == Uncertain) error ??= "A previous operation did not record completion. Reconcile its original requested outcome before making another change.";
         }
         if (record?.Phase == "failed") error ??= record.Error;
+        if (record?.Phase == Uncertain)
+        {
+            state = Uncertain;
+            error = record.Error;
+        }
         return new(host.Hostname, mode, state, verified, route?.Id, record?.Revision ?? 0, StatusUrl(host), status, error, record,
             CloudflareTraffic.Fingerprint(route));
     }
@@ -76,12 +85,14 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
         var previous = await lease.ReadAsync(hostname, ct);
         if (command.Revision != (previous?.Revision ?? 0))
             throw new TrafficConflictException("The traffic control changed. Refresh before submitting another operation.");
-        if (previous?.Phase is "enabling" or "restoring"
+        if (previous?.Phase is Enabling or Restoring
             && DateTimeOffset.UtcNow - previous.UpdatedAt < TimeSpan.FromMinutes(2))
             throw new TrafficConflictException("A previous traffic operation is still within its bounded reconciliation window. Refresh before retrying.");
         var current = await RequireCurrentRouteAsync(host, configuration, command, ct);
+        if (previous?.Phase is Uncertain or Enabling or Restoring)
+            return await ReconcileAsync(host, configuration, command, previous, lease, actor, ct);
         var pending = new TrafficRecord(hostname, site, (previous?.Revision ?? 0) + 1, command.Mode,
-            command.Mode == Normal ? "restoring" : "enabling", actor, command.Reason.Trim(), current?.Id, DateTimeOffset.UtcNow);
+            command.Mode == Normal ? Restoring : Enabling, actor, command.Reason.Trim(), current?.Id, DateTimeOffset.UtcNow);
         await lease.SaveAsync(pending, ct);
         // After the durable intent, finish bounded reconciliation even if the browser disconnects.
         using var operation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -91,7 +102,7 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
             await cloudflare.SetAsync(host, current, command.Mode, configuration,
                 token => lease.RequireOwnershipAsync(pending, token), operation.Token);
             var result = await VerifyAsync(host, command.Mode, configuration, operation.Token);
-            var completed = pending with { Phase = command.Mode == Normal ? Normal : "active", RouteId = result.RouteId, UpdatedAt = DateTimeOffset.UtcNow };
+            var completed = pending with { Phase = command.Mode == Normal ? Normal : Active, RouteId = result.RouteId, UpdatedAt = DateTimeOffset.UtcNow };
             await lease.RequireOwnershipAsync(pending, operation.Token);
             await lease.SaveAsync(completed, operation.Token);
             return result with { Revision = completed.Revision, LastOperation = completed };
@@ -130,10 +141,38 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
                 var probe = await cloudflare.ProbeAsync(host, Normal, StatusUrl(host), ct);
                 result = result with { Verified = probe.Matches, HttpStatus = probe.Status };
             }
-            if (result.Mode == mode && result.Verified && result.State is Normal or "active") return result;
+            if (result.Mode == mode && result.Verified && result.State is Normal or Active) return result;
             await Task.Delay(TimeSpan.FromSeconds(2), ct);
         }
         throw new InvalidDataException("The requested edge response is not confirmed. No automatic rollback or reopening was performed; refresh to inspect the live route.");
+    }
+
+    private async Task<TrafficRow> ReconcileAsync(TrafficHost host, TrafficConfiguration configuration, TrafficCommand command,
+        TrafficRecord previous, PostgresStore.TrafficLease lease, string actor, CancellationToken ct)
+    {
+        if (command.Mode != previous.Mode)
+            throw new TrafficConflictException("An earlier edge mutation has an unknown outcome. Reconcile its original requested mode before making another change.");
+        TrafficRow result;
+        try { result = await VerifyAsync(host, previous.Mode, configuration, ct); }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidDataException or IOException
+            || exception is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Uncertain traffic operation remains fenced for {Hostname}; reconciliation sent no new mutation.", host.Hostname);
+            throw new TrafficConflictException("The earlier requested outcome is still unconfirmed. The fence remains; no new edge mutation was sent. Inspect Cloudflare before reconciling again.");
+        }
+        await lease.RequireOwnershipAsync(previous, ct);
+        var reconciled = previous with
+        {
+            Revision = previous.Revision + 1,
+            Phase = previous.Mode == Normal ? Normal : Active,
+            RouteId = result.RouteId,
+            Actor = actor,
+            Reason = command.Reason.Trim(),
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Error = null
+        };
+        await lease.SaveAsync(reconciled, ct);
+        return result with { Revision = reconciled.Revision, LastOperation = reconciled };
     }
 
     private async Task RecordFailureAsync(PostgresStore.TrafficLease lease, TrafficRecord pending, Exception exception)
@@ -144,9 +183,9 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
             await lease.RequireOwnershipAsync(pending, auditTimeout.Token);
             await lease.SaveAsync(pending with
             {
-                Phase = "failed",
+                Phase = exception is TrafficUncertainException ? Uncertain : "failed",
                 UpdatedAt = DateTimeOffset.UtcNow,
-                Error = exception is TrafficConflictException or InvalidDataException ? exception.Message
+                Error = exception is TrafficConflictException or InvalidDataException or TrafficUncertainException ? exception.Message
                     : "The traffic change could not be confirmed. Refresh to inspect the live Cloudflare route; no automatic reopening was performed."
             }, auditTimeout.Token);
         }

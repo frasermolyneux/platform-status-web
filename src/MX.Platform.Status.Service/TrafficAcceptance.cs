@@ -16,6 +16,10 @@ public static class TrafficAcceptance
         if (!restoreOnly && workspace.Quota?.Requests is null)
             throw new InvalidDataException(workspace.Quota?.Error ?? "The live account usage estimate is unavailable.");
         var current = workspace.Hosts.Single(host => host.Hostname == canary.Hostname);
+        if (restoreOnly && current.State == "uncertain" && current.LastOperation is { } prior)
+            current = await controller.ChangeAsync(canary.Site, canary.Hostname,
+                new(prior.Mode, "Explicit isolated-canary reconciliation before restoration", canary.Hostname,
+                    current.Revision, current.RouteId, current.RouteFingerprint), "acceptance:local-administrator", ct);
         if (!restoreOnly && current.Mode != Normal)
             throw new InvalidOperationException("The isolated canary is already intercepted. Inspect it and explicitly restore before acceptance.");
         if (!restoreOnly) await RequireBaselineAsync(canary.Hostname, clients, ct);

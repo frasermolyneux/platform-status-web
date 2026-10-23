@@ -31,6 +31,7 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
   const quota = element('p', undefined, 'operator-notice');
   const writerNotice = element('p', 'The audit writer is unavailable. Changes are disabled; use the documented Cloudflare dashboard override for an emergency.', 'operator-notice error');
   let changing = false;
+  let readGeneration = 0;
   let workspace: TrafficWorkspace;
   const refresh = button('Refresh traffic controls', () => {
     void load().catch(showError);
@@ -75,11 +76,12 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
           element('p', `Private reason: ${audit.reason}`));
       }
       const actions = element('div', undefined, 'operator-actions');
-      const enable = button(host.mode === 'normal' ? 'Enable maintenance' : 'Change maintenance', () => open(host, false));
+      const enable = button(host.state === 'uncertain' ? 'Reconcile previous request'
+        : host.mode === 'normal' ? 'Enable maintenance' : 'Change maintenance', () => open(host, false));
       enable.disabled = !canControl || !writable() || changing || host.mode === 'conflict';
       enable.setAttribute('aria-label', `Configure maintenance for ${host.hostname}`);
       actions.append(enable);
-      if (host.mode !== 'normal' && host.mode !== 'conflict') {
+      if (host.mode !== 'normal' && host.mode !== 'conflict' && host.state !== 'uncertain') {
         const restore = button('Restore traffic', () => open(host, true));
         restore.disabled = !canControl || !writable() || changing;
         restore.setAttribute('aria-label', `Restore traffic for ${host.hostname}`);
@@ -91,23 +93,31 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
   }
 
   async function load(): Promise<void> {
+    const generation = ++readGeneration;
     refresh.disabled = true;
     try {
       const response = await request('/api/ops/traffic');
       const next: TrafficWorkspace = await response.json();
-      if (!current()) return;
+      if (!current() || generation !== readGeneration) return;
       workspace = next;
       render();
-    } finally { refresh.disabled = changing; }
+    } finally { if (generation === readGeneration) refresh.disabled = changing; }
   }
 
   function open(host: TrafficRow, restoring: boolean): void {
     if (changing) return;
+    const reconciling = host.state === 'uncertain';
+    const reconcileMode = reconciling ? host.lastOperation?.mode : null;
+    if (reconciling && !reconcileMode) {
+      showError(new Error('The previous requested mode is unavailable. Inspect Cloudflare before taking further action.'));
+      return;
+    }
     const form = element('form', undefined, 'operator-form');
     const mode = element('select');
-    mode.append(...(restoring ? [option('normal', 'Restore normal traffic')]
+    mode.append(...(reconciling && reconcileMode ? [option(reconcileMode, `Reconcile previous ${reconcileMode} request`)]
+      : restoring ? [option('normal', 'Restore normal traffic')]
       : [option('page', '503 maintenance page'), option('redirect', 'Temporary browser redirect to status')]));
-    if (!restoring && host.mode === 'redirect') mode.value = 'redirect';
+    if (!reconciling && !restoring && host.mode === 'redirect') mode.value = 'redirect';
     const reason = element('textarea');
     reason.required = true;
     reason.maxLength = 500;
@@ -118,13 +128,15 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
     field(form, 'Behaviour', mode, 'mode');
     field(form, 'Private audit reason (not published)', reason, 'reason');
     field(form, `Type ${host.hostname} to confirm`, confirmation, 'confirmation');
-    const preview = element('p', restoring
+    const preview = element('p', reconciling
+      ? 'Only checks whether the previous requested outcome is now confirmed. It sends no additional edge mutation. Other changes remain blocked until reconciliation succeeds; inspect Cloudflare if the outcome remains unknown.'
+      : restoring
       ? 'This removes only this hostname\'s maintenance route. Confirm the application is ready before restoring traffic. Public announcements are not automatically withdrawn.'
       : 'New requests will not reach the application. Browser redirects do not forward paths, queries, form submissions or game downloads; non-browser requests receive 503. Maintenance has no automatic expiry.');
     const target = link('View the public status destination', host.statusUrl);
     target.target = '_blank';
     target.rel = 'noopener noreferrer';
-    const submit = element('button', restoring ? 'Confirm restore traffic' : 'Confirm maintenance', 'button-primary');
+    const submit = element('button', reconciling ? 'Confirm reconciliation' : restoring ? 'Confirm restore traffic' : 'Confirm maintenance', 'button-primary');
     submit.type = 'submit';
     form.append(preview, target, submit, button('Cancel', () => { editor.hidden = true; }));
     form.addEventListener('submit', event => {
@@ -135,6 +147,7 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
       }
       if (changing) return;
       changing = true;
+      readGeneration++;
       let requiresReopen = false;
       refresh.disabled = true;
       render();
@@ -143,7 +156,7 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
         revision: host.revision, routeId: host.routeId, routeFingerprint: host.routeFingerprint });
       fields.forEach(control => { control.disabled = true; });
       notice.className = 'operator-notice';
-      notice.textContent = `${restoring ? 'Restoring traffic' : 'Enabling maintenance'} for ${host.hostname}. Waiting for Cloudflare and public verification...`;
+      notice.textContent = `${reconciling ? 'Reconciling previous request' : restoring ? 'Restoring traffic' : 'Enabling maintenance'} for ${host.hostname}. Waiting for Cloudflare and public verification...`;
       void (async () => {
         try {
           const response = await request(`/api/ops/traffic/${encodeURIComponent(host.hostname)}`, { method: 'POST', body });
@@ -151,7 +164,9 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
           if (!current()) return;
           workspace.hosts = workspace.hosts.map(row => row.hostname === updated.hostname ? updated : row);
           editor.hidden = true;
-          notice.textContent = `${host.hostname}: ${updated.state}. ${restoring ? 'The maintenance route is removed.' : 'The expected public maintenance response is confirmed.'} Public announcements are managed separately.`;
+          notice.textContent = `${host.hostname}: ${updated.state}. ${reconciling
+            ? 'The previous request is reconciled. No additional edge mutation was sent.'
+            : restoring ? 'The maintenance route is removed.' : 'The expected public maintenance response is confirmed.'} Public announcements are managed separately.`;
         } catch (error) {
           if (!current()) return;
           requiresReopen = true;
@@ -166,7 +181,7 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
         }
       })();
     });
-    editor.replaceChildren(element('h3', `${restoring ? 'Restore traffic' : 'Configure maintenance'}: ${host.hostname}`), form);
+    editor.replaceChildren(element('h3', `${reconciling ? 'Reconcile previous request' : restoring ? 'Restore traffic' : 'Configure maintenance'}: ${host.hostname}`), form);
     editor.hidden = false;
   }
 

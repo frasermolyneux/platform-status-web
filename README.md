@@ -140,8 +140,14 @@ new-request interception boundary.
 
 Per-host writer advisory locks, intent revisions and observed route fingerprints
 serialize changes. Every edge mutation checks the original database session still
-holds its lock and intent; interrupted intents retain a bounded reconciliation
-window before an explicit retry. Intent is
+holds its lock and intent. Interrupted intents have a two-minute in-progress
+window, then require explicit, read-only reconciliation of the original requested
+outcome. Dispatched mutations with an unknown result remain fenced without expiry:
+**Reconcile previous request** verifies the original route/public response and
+sends no new edge mutation. A delayed restore cannot be followed by a conflicting
+maintenance change while its DELETE may still complete. If the earlier outcome
+never materializes, inspect and resolve it in Cloudflare before reconciling.
+Intent is
 audited durably before external mutation, followed by completion or failure.
 The UI distinguishes the live route from the last requested operation; manual
 Cloudflare changes are not automatically reversed. The two operations are not a

@@ -243,19 +243,66 @@ public sealed partial class IndependentServiceTests
                 });
             Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
             Assert.Empty(edge.Routes);
-            var pending = new TrafficRecord(command.Confirmation, "mx", 3, "page", "enabling",
+
+            const string host = "bishopsbees.co.uk";
+            var enabled = await client.PostAsJsonAsync("/api/ops/traffic/" + host, command with { Revision = 2 });
+            Assert.Equal(HttpStatusCode.OK, enabled.StatusCode);
+            var active = (await enabled.Content.ReadFromJsonAsync<TrafficRow>(StatusJson.Options))!;
+            edge.DelayDelete = true;
+            var timedOut = await client.PostAsJsonAsync("/api/ops/traffic/" + host,
+                command with
+                {
+                    Mode = "normal",
+                    Revision = active.Revision,
+                    RouteId = active.RouteId,
+                    RouteFingerprint = active.RouteFingerprint
+                });
+            Assert.Equal(HttpStatusCode.Conflict, timedOut.StatusCode);
+            var delayedMutations = edge.Mutations;
+            var uncertain = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
+            Assert.Equal("uncertain", uncertain.State);
+            var uncertainRetry = command with { Revision = uncertain.Revision, RouteId = uncertain.RouteId, RouteFingerprint = uncertain.RouteFingerprint };
+            Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + host, uncertainRetry)).StatusCode);
+            Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + host, uncertainRetry with { Mode = "normal" })).StatusCode);
+            Assert.Equal("uncertain", (await database.ReadTrafficAsync("mx", default))[host].Phase);
+            Assert.Equal(delayedMutations, edge.Mutations);
+            Assert.Single(edge.Routes);
+            edge.CompleteDelayedDelete!();
+            uncertain = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
+            Assert.Equal("uncertain", uncertain.State);
+            restored = await client.PostAsJsonAsync("/api/ops/traffic/" + host,
+                command with
+                {
+                    Mode = "normal",
+                    Revision = uncertain.Revision,
+                    RouteId = uncertain.RouteId,
+                    RouteFingerprint = uncertain.RouteFingerprint
+                });
+            Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+            Assert.Equal("normal", (await database.ReadTrafficAsync("mx", default))[host].Phase);
+            Assert.Equal(delayedMutations, edge.Mutations);
+            Assert.Empty(edge.Routes);
+            var pending = new TrafficRecord(command.Confirmation, "mx", 6, "page", "enabling",
                 _ingestor.ToString(), "Interrupted operation", null, DateTimeOffset.UtcNow);
             await using (var lease = await database.TryTrafficLockAsync(command.Confirmation, default))
                 await lease!.SaveAsync(pending, default);
             var mutations = edge.Mutations;
-            var retry = await client.PostAsJsonAsync("/api/ops/traffic/" + command.Confirmation, command with { Revision = 3 });
+            var retry = await client.PostAsJsonAsync("/api/ops/traffic/" + command.Confirmation, command with { Revision = 6 });
             Assert.Equal(HttpStatusCode.Conflict, retry.StatusCode);
             Assert.Contains("reconciliation window", await retry.Content.ReadAsStringAsync());
             Assert.Equal(mutations, edge.Mutations);
             await using (var lease = await database.TryTrafficLockAsync(command.Confirmation, default))
                 await lease!.SaveAsync(pending with { UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-3) }, default);
-            var resumed = await client.PostAsJsonAsync("/api/ops/traffic/" + command.Confirmation, command with { Revision = 3 });
+            var resumed = await client.PostAsJsonAsync("/api/ops/traffic/" + command.Confirmation, command with { Revision = 6 });
+            Assert.Equal(HttpStatusCode.Conflict, resumed.StatusCode);
+            Assert.Equal(mutations, edge.Mutations);
+            edge.Routes.Add("delayed-enable", new("delayed-enable", host + "/*", "platform-maintenance-page", false));
+            row = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
+            Assert.Equal("uncertain", row.State);
+            resumed = await client.PostAsJsonAsync("/api/ops/traffic/" + host,
+                command with { Revision = row.Revision, RouteId = row.RouteId, RouteFingerprint = row.RouteFingerprint });
             Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+            Assert.Equal(mutations, edge.Mutations);
         }
         finally { await CleanupTrafficAsync(); }
     }
@@ -417,6 +464,8 @@ public sealed partial class IndependentServiceTests
         public int StaleNormalResponses { get; set; }
         public int ApiCalls { get; private set; }
         public Func<HttpRequestMessage, Task>? BeforeApi { get; set; }
+        public bool DelayDelete { get; set; }
+        public Action? CompleteDelayedDelete { get; private set; }
         public HttpClient CreateClient(string name) => new(this, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(2) };
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -470,6 +519,13 @@ public sealed partial class IndependentServiceTests
             Mutations++;
             if (request.Method == HttpMethod.Delete)
             {
+                if (DelayDelete)
+                {
+                    DelayDelete = false;
+                    var delayedId = uri.Segments.Last().Trim('/');
+                    CompleteDelayedDelete = () => Routes.Remove(delayedId);
+                    throw new TaskCanceledException("The DELETE was dispatched but its response timed out.");
+                }
                 Routes.Remove(uri.Segments.Last().Trim('/'));
                 return Json(new { success = true, result = new { } });
             }
