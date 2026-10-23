@@ -12,6 +12,7 @@ let saveGate: Promise<void> | undefined;
 let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
 let trafficReadStarted = 0;
+let rejectTrafficRead = false;
 function trafficRow(mode = 'normal', revision = 0,
   lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
@@ -62,6 +63,7 @@ beforeEach(() => {
   trafficRows = [trafficRow()];
   trafficReadGate = undefined;
   trafficReadStarted = 0;
+  rejectTrafficRead = false;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
@@ -78,8 +80,10 @@ beforeEach(() => {
     }
     if (path === '/api/ops/traffic') {
       const hosts = structuredClone(trafficRows);
+      const reject = rejectTrafficRead;
       trafficReadStarted++;
       await trafficReadGate;
+      if (reject) throw new Error('Stale refresh failure');
       return Response.json({ enabled: true, hosts,
         quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null } });
     }
@@ -117,6 +121,7 @@ test('traffic changes require an additional role and exact-host confirmation, wi
   account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
   await renderOperations();
   assert.match(document.body.textContent || '', /85,000/);
+  assert.ok(document.querySelector('[aria-label="Enable maintenance for bishopsbees.co.uk"]'));
   click('Enable maintenance');
   setValue('reason', 'Private investigation');
   setValue('confirmation', 'www.bishopsbees.co.uk');
@@ -190,7 +195,7 @@ test('an uncertain edge change keeps the form and error visible and never sends 
   assert.match(document.body.textContent || '', /Reopen this hostname's controls before retrying/);
 });
 
-test('a pre-mutation traffic read cannot overwrite the confirmed edge result', async () => {
+for (const staleFailure of [false, true]) test(`a pre-mutation traffic ${staleFailure ? 'failure' : 'read'} cannot overwrite the confirmed edge result`, async () => {
   history.replaceState(null, '', '/ops/traffic');
   account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
   await renderOperations();
@@ -199,6 +204,7 @@ test('a pre-mutation traffic read cannot overwrite the confirmed edge result', a
   setValue('confirmation', 'bishopsbees.co.uk');
   let complete!: () => void;
   trafficReadGate = new Promise(resolve => { complete = resolve; });
+  rejectTrafficRead = staleFailure;
   click('Refresh traffic controls');
   await until(() => trafficReadStarted === 2);
   document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
@@ -207,6 +213,7 @@ test('a pre-mutation traffic read cannot overwrite the confirmed edge result', a
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.match(document.querySelector('.traffic-state')?.textContent || '', /active \/ page/);
   assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Restore traffic'));
+  assert.doesNotMatch(document.body.textContent || '', /Stale refresh failure/);
 });
 
 test('an ambiguous mutation exposes reconciliation of only its original requested mode', async () => {
@@ -216,6 +223,7 @@ test('an ambiguous mutation exposes reconciliation of only its original requeste
     actor: 'operator', reason: 'Previous restore timed out', updatedAt: timestamp, phase: 'uncertain', mode: 'normal',
   }), state: 'uncertain' }];
   await renderOperations();
+  assert.ok(document.querySelector('[aria-label="Reconcile previous request for bishopsbees.co.uk"]'));
   assert.equal(Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Restore traffic'), false);
   click('Reconcile previous request');
   assert.equal(document.querySelector<HTMLSelectElement>('[name="mode"]')!.options.length, 1);

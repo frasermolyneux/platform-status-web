@@ -79,7 +79,7 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
       const enable = button(host.state === 'uncertain' ? 'Reconcile previous request'
         : host.mode === 'normal' ? 'Enable maintenance' : 'Change maintenance', () => open(host, false));
       enable.disabled = !canControl || !writable() || changing || host.mode === 'conflict';
-      enable.setAttribute('aria-label', `Configure maintenance for ${host.hostname}`);
+      enable.setAttribute('aria-label', `${enable.textContent} for ${host.hostname}`);
       actions.append(enable);
       if (host.mode !== 'normal' && host.mode !== 'conflict' && host.state !== 'uncertain') {
         const restore = button('Restore traffic', () => open(host, true));
@@ -101,6 +101,8 @@ export async function renderTraffic(root: HTMLElement, request: (path: string, i
       if (!current() || generation !== readGeneration) return;
       workspace = next;
       render();
+    } catch (error) {
+      if (generation === readGeneration) throw error;
     } finally { if (generation === readGeneration) refresh.disabled = changing; }
   }
 

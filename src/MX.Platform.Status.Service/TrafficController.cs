@@ -80,6 +80,7 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
         var configuration = Configuration ?? throw new TrafficConflictException("Traffic controls are not configured.");
         var host = configuration.Hosts.SingleOrDefault(host => host.Hostname == hostname && host.Site == site)
             ?? throw new TrafficConflictException("This hostname is not approved for this status site.");
+        hostname = host.Hostname;
         await using var lease = await database.TryTrafficLockAsync(hostname, ct)
             ?? throw new TrafficConflictException("A traffic change for this hostname is already in progress. Refresh before retrying.");
         var previous = await lease.ReadAsync(hostname, ct);

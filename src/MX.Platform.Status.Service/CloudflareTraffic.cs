@@ -116,7 +116,10 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
                 await SendAsync(HttpMethod.Delete, $"{path}/{previous.Id}", null, ct, requireLease);
             return;
         }
-        var payload = new { pattern = host.Hostname + "/*", script = configuration.Scripts[mode], request_limit_fail_open = false };
+        var pattern = host.Hostname + "/*";
+        var script = configuration.Scripts[mode];
+        if (MatchesTarget(previous, pattern, script)) return;
+        var payload = new { pattern, script, request_limit_fail_open = false };
         if (previous is null)
         {
             var created = await SendAsync(HttpMethod.Post, path, payload, ct, requireLease);
@@ -125,11 +128,15 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
             if (installed.Length != 1 || installed[0].Id != id || installed[0].Pattern != host.Hostname + "/*"
                 || installed[0].Script != configuration.Scripts[mode])
                 throw new TrafficConflictException("The created route changed before fail-closed verification. No later route was overwritten.");
-            // The provider omits this API flag; explicitly set and read it back rather than trusting defaults.
-            await SendAsync(HttpMethod.Put, $"{path}/{id}", payload, ct, requireLease);
+            // Only correct a flag that the create/read-back did not already establish.
+            if (!MatchesTarget(installed[0], pattern, script))
+                await SendAsync(HttpMethod.Put, $"{path}/{id}", payload, ct, requireLease);
         }
         else await SendAsync(HttpMethod.Put, $"{path}/{previous.Id}", payload, ct, requireLease);
     }
+
+    private static bool MatchesTarget(TrafficRoute? route, string pattern, string script) =>
+        route is { RequestLimitFailOpen: false } && route.Pattern == pattern && route.Script == script;
 
     public async Task<(bool Matches, int Status)> ProbeAsync(TrafficHost host, string mode, string statusUrl, CancellationToken ct)
     {

@@ -113,8 +113,17 @@ public sealed partial class IndependentServiceTests
             Assert.True(active.Verified);
             Assert.Equal("active", active.State);
             Assert.Equal(1, active.Revision);
-            Assert.Equal(2, edge.Mutations);
+            Assert.Equal(1, edge.Mutations);
             Assert.False(edge.Routes.Single().Value.RequestLimitFailOpen);
+            edge.DelayPut = true;
+            response = await client.PostAsJsonAsync("/api/ops/traffic/" + hostname,
+                command with { Revision = active.Revision, RouteId = active.RouteId, RouteFingerprint = active.RouteFingerprint });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            active = (await response.Content.ReadFromJsonAsync<TrafficRow>(StatusJson.Options))!;
+            Assert.Equal(2, active.Revision);
+            Assert.Equal(1, edge.Mutations);
+            Assert.Null(edge.CompleteDelayedPut);
+            edge.DelayPut = false;
             Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + hostname, command)).StatusCode);
             var restore = command with
             {
@@ -138,16 +147,16 @@ public sealed partial class IndependentServiceTests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Empty(edge.Routes);
             var normal = (await response.Content.ReadFromJsonAsync<TrafficRow>(StatusJson.Options))!;
-            Assert.Equal(2, normal.Revision);
+            Assert.Equal(3, normal.Revision);
             await using var source = Npgsql.NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION")!);
             await using var audit = source.CreateCommand("SELECT count(*) FROM status_traffic_audit WHERE hostname=$1");
             audit.Parameters.AddWithValue(hostname);
-            Assert.Equal(4L, await audit.ExecuteScalarAsync());
+            Assert.Equal(6L, await audit.ExecuteScalarAsync());
             edge.Routes.Add("foreign", new("foreign", "https://bishopsbees.co.uk/admin/*", "another-worker", false));
             var conflict = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
             Assert.Equal("conflict", conflict.State);
             Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + hostname,
-                command with { Revision = 2 })).StatusCode);
+                command with { Revision = 3 })).StatusCode);
             Assert.Equal("another-worker", edge.Routes["foreign"].Script);
             var publication = await client.GetStringAsync("/api/status");
             Assert.DoesNotContain("PRIVATE_TRAFFIC_AUDIT_REASON", publication);
@@ -168,6 +177,27 @@ public sealed partial class IndependentServiceTests
         var api = new CloudflareTraffic(edge, new() { TrafficTokenFile = tokenFile }, NullLogger<CloudflareTraffic>.Instance);
         await Assert.ThrowsAsync<InvalidDataException>(() => api.RoutesAsync(new('b', 32), default));
         Assert.Equal(0, edge.Mutations);
+    }
+
+    [Fact]
+    public async Task MatchingRoutesNeverDispatchSameModePutsThatCouldOutliveReconciliation()
+    {
+        using var edge = new TrafficHttp { DelayPut = true };
+        var tokenFile = Path.Combine(_directory, "traffic-token");
+        await File.WriteAllTextAsync(tokenFile, "unit-test-credential");
+        var api = new CloudflareTraffic(edge, new() { TrafficTokenFile = tokenFile }, NullLogger<CloudflareTraffic>.Instance);
+        var configuration = TrafficConfig();
+        var host = configuration.Hosts[0];
+        await api.SetAsync(host, null, "page", configuration, _ => Task.CompletedTask, default);
+        var installed = edge.Routes.Single().Value;
+        await api.SetAsync(host, installed, "page", configuration, _ => Task.CompletedTask, default);
+        Assert.Equal(1, edge.Mutations);
+        Assert.Null(edge.CompleteDelayedPut);
+        edge.DelayPut = false;
+        await api.SetAsync(host, installed, "redirect", configuration, _ => Task.CompletedTask, default);
+        Assert.Equal("platform-maintenance-redirect", edge.Routes.Single().Value.Script);
+        Assert.Equal(2, edge.Mutations);
+        Assert.Null(edge.CompleteDelayedPut);
     }
 
     [Fact]
@@ -348,7 +378,7 @@ public sealed partial class IndependentServiceTests
             };
             Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/ops/traffic/" + host, stale)).StatusCode);
             Assert.Equal("platform-maintenance-redirect", edge.Routes[active.RouteId!].Script);
-            Assert.Equal(2, edge.Mutations);
+            Assert.Equal(1, edge.Mutations);
 
             var refreshed = (await client.GetFromJsonAsync<TrafficWorkspace>("/api/ops/traffic", StatusJson.Options))!.Hosts[0];
             edge.BeforeApi = request =>
@@ -365,7 +395,7 @@ public sealed partial class IndependentServiceTests
                 command with { Revision = refreshed.Revision, RouteId = refreshed.RouteId, RouteFingerprint = refreshed.RouteFingerprint });
             Assert.Equal(HttpStatusCode.Conflict, changed.StatusCode);
             Assert.Equal("foreign-worker", edge.Routes[active.RouteId!].Script);
-            Assert.Equal(2, edge.Mutations);
+            Assert.Equal(1, edge.Mutations);
 
             edge.Routes.Clear();
             enabled = await client.PostAsJsonAsync("/api/ops/traffic/" + host, command with { Revision = 2 });
@@ -466,6 +496,8 @@ public sealed partial class IndependentServiceTests
         public Func<HttpRequestMessage, Task>? BeforeApi { get; set; }
         public bool DelayDelete { get; set; }
         public Action? CompleteDelayedDelete { get; private set; }
+        public bool DelayPut { get; set; }
+        public Action? CompleteDelayedPut { get; private set; }
         public HttpClient CreateClient(string name) => new(this, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(2) };
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -531,8 +563,15 @@ public sealed partial class IndependentServiceTests
             }
             var payload = await request.Content!.ReadFromJsonAsync<JsonElement>(ct);
             var id = request.Method == HttpMethod.Post ? Guid.NewGuid().ToString("N") : uri.Segments.Last().Trim('/');
-            Routes[id] = new(id, payload.GetProperty("pattern").GetString()!, payload.GetProperty("script").GetString(),
+            var replacement = new TrafficRoute(id, payload.GetProperty("pattern").GetString()!, payload.GetProperty("script").GetString(),
                 payload.GetProperty("request_limit_fail_open").GetBoolean());
+            if (request.Method == HttpMethod.Put && DelayPut)
+            {
+                DelayPut = false;
+                CompleteDelayedPut = () => Routes[id] = replacement;
+                throw new TaskCanceledException("The PUT was dispatched but its response timed out.");
+            }
+            Routes[id] = replacement;
             return Json(new { success = true, result = new { id } });
         }
 
