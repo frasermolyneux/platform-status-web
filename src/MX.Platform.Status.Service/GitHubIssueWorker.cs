@@ -10,6 +10,8 @@ public sealed record GitHubSource(int Number, string SiteId, DateTimeOffset Upda
 
 public static class GitHubIssueParser
 {
+    private const string CreatedAtProperty = "created_at";
+
     public static bool IsTrusted(string author, RuntimeOptions options) =>
         author.Equals(options.GitHubRepository.Split('/')[0], StringComparison.OrdinalIgnoreCase)
         || options.GitHubTrustedAuthors.Contains(author, StringComparer.OrdinalIgnoreCase);
@@ -29,7 +31,7 @@ public static class GitHubIssueParser
         var published = labels.Contains("status:published");
         var body = issue.GetProperty("body").GetString() ?? "";
         var title = issue.GetProperty("title").GetString() ?? "";
-        var createdAt = issue.GetProperty("created_at").GetDateTimeOffset();
+        var createdAt = issue.GetProperty(CreatedAtProperty).GetDateTimeOffset();
         var updates = ReadUpdates(issue, comments, options);
         var state = ReadState(labels, closedAt, updates[^1].State);
         if (updates[^1].State != state)
@@ -106,12 +108,12 @@ public static class GitHubIssueParser
     private static List<IncidentUpdate> ReadUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options)
     {
         var updates = new List<IncidentUpdate>();
-        AddUpdate(updates, issue.GetProperty("body").GetString() ?? "", issue.GetProperty("created_at").GetDateTimeOffset(), IncidentState.Investigating);
-        foreach (var comment in comments.OrderBy(comment => comment.GetProperty("created_at").GetDateTimeOffset()))
+        AddUpdate(updates, issue.GetProperty("body").GetString() ?? "", issue.GetProperty(CreatedAtProperty).GetDateTimeOffset(), IncidentState.Investigating);
+        foreach (var comment in comments.OrderBy(comment => comment.GetProperty(CreatedAtProperty).GetDateTimeOffset()))
         {
             if (!IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)) continue;
             AddUpdate(updates, comment.GetProperty("body").GetString() ?? "",
-                comment.GetProperty("created_at").GetDateTimeOffset(), updates.LastOrDefault()?.State ?? IncidentState.Investigating);
+                comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), updates.LastOrDefault()?.State ?? IncidentState.Investigating);
         }
         if (updates.Count == 0)
             throw new InvalidDataException("An incident needs a public description, not only internal notes.");
@@ -144,6 +146,7 @@ public sealed class GitHubIssueWorker(
     StatusCatalog catalog, RuntimeOptions options, PostgresStore database,
     IHttpClientFactory clients, ILogger<GitHubIssueWorker> logger) : BackgroundService
 {
+    private const string NumberProperty = "number";
     private readonly Dictionary<int, (DateTimeOffset UpdatedAt, DateTimeOffset CheckedAt, List<JsonElement> Items)> commentCache = [];
     private sealed record IssueImport(int Number, DateTimeOffset UpdatedAt, IReadOnlyList<IncidentRecord> Records, string? Problem = null);
     private sealed record SyncProblem(int Issue, string Summary);
@@ -190,10 +193,10 @@ public sealed class GitHubIssueWorker(
         var sources = await database.ReadGitHubSourcesAsync(options.GitHubRepository, ct);
         var imports = new List<IssueImport>();
         foreach (var issue in issues.Where(issue => !issue.TryGetProperty("pull_request", out _))
-            .GroupBy(issue => issue.GetProperty("number").GetInt32())
+            .GroupBy(issue => issue.GetProperty(NumberProperty).GetInt32())
             .Select(group => group.OrderByDescending(issue => issue.GetProperty("updated_at").GetDateTimeOffset()).First()))
         {
-            var number = issue.GetProperty("number").GetInt32();
+            var number = issue.GetProperty(NumberProperty).GetInt32();
             imports.Add(await ReadImportAsync(issue, sources.Where(source => source.Number == number).ToArray(), ct));
         }
         var changes = imports.SelectMany(import => import.Records.Select(record =>
@@ -202,7 +205,7 @@ public sealed class GitHubIssueWorker(
         var problems = new List<SyncProblem>();
         foreach (var import in imports)
             if (import.Problem is { } problem) problems.Add(new(import.Number, problem));
-        var fetchedNumbers = issues.Select(issue => issue.GetProperty("number").GetInt32()).ToHashSet();
+        var fetchedNumbers = issues.Select(issue => issue.GetProperty(NumberProperty).GetInt32()).ToHashSet();
         foreach (var source in sources.Where(source => source.Incident.Published && !observed.Contains((source.Number, source.SiteId))))
         {
             if (await CanWithdrawAsync(source.Number, fetchedNumbers.Contains(source.Number), ct))
@@ -226,7 +229,7 @@ public sealed class GitHubIssueWorker(
 
     private async Task<IssueImport> ReadImportAsync(JsonElement issue, IReadOnlyList<GitHubSource> previous, CancellationToken ct)
     {
-        var number = issue.GetProperty("number").GetInt32();
+        var number = issue.GetProperty(NumberProperty).GetInt32();
         var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
         try
         {
@@ -247,7 +250,7 @@ public sealed class GitHubIssueWorker(
     {
         if (!HasLabel(issue, "status:incident") || issue.GetProperty("comments").GetInt32() == 0
             || !GitHubIssueParser.IsTrusted(issue.GetProperty("user").GetProperty("login").GetString()!, options)) return [];
-        var number = issue.GetProperty("number").GetInt32();
+        var number = issue.GetProperty(NumberProperty).GetInt32();
         var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
         if (commentCache.TryGetValue(number, out var cached) && cached.UpdatedAt == updatedAt
             && cached.CheckedAt > DateTimeOffset.UtcNow.AddMinutes(-30)) return cached.Items;
