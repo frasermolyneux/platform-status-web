@@ -9,6 +9,12 @@ let loginCount = 0;
 let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
 let saveGate: Promise<void> | undefined;
+function trafficRow(mode = 'normal', revision = 0) {
+  return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
+    verified: true, routeId: mode === 'normal' ? null : 'route-1', statusUrl: 'https://mxstatus.io/',
+    httpStatus: null, error: null, lastOperation: null };
+}
+let trafficRows = [trafficRow()];
 const account = {
   homeAccountId: 'test-account', username: 'operator@example.test', name: 'Test operator',
   idTokenClaims: { roles: ['Status.Operator'] },
@@ -47,11 +53,19 @@ beforeEach(() => {
   existingBanners = [];
   existingHealth = [];
   saveGate = undefined;
+  trafficRows = [trafficRow()];
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
       writes.push({ path, body: JSON.parse(String(init.body)) });
       await saveGate;
+      if (path.startsWith('/api/ops/traffic/')) {
+        if (rejectSave) return Response.json({ error: 'Cloudflare did not confirm the change. Refresh to inspect the live route.' }, { status: 409 });
+        const body = writes.at(-1)!.body;
+        const saved = trafficRow(String(body.mode), Number(body.revision) + 1);
+        trafficRows = [saved];
+        return Response.json(saved);
+      }
       return Response.json(rejectSave ? { error: 'Banner changed. Reload before editing.' } : { id: 2, revision: 1 }, { status: rejectSave ? 409 : 201 });
     }
     const fixtures: Record<string, unknown> = {
@@ -67,6 +81,9 @@ beforeEach(() => {
       }],
       '/api/ops/banners': existingBanners,
       '/api/ops/health': existingHealth,
+      '/api/ops/traffic': {
+        enabled: true, hosts: trafficRows, quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null },
+      },
       '/api/ops/evidence': [{
         source: 'azure-alert', id: 'alert-1', observedAt: timestamp,
         evidence: { data: { essentials: { alertRule: 'Database availability', description: 'The database needs attention.', severity: 'Sev1', monitorCondition: 'Fired' } } },
@@ -78,6 +95,67 @@ beforeEach(() => {
     assert.ok(path in fixtures, `Unexpected request ${path}`);
     return Response.json(fixtures[path]);
   };
+});
+
+test('traffic changes require an additional role and exact-host confirmation, without publishing an announcement', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  await renderOperations();
+  assert.match(document.body.textContent || '', /separately assigned Status.TrafficOperator/);
+  assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Enable maintenance')?.disabled);
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  await renderOperations();
+  assert.match(document.body.textContent || '', /85,000/);
+  click('Enable maintenance');
+  setValue('reason', 'Private investigation');
+  setValue('confirmation', 'www.bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  assert.equal(writes.length, 0);
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.deepEqual(writes[0], { path: '/api/ops/traffic/bishopsbees.co.uk',
+    body: { mode: 'page', reason: 'Private investigation', confirmation: 'bishopsbees.co.uk', revision: 0, routeId: null } });
+  assert.equal(writes.length, 1);
+  assert.match(document.querySelector('.traffic-state')?.textContent || '', /active \/ page/);
+});
+
+test('restoring traffic sends the observed route and revision and freezes confirmation while pending', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  trafficRows = [trafficRow('page', 7)];
+  let complete!: () => void;
+  saveGate = new Promise(resolve => { complete = resolve; });
+  await renderOperations();
+  click('Restore traffic');
+  setValue('reason', 'Origin recovery confirmed');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.ok(document.querySelector<HTMLTextAreaElement>('textarea')?.disabled);
+  assert.equal(writes[0].body.mode, 'normal');
+  assert.equal(writes[0].body.revision, 7);
+  assert.equal(writes[0].body.routeId, 'route-1');
+  complete();
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.match(document.querySelector('.traffic-state')?.textContent || '', /normal \/ normal/);
+});
+
+test('an uncertain edge change keeps the form and error visible and never sends a reopening request', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  rejectSave = true;
+  await renderOperations();
+  click('Enable maintenance');
+  setValue('reason', 'Preserve the block after an ambiguous response');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => (document.body.textContent || '').includes('Cloudflare did not confirm'));
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.mode, 'page');
+  assert.equal(document.querySelector<HTMLTextAreaElement>('textarea')?.value, 'Preserve the block after an ambiguous response');
+  assert.equal(document.querySelector<HTMLElement>('.editor-panel')!.hidden, false);
+  assert.ok(document.querySelector<HTMLButtonElement>('form button[type="submit"]')!.disabled);
+  assert.match(document.body.textContent || '', /Reopen this hostname's controls before retrying/);
 });
 
 function click(text: string): void {

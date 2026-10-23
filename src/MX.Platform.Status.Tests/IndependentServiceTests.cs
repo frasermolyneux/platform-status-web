@@ -21,7 +21,7 @@ using MX.Platform.Status.Service;
 
 namespace MX.Platform.Status.Tests;
 
-public sealed class IndependentServiceTests : IDisposable
+public sealed partial class IndependentServiceTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "status-tests-" + Guid.NewGuid().ToString("N"));
     private readonly string _tenant = Guid.NewGuid().ToString();
@@ -49,6 +49,7 @@ public sealed class IndependentServiceTests : IDisposable
         Assert.Equal("static-shell", await client.GetStringAsync("/component/mx.sitewatch.molyneux-me"));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/evidence")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/health")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/traffic")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/banners")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/api/ops/banners", new BannerCommand("Notice", "Message", "info", true))).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/api/integrations/azure", JsonContent.Create(new { }))).StatusCode);
@@ -316,7 +317,9 @@ public sealed class IndependentServiceTests : IDisposable
             Audience = invalid == "audience" ? Guid.NewGuid().ToString() : _client,
             NotBefore = DateTime.UtcNow.AddHours(-1),
             Expires = invalid == "expired" ? DateTime.UtcNow.AddMinutes(-5) : DateTime.UtcNow.AddMinutes(5),
-            Subject = new ClaimsIdentity([new("oid", Guid.NewGuid().ToString()), new("roles", role), new("scp", scope), new("azp", caller)]),
+            Subject = new ClaimsIdentity(role.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => new Claim("roles", value))
+                .Concat([new("oid", Guid.NewGuid().ToString()), new("scp", scope), new("azp", caller)])),
             SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
         });
 
@@ -495,7 +498,8 @@ public sealed class IndependentServiceTests : IDisposable
         }
     }
 
-    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false, string? connectionFile = null)
+    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false, string? connectionFile = null,
+        Action<Microsoft.AspNetCore.Builder.WebApplicationBuilder>? configure = null)
     {
         var webRoot = Path.Combine(_directory, "webroot");
         Directory.CreateDirectory(webRoot);
@@ -520,7 +524,7 @@ public sealed class IndependentServiceTests : IDisposable
                     settings.Configuration.SigningKeys.Add(_signingKey);
                 });
             }
-
+            configure?.Invoke(builder);
         });
     }
 

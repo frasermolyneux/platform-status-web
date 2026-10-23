@@ -7,7 +7,7 @@ using NpgsqlTypes;
 
 namespace MX.Platform.Status.Service;
 
-public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore> logger) : IAsyncDisposable
+public sealed partial class PostgresStore(RuntimeOptions options, ILogger<PostgresStore> logger) : IAsyncDisposable
 {
     internal const string EvidenceUpsert = """
         INSERT INTO status_evidence VALUES($1,$2,$3,$4)
@@ -82,6 +82,11 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
                 incident_id integer NOT NULL REFERENCES status_incidents(id),
                 updated_at timestamptz NOT NULL,
                 PRIMARY KEY(repository,issue_number,site_id));
+            CREATE TABLE IF NOT EXISTS status_traffic (
+                hostname text PRIMARY KEY, site_id text NOT NULL, document jsonb NOT NULL);
+            CREATE TABLE IF NOT EXISTS status_traffic_audit (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(),
+                hostname text NOT NULL, site_id text NOT NULL, document jsonb NOT NULL);
             """, connection, transaction);
         await command.ExecuteNonQueryAsync(ct);
         await transaction.CommitAsync(ct);

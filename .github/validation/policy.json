@@ -23,6 +23,22 @@
   ],
   "allowedSecrets": [
     {
+      "id": "traffic-configuration",
+      "hostPath": "/etc/platform-workloads/platform-status-web/traffic-configuration",
+      "vaultName": "kv-platform-prd-0b924e",
+      "vaultSecret": "traffic-configuration",
+      "groupId": 10001,
+      "mode": "0640"
+    },
+    {
+      "id": "traffic-api-token",
+      "hostPath": "/etc/platform-workloads/platform-status-web/traffic-api-token",
+      "vaultName": "kv-platform-prd-0b924e",
+      "vaultSecret": "traffic-api-token",
+      "groupId": 10001,
+      "mode": "0640"
+    },
+    {
       "id": "postgres-password",
       "hostPath": "/etc/platform-workloads/platform-status-web/postgres-password",
       "vaultName": "kv-platform-prd-0b924e",

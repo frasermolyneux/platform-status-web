@@ -2,6 +2,8 @@ import { PublicClientApplication, InteractionRequiredAuthError } from '@azure/ms
 import { fetchStatus, type ComponentDto } from './api';
 import { affectedComponents, evidenceCards, incidentSeed, type ComponentHealth, type EvidenceCard, type EvidenceRecord } from './evidence';
 import { formatDateTime } from './time';
+import { button, element, field, link, option, type Control } from './ops-ui';
+import { renderTraffic } from './traffic';
 
 interface Incident {
   id: number;
@@ -35,7 +37,6 @@ interface Runtime {
   workloads: Record<string, string[]>;
 }
 
-type Control = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 type EvidenceDraft = ReturnType<typeof incidentSeed>;
 let authentication: PublicClientApplication | undefined;
 
@@ -50,26 +51,6 @@ function readEvidenceDraft(saved: string): EvidenceDraft {
   return seed;
 }
 
-function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
-  const result = document.createElement(tag);
-  if (text !== undefined) result.textContent = text;
-  if (className) result.className = className;
-  return result;
-}
-
-function button(text: string, action: () => void, primary = false): HTMLButtonElement {
-  const result = element('button', text, primary ? 'button-primary' : '');
-  result.type = 'button';
-  result.addEventListener('click', action);
-  return result;
-}
-
-function link(text: string, href: string): HTMLAnchorElement {
-  const result = element('a', text);
-  result.href = href;
-  return result;
-}
-
 function flatten(components: ComponentDto[]): ComponentDto[] {
   return components.flatMap(component => [component, ...flatten(component.children || [])]);
 }
@@ -78,25 +59,12 @@ function toLocal(value?: string): string {
   return value ? new Date(new Date(value).getTime() - new Date(value).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
 }
 
-function option(value: string, label = value): HTMLOptionElement {
-  const result = element('option', label);
-  result.value = value;
-  return result;
-}
-
-function field(form: HTMLFormElement, label: string, control: Control, name: string): void {
-  control.name = name;
-  const wrapper = element('label', label, control instanceof HTMLInputElement && control.type === 'checkbox' ? 'checkbox-field' : '');
-  wrapper.append(control);
-  form.append(wrapper);
-}
-
 export async function renderOperations(navigateTo: (path: string) => void = path => location.assign(path)): Promise<void> {
   const root = document.getElementById('app');
   if (!root) return;
   const path = location.pathname;
   const page = path.split('/')[2] || 'overview';
-  const labels: Record<string, string> = { overview: 'Operations', incidents: 'Incidents', banners: 'Banners', evidence: 'Monitoring evidence' };
+  const labels: Record<string, string> = { overview: 'Operations', incidents: 'Incidents', banners: 'Banners', evidence: 'Monitoring evidence', traffic: 'Traffic controls' };
   const heading = element('div', undefined, 'page-heading');
   heading.append(element('h2', labels[page] || 'Operations'),
     element('p', 'Manage status updates and review monitoring results.', 'muted'));
@@ -622,6 +590,11 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       } finally { refresh.disabled = false; }
     }
     renderLists();
+    if (page === 'traffic') {
+      const trafficSection = element('section', undefined, 'panel');
+      root.append(trafficSection);
+      await renderTraffic(trafficSection, request, canWrite && Array.isArray(roles) && roles.includes('Status.TrafficOperator'), runtime.writable, current);
+    }
     const draftId = new URLSearchParams(location.search).get('draft');
     if (page === 'incidents' && draftId) {
       try {

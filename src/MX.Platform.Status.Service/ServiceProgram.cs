@@ -28,6 +28,15 @@ public static class ServiceProgram
             catch (HttpRequestException) { return 1; }
             catch (TaskCanceledException) { return 1; }
         }
+        if (args is ["--verify-maintenance-edge"] or ["--restore-maintenance-canary"])
+        {
+            await using var application = Build([]);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            await TrafficAcceptance.RunAsync(application.Services.GetRequiredService<RuntimeOptions>(),
+                application.Services.GetRequiredService<StatusCatalog>(), application.Services.GetRequiredService<TrafficController>(),
+                application.Services.GetRequiredService<IHttpClientFactory>(), args[0] == "--restore-maintenance-canary", timeout.Token);
+            return 0;
+        }
         if (args.Length is 2 or 3 && args[0] == "--emergency-publish")
         {
             await using var application = Build([]);
@@ -63,12 +72,25 @@ public static class ServiceProgram
         builder.Services.AddSingleton(catalog);
         builder.Services.AddSingleton<PublicationStore>();
         builder.Services.AddSingleton<PostgresStore>();
+        builder.Services.AddSingleton<CloudflareTraffic>();
+        builder.Services.AddSingleton<TrafficController>();
         builder.Services.AddHostedService<PublicationWorker>();
         builder.Services.AddHostedService<EvidenceWorker>();
         builder.Services.AddHostedService<GitHubIssueWorker>();
+        builder.Services.AddHostedService<TrafficUsageWorker>();
         builder.Services.AddHttpClient("probe", client => client.DefaultRequestHeaders.UserAgent.ParseAdd("MXStatus/1.0"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         builder.Services.AddHttpClient("vendor", client => client.Timeout = TimeSpan.FromSeconds(15));
+        builder.Services.AddHttpClient("cloudflare-traffic", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(10);
+            client.MaxResponseContentBufferSize = 2_000_000;
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        builder.Services.AddHttpClient("traffic-verification", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(3);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("MXStatusMaintenance/1.0");
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         builder.Services.AddHttpClient("github", client =>
         {
             client.Timeout = TimeSpan.FromSeconds(30);
@@ -128,6 +150,20 @@ public static class ServiceProgram
         app.MapGet("/api/ops/banners", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
             Results.Json(await database.ReadBannersAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, ct), StatusJson.Options))
             .RequireAuthorization(ReaderPolicy);
+        app.MapGet("/api/ops/traffic", async (HttpContext context, TrafficController traffic, CancellationToken ct) =>
+            Results.Ok(await traffic.ReadAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, ct)))
+            .RequireAuthorization(ReaderPolicy);
+        app.MapPost("/api/ops/traffic/{hostname}", async (string hostname, TrafficCommand command, HttpContext context,
+            TrafficController traffic, CancellationToken ct) =>
+        {
+            if (command.Validate(hostname) is { } error) return Results.BadRequest(new { error });
+            try
+            {
+                return Results.Ok(await traffic.ChangeAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, hostname,
+                    command, context.User.FindFirstValue("oid")!, ct));
+            }
+            catch (TrafficConflictException exception) { return Results.Conflict(new { error = exception.Message }); }
+        }).RequireAuthorization("traffic-operator");
         app.MapPost("/api/ops/banners", (HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
             SaveBannerAsync(context, command, null, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPut("/api/ops/banners/{id:int}", (int id, HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
@@ -209,6 +245,9 @@ public static class ServiceProgram
             auth.AddPolicy("ingest", policy => policy.RequireAuthenticatedUser().RequireRole("Status.Ingest")
                 .RequireAssertion(context => options.WebhookApplicationIds.Contains(
                     context.User.FindFirstValue("azp") ?? context.User.FindFirstValue("appid"), StringComparer.OrdinalIgnoreCase)));
+            auth.AddPolicy("traffic-operator", policy => policy.RequireAuthenticatedUser()
+                .RequireAssertion(context => HasUserScope(context.User) && context.User.IsInRole("Status.Operator")
+                    && context.User.IsInRole("Status.TrafficOperator") && Guid.TryParse(context.User.FindFirstValue("oid"), out _)));
         });
     }
 

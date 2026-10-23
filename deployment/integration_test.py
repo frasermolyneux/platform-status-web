@@ -253,7 +253,7 @@ def main():
             subprocess.run([
                 "dotnet", "test", "src/MX.Platform.Status.Tests/MX.Platform.Status.Tests.csproj",
                 "--configuration", "Release", "--no-build", "--nologo",
-                "--filter", "FullyQualifiedName~BannerApiPersists|FullyQualifiedName~GitHubSourceKeeps|FullyQualifiedName~ProbeDiagnosticsPersist",
+                "--filter", "FullyQualifiedName~BannerApiPersists|FullyQualifiedName~GitHubSourceKeeps|FullyQualifiedName~ProbeDiagnosticsPersist|FullyQualifiedName~TrafficControlsPersist|FullyQualifiedName~TrafficFailuresRemain",
             ], check=True, env=integration_environment)
             command = {
                 "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],
