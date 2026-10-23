@@ -39,10 +39,10 @@ public sealed class PublicationWorker(
     {
         if (!options.Publisher)
         {
-            foreach (var site in catalog.Sites)
+            foreach (var site in catalog.Sites.Select(definition => definition.Site))
             {
-                var publication = await database.ReadPublicationAsync(site.Site.Id, ct);
-                if (publication is not null && (!published.TryGetValue(site.Site.Id, out var previous)
+                var publication = await database.ReadPublicationAsync(site.Id, ct);
+                if (publication is not null && (!published.TryGetValue(site.Id, out var previous)
                     || previous.At != publication.GeneratedAt))
                 {
                     await files.WriteAsync(publication, ct);
