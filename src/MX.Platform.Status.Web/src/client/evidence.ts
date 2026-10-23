@@ -166,6 +166,17 @@ export function evidenceCards(records: EvidenceRecord[]): EvidenceCard[] {
           ...strings(data.problems).slice(0, 20).map(value => ({ label: 'Problem', value })),
         ].filter(detail => detail.value),
       }];
+    if (record.source === 'cloudflare-workers-usage')
+      return [{
+        ...base, title: 'Cloudflare Workers free allowance',
+        summary: text(data.summary, 'Workers account usage could not be checked.'),
+        severity: data.status === 'healthy' ? 'info' : 'warning', state: text(data.status, 'unknown'),
+        details: [
+          { label: 'Estimated requests today (UTC)', value: display(data.Requests ?? data.requests) },
+          { label: 'Free daily allowance', value: display(data.FreeDailyAllowance ?? data.freeDailyAllowance) },
+          { label: 'Coverage', value: text(data.coverage) },
+        ].filter(detail => detail.value),
+      }];
     if (record.source === 'sitewatch') {
       const regions = Array.isArray(data.regions) ? data.regions : [];
       return [{

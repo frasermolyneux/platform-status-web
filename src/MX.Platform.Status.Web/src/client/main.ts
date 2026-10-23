@@ -22,7 +22,7 @@ addRoute('/', () => loadAndRender(renderOverview));
 addRoute('/component/:id', ({ id }) => loadAndRender(data => renderComponent(data, id)));
 addRoute('/incident/:id', ({ id }) => loadAndRender(data => renderIncident(data, id)));
 addRoute('/history', () => loadAndRender(renderHistory));
-for (const path of ['/ops', '/ops/incidents', '/ops/banners', '/ops/evidence']) addRoute(path, () => {
+for (const path of ['/ops', '/ops/incidents', '/ops/banners', '/ops/evidence', '/ops/traffic']) addRoute(path, () => {
   import('./ops').then(module => module.renderOperations(navigate)).catch(() => {
     const app = document.getElementById('app');
     if (app) app.textContent = 'Unable to load operations. Public status remains available.';

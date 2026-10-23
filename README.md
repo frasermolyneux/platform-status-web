@@ -111,6 +111,76 @@ Container Apps ingress, so it has no independent public HTTP probe: its status i
 unknown unless an approved incident or maintenance window reports an impact.
 Do not infer healthy availability from the absence of an Azure alert.
 
+### Hostname traffic controls
+
+`/ops/traffic` reads the live Cloudflare configuration for the current brand's
+approved hostnames. Changes require the delegated scope, `Status.Operator`, and
+the separately assigned `Status.TrafficOperator` role. An operator must confirm
+the exact hostname and provide a private audit reason. Readers cannot switch
+traffic; status hostnames and arbitrary destinations cannot be registered.
+
+The shared Worker is deployed by `platform-connectivity`. The controller owns
+only its exact-host maintenance routes; Terraform never manages those routes.
+Normal traffic does not invoke the maintenance Worker. Page mode returns a
+self-contained, noncacheable `503` with `Retry-After` and a status link. Redirect
+mode sends only HTML GET/HEAD requests with top-level browser navigation metadata
+to the correct status brand with a temporary `302`; API, form, probe, download
+and HTML fetch requests still receive `503`. Older clients without navigation
+metadata receive the maintenance page rather than a redirect.
+Paths, queries, cookies and request bodies are never forwarded to the status site.
+Custom public wording belongs in separately approved banners or incidents.
+
+Activation verifies proxied DNS, refuses overlapping foreign Worker routes,
+explicitly sets `request_limit_fail_open=false`, reads it back and checks the
+public response. A failed or uncertain operation never automatically removes the
+block. Restoration removes only the observed owned route, checks removal, and
+does not withdraw public communications or imply the underlying app is healthy.
+Existing connections, browser caches and direct-origin access are outside this
+new-request interception boundary.
+
+Per-host writer advisory locks, intent revisions and observed route fingerprints
+serialize changes. Every edge mutation checks the original database session still
+holds its lock and intent. Interrupted intents have a two-minute in-progress
+window, then require explicit, read-only reconciliation of the original requested
+outcome. Dispatched mutations with an unknown result remain fenced without expiry:
+**Reconcile previous request** verifies the original route/public response and
+sends no new edge mutation. A delayed restore cannot be followed by a conflicting
+maintenance change while its DELETE may still complete. If the earlier outcome
+never materializes, inspect and resolve it in Cloudflare before reconciling.
+Intent is
+audited durably before external mutation, followed by completion or failure.
+The UI distinguishes the live route from the last requested operation; manual
+Cloudflare changes are not automatically reversed. The two operations are not a
+distributed transaction. Fresh route checks narrow dashboard races, but Cloudflare
+does not provide an atomic compare-and-write here: coordinate dashboard overrides
+with operators. Audit unavailability disables application controls;
+an explicitly authorised administrator can still use Cloudflare's dashboard.
+
+`TrafficConfigurationFile` and `TrafficTokenFile` are read-only secret mounts
+supplied by `platform-baremetal`; the approved registry and Worker names come from
+connectivity's remote-state output. The token may manage routes and read DNS and
+account analytics, but cannot change DNS, Worker code, zone plans or billing.
+Workers Free has an account-wide allowance of 100,000 requests/day. The workspace
+shows estimated UTC-day usage; the publisher refreshes private usage evidence
+every 15 minutes and warns at 80,000 requests. Unavailable analytics is reported,
+never interpreted as zero usage. This feature does not subscribe to Workers Paid.
+
+For an emergency override, select the correct zone in Cloudflare, inspect
+**Workers Routes**, and modify only the exact `<hostname>/*` route pointing to
+`platform-maintenance-page` or `platform-maintenance-redirect`. Keep its failure
+mode **Fail closed** while blocking. To reopen, remove that route only, confirm the
+public response, and record the override in the incident timeline. Never remove
+another application's routes, disable the zone proxy, or include either status
+hostname. Refresh `/ops/traffic` afterward to see the actual edge state.
+
+Deployment acceptance uses only `maintenance-check.bishopsbees.co.uk`, a dedicated
+Worker-owned endpoint with no production origin. A local authorised administrator
+can run the service with `--verify-maintenance-edge` to exercise page, browser
+redirect, non-browser blocking and restoration through the same controller and
+audit writer. It refuses an already intercepted canary and never targets a
+monitored application. If acceptance fails, inspect the canary and explicitly
+run `--restore-maintenance-canary`; there is no automatic reopening.
+
 ### Manual announcements
 
 Use **New announcement** on `/ops/banners` to preview, save, publish or withdraw a plain-text banner

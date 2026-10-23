@@ -9,6 +9,18 @@ let loginCount = 0;
 let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
 let saveGate: Promise<void> | undefined;
+let writerWritable = true;
+let trafficReadGate: Promise<void> | undefined;
+let trafficReadStarted = 0;
+let rejectTrafficRead = false;
+function trafficRow(mode = 'normal', revision = 0,
+  lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
+  return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
+    verified: true, routeId: mode === 'normal' ? null : 'route-1',
+    routeFingerprint: mode === 'normal' ? null : 'observed-route-fingerprint', statusUrl: 'https://mxstatus.io/',
+    httpStatus: null, error: null, lastOperation };
+}
+let trafficRows = [trafficRow()];
 const account = {
   homeAccountId: 'test-account', username: 'operator@example.test', name: 'Test operator',
   idTokenClaims: { roles: ['Status.Operator'] },
@@ -47,12 +59,33 @@ beforeEach(() => {
   existingBanners = [];
   existingHealth = [];
   saveGate = undefined;
+  writerWritable = true;
+  trafficRows = [trafficRow()];
+  trafficReadGate = undefined;
+  trafficReadStarted = 0;
+  rejectTrafficRead = false;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
       writes.push({ path, body: JSON.parse(String(init.body)) });
       await saveGate;
+      if (path.startsWith('/api/ops/traffic/')) {
+        if (rejectSave) return Response.json({ error: 'Cloudflare did not confirm the change. Refresh to inspect the live route.' }, { status: 409 });
+        const body = writes.at(-1)!.body;
+        const saved = trafficRow(String(body.mode), Number(body.revision) + 1);
+        trafficRows = [saved];
+        return Response.json(saved);
+      }
       return Response.json(rejectSave ? { error: 'Banner changed. Reload before editing.' } : { id: 2, revision: 1 }, { status: rejectSave ? 409 : 201 });
+    }
+    if (path === '/api/ops/traffic') {
+      const hosts = structuredClone(trafficRows);
+      const reject = rejectTrafficRead;
+      trafficReadStarted++;
+      await trafficReadGate;
+      if (reject) throw new Error('Stale refresh failure');
+      return Response.json({ enabled: true, hosts,
+        quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null } });
     }
     const fixtures: Record<string, unknown> = {
       '/api/auth/config': { enabled: true, clientId: 'client', tenantId: 'tenant', scope: 'Status.Access' },
@@ -60,7 +93,7 @@ beforeEach(() => {
         site: { id: 'mx', displayName: 'MX status' }, summary: { status: 'operational' },
         components: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website', kind: 'leaf', children: [] }],
       },
-      '/api/ops/runtime': { publisher: true, writable: true, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
+      '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
       '/api/ops/incidents': [{
         id: 1, title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
         sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
@@ -78,6 +111,130 @@ beforeEach(() => {
     assert.ok(path in fixtures, `Unexpected request ${path}`);
     return Response.json(fixtures[path]);
   };
+});
+
+test('traffic changes require an additional role and exact-host confirmation, without publishing an announcement', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  await renderOperations();
+  assert.match(document.body.textContent || '', /separately assigned Status.TrafficOperator/);
+  assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Enable maintenance')?.disabled);
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  await renderOperations();
+  assert.match(document.body.textContent || '', /85,000/);
+  assert.ok(document.querySelector('[aria-label="Enable maintenance for bishopsbees.co.uk"]'));
+  click('Enable maintenance');
+  setValue('reason', 'Private investigation');
+  setValue('confirmation', 'www.bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  assert.equal(writes.length, 0);
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.deepEqual(writes[0], { path: '/api/ops/traffic/bishopsbees.co.uk',
+    body: { mode: 'page', reason: 'Private investigation', confirmation: 'bishopsbees.co.uk', revision: 0, routeId: null, routeFingerprint: null } });
+  assert.equal(writes.length, 1);
+  assert.match(document.querySelector('.traffic-state')?.textContent || '', /active \/ page/);
+});
+
+test('restoring traffic sends the observed route and revision and freezes confirmation while pending', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  trafficRows = [trafficRow('page', 7)];
+  let complete!: () => void;
+  saveGate = new Promise(resolve => { complete = resolve; });
+  await renderOperations();
+  click('Restore traffic');
+  setValue('reason', 'Origin recovery confirmed');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.ok(document.querySelector<HTMLTextAreaElement>('textarea')?.disabled);
+  assert.equal(writes[0].body.mode, 'normal');
+  assert.equal(writes[0].body.revision, 7);
+  assert.equal(writes[0].body.routeId, 'route-1');
+  assert.equal(writes[0].body.routeFingerprint, 'observed-route-fingerprint');
+  complete();
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.match(document.querySelector('.traffic-state')?.textContent || '', /normal \/ normal/);
+});
+
+test('workspace refresh re-enables traffic controls after the audit writer recovers without replacing an editor', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  writerWritable = false;
+  await renderOperations();
+  const enable = () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Enable maintenance')!;
+  assert.equal(enable().disabled, true);
+  writerWritable = true;
+  click('Refresh workspace');
+  await until(() => enable().disabled === false);
+  click('Enable maintenance');
+  setValue('reason', 'Retain this draft during refresh');
+  const form = document.querySelector('form');
+  click('Refresh workspace');
+  await until(() => !Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh workspace')!.disabled);
+  assert.equal(document.querySelector('form'), form);
+  assert.equal(document.querySelector<HTMLTextAreaElement>('textarea')?.value, 'Retain this draft during refresh');
+});
+
+test('an uncertain edge change keeps the form and error visible and never sends a reopening request', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  rejectSave = true;
+  await renderOperations();
+  click('Enable maintenance');
+  setValue('reason', 'Preserve the block after an ambiguous response');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => (document.body.textContent || '').includes('Cloudflare did not confirm'));
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.mode, 'page');
+  assert.equal(document.querySelector<HTMLTextAreaElement>('textarea')?.value, 'Preserve the block after an ambiguous response');
+  assert.equal(document.querySelector<HTMLElement>('.editor-panel')!.hidden, false);
+  assert.ok(document.querySelector<HTMLButtonElement>('form button[type="submit"]')!.disabled);
+  assert.match(document.body.textContent || '', /Reopen this hostname's controls before retrying/);
+});
+
+for (const staleFailure of [false, true]) test(`a pre-mutation traffic ${staleFailure ? 'failure' : 'read'} cannot overwrite the confirmed edge result`, async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  await renderOperations();
+  click('Enable maintenance');
+  setValue('reason', 'Block independently of an older refresh');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  let complete!: () => void;
+  trafficReadGate = new Promise(resolve => { complete = resolve; });
+  rejectTrafficRead = staleFailure;
+  click('Refresh traffic controls');
+  await until(() => trafficReadStarted === 2);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => (document.querySelector('.traffic-state')?.textContent || '').includes('active / page'));
+  complete();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.match(document.querySelector('.traffic-state')?.textContent || '', /active \/ page/);
+  assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Restore traffic'));
+  assert.doesNotMatch(document.body.textContent || '', /Stale refresh failure/);
+});
+
+test('an ambiguous mutation exposes reconciliation of only its original requested mode', async () => {
+  history.replaceState(null, '', '/ops/traffic');
+  account.idTokenClaims.roles = ['Status.Operator', 'Status.TrafficOperator'];
+  trafficRows = [{ ...trafficRow('page', 8, {
+    actor: 'operator', reason: 'Previous restore timed out', updatedAt: timestamp, phase: 'uncertain', mode: 'normal',
+  }), state: 'uncertain' }];
+  await renderOperations();
+  assert.ok(document.querySelector('[aria-label="Reconcile previous request for bishopsbees.co.uk"]'));
+  assert.equal(Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Restore traffic'), false);
+  click('Reconcile previous request');
+  assert.equal(document.querySelector<HTMLSelectElement>('[name="mode"]')!.options.length, 1);
+  assert.equal(document.querySelector<HTMLSelectElement>('[name="mode"]')!.value, 'normal');
+  setValue('reason', 'Observe completion of the earlier restore');
+  setValue('confirmation', 'bishopsbees.co.uk');
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.mode, 'normal');
+  assert.match(document.body.textContent || '', /No additional edge mutation was sent/);
 });
 
 function click(text: string): void {

@@ -28,6 +28,8 @@ public sealed record RuntimeOptions
     public string GitHubRepository { get; init; } = "frasermolyneux/status-pages";
     public string[] GitHubTrustedAuthors { get; init; } = [];
     public string? GitHubTokenFile { get; init; }
+    public string? TrafficConfigurationFile { get; init; }
+    public string? TrafficTokenFile { get; init; }
     public int GitHubRefreshSeconds { get; init; } = 300;
 
     public void Validate()
