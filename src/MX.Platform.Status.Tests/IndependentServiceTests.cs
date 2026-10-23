@@ -409,7 +409,7 @@ public sealed class IndependentServiceTests : IDisposable
             var closed = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
             Assert.Equal(first.Incident.Id, closed.Incident.Id);
             Assert.Equal(IncidentState.Resolved, closed.Incident.State);
-            api.Issues = [GitHubApiFixture.Incident(true, 3)];
+            api.Issues = [GitHubApiFixture.Incident(true, 3), GitHubApiFixture.Incident(true, 2, closed: true)];
             await worker.SynchronizeAsync(default);
             var reopened = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
             Assert.Equal(IncidentState.Investigating, reopened.Incident.State);

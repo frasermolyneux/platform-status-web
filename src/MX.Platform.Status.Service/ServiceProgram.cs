@@ -16,6 +16,7 @@ namespace MX.Platform.Status.Service;
 public static class ServiceProgram
 {
     private const string ReaderPolicy = "reader";
+    private const string OperatorPolicy = "operator";
 
     public static async Task<int> Main(string[] args)
     {
@@ -125,13 +126,13 @@ public static class ServiceProgram
             Results.Json(await database.ReadBannersAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, ct), StatusJson.Options))
             .RequireAuthorization(ReaderPolicy);
         app.MapPost("/api/ops/banners", (HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
-            SaveBannerAsync(context, command, null, catalog, database, ct)).RequireAuthorization("operator");
+            SaveBannerAsync(context, command, null, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPut("/api/ops/banners/{id:int}", (int id, HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
-            SaveBannerAsync(context, command, id, catalog, database, ct)).RequireAuthorization("operator");
+            SaveBannerAsync(context, command, id, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPost("/api/ops/incidents", (HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
-            SaveIncidentAsync(context, command, null, catalog, database, ct)).RequireAuthorization("operator");
+            SaveIncidentAsync(context, command, null, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPut("/api/ops/incidents/{id:int}", (int id, HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
-            SaveIncidentAsync(context, command, id, catalog, database, ct)).RequireAuthorization("operator");
+            SaveIncidentAsync(context, command, id, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPost("/api/integrations/azure", async (JsonElement payload, PostgresStore database, CancellationToken ct) =>
         {
             if (!AzureAlert.TryParse(payload, out var alert)) return Results.BadRequest(new { error = "Unsupported Azure common alert payload." });
@@ -197,7 +198,7 @@ public static class ServiceProgram
         }
         services.AddAuthorization(auth =>
         {
-            auth.AddPolicy("operator", policy => policy.RequireAuthenticatedUser()
+            auth.AddPolicy(OperatorPolicy, policy => policy.RequireAuthenticatedUser()
                 .RequireAssertion(context => HasUserScope(context.User) && context.User.IsInRole("Status.Operator")));
             auth.AddPolicy(ReaderPolicy, policy => policy.RequireAuthenticatedUser()
                 .RequireAssertion(context => HasUserScope(context.User)
@@ -237,8 +238,9 @@ public static class ServiceProgram
             return Results.Json(new { error = "Banner publishing is temporarily read-only because the writer is unavailable." }, statusCode: 503);
         var record = await database.SaveBannerAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, id, command,
             context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct);
+        var statusCode = id.HasValue ? StatusCodes.Status200OK : StatusCodes.Status201Created;
         return record is null ? Results.Conflict(new { error = "Banner changed or does not exist. Reload before editing." })
-            : Results.Json(record, StatusJson.Options, statusCode: id.HasValue ? 200 : 201);
+            : Results.Json(record, StatusJson.Options, statusCode: statusCode);
     }
 
     private static async Task WriteFeedAsync(HttpContext context, StatusCatalog catalog, PublicationStore files, CancellationToken ct)
