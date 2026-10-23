@@ -26,7 +26,7 @@ export function option(value: string, label = value): HTMLOptionElement {
   return result;
 }
 
-export function field(form: HTMLFormElement, label: string, control: Control, name: string): void {
+export function field(form: HTMLElement, label: string, control: Control, name: string): void {
   control.name = name;
   const wrapper = element('label', label, control instanceof HTMLInputElement && control.type === 'checkbox' ? 'checkbox-field' : '');
   wrapper.append(control);

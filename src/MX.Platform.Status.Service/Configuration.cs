@@ -64,6 +64,7 @@ public sealed record SiteDefinition
     public ComponentsDocument Components { get; init; } = new();
     public Dictionary<string, string> Probes { get; init; } = [];
     public Dictionary<string, string[]> Workloads { get; init; } = [];
+    public Dictionary<string, string> SharedComponents { get; init; } = [];
 
     public SiteConfigurationSnapshot Snapshot => new(Site, Components, "", "", DateTimeOffset.UtcNow);
 }
@@ -90,6 +91,7 @@ public sealed class StatusCatalog
             if (components.Length == 0 || components.Select(c => c.Id).Distinct().Count() != components.Length)
                 throw new InvalidOperationException("Status component IDs must be unique within a site.");
             ValidateProbes(definition, components);
+            ValidateSharedComponents(definition);
             if (definition.Workloads.Any(workload => string.IsNullOrWhiteSpace(workload.Key)
                 || workload.Value.Length == 0 || workload.Value.Distinct().Count() != workload.Value.Length
                 || workload.Value.Any(id => !PublicComponents(definition.Components.Components).Any(c => c.Id == id))))
@@ -109,11 +111,55 @@ public sealed class StatusCatalog
         }
     }
 
+    private static void ValidateSharedComponents(SiteDefinition definition)
+    {
+        var publicIds = PublicComponents(definition.Components.Components).Select(component => component.Id).ToHashSet();
+        if (definition.SharedComponents.Any(pair => !publicIds.Contains(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
+            || definition.SharedComponents.Values.Distinct().Count() != definition.SharedComponents.Count)
+            throw new InvalidOperationException("Shared components require distinct identities mapped to public components.");
+    }
+
     public SiteDefinition? FindHost(string host) => Sites.SingleOrDefault(s =>
         s.Site.Domains.Contains(host.TrimEnd('.'), StringComparer.OrdinalIgnoreCase));
 
     public SiteDefinition Get(string id) => Sites.SingleOrDefault(s => s.Site.Id == id)
         ?? throw new ArgumentException("Unknown status site.", nameof(id));
+
+    public IReadOnlyList<IncidentRecord> ProjectIncidents(SiteDefinition target, IEnumerable<IncidentRecord> records) =>
+        records.OrderByDescending(record => record.Published).ThenByDescending(record => record.SiteId == target.Site.Id)
+            .Select(record => ProjectIncident(target, record)).Where(record => record is not null)
+            .Select(record => record!)
+            .GroupBy(record => record.SourceUrl ?? $"incident:{record.Id}")
+            .Select(group =>
+            {
+                var incident = group.First();
+                return incident with
+                {
+                    Components = group.Where(record => record.Published == incident.Published)
+                        .SelectMany(record => record.Components).Distinct().ToArray()
+                };
+            }).ToArray();
+
+    private IncidentRecord? ProjectIncident(SiteDefinition target, IncidentRecord record)
+    {
+        if (record.SiteId == target.Site.Id) return record;
+        var source = Get(record.SiteId);
+        var publicComponents = PublicComponents(source.Components.Components).ToArray();
+        if (!record.Published || record.Components.Any(id => !publicComponents.Any(component => component.Id == id)))
+            return null;
+        var affected = record.Components.SelectMany(id => PublicComponents(
+            [publicComponents.Single(component => component.Id == id)])).Select(component => component.Id).ToHashSet();
+        var shared = source.SharedComponents.Where(pair => affected.Contains(pair.Key)).Select(pair => pair.Value).ToHashSet();
+        var components = target.SharedComponents.Where(pair => shared.Contains(pair.Value)).Select(pair => pair.Key).ToArray();
+        return components.Length == 0 ? null : record with
+        {
+            Components = components,
+            Evidence = null,
+            Updates = record.PublicUpdates,
+            SourceStateUpdates = [],
+            SourceUpdates = []
+        };
+    }
 
     public static IEnumerable<Component> Flatten(IEnumerable<Component> components) =>
         components.SelectMany(component => new[] { component }.Concat(Flatten(component.Children)));

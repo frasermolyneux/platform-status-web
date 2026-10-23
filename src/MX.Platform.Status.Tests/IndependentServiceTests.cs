@@ -404,6 +404,18 @@ public sealed partial class IndependentServiceTests : IDisposable
             Assert.Equal(2L, await audit.ExecuteScalarAsync());
             response = await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command with { Revision = 2 });
             Assert.False((await response.Content.ReadFromJsonAsync<BannerRecord>(StatusJson.Options))!.Published);
+            response = await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command with { Revision = 3, Archived = true });
+            var archived = (await response.Content.ReadFromJsonAsync<BannerRecord>(StatusJson.Options))!;
+            Assert.True(archived.Archived);
+            Assert.False(archived.Published);
+            Assert.Equal(command.Message, archived.Message);
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}",
+                command with { Revision = 4, Archived = true, Published = true })).StatusCode);
+            response = await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command with { Revision = 4 });
+            var restored = (await response.Content.ReadFromJsonAsync<BannerRecord>(StatusJson.Options))!;
+            Assert.False(restored.Archived);
+            Assert.False(restored.Published);
+            Assert.Equal(5L, await audit.ExecuteScalarAsync());
         }
         finally
         {

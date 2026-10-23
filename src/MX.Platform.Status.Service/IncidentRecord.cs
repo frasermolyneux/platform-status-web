@@ -22,6 +22,7 @@ public sealed record IncidentRecord
     public IReadOnlyList<IncidentUpdate> Updates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> SourceStateUpdates { get; init; } = [];
+    public IReadOnlyList<IncidentUpdate> SourceUpdates { get; init; } = [];
     public string? SourceUrl { get; init; }
     public IncidentEvidence? Evidence { get; init; }
 
@@ -33,6 +34,7 @@ public sealed record IncidentRecord
         Severity = Severity,
         State = State,
         Url = $"/incident/{Id}",
+        SourceUrl = SourceUrl,
         CreatedAt = StartedAt,
         StartedAt = StartedAt,
         ResolvedAt = ResolvedAt,
@@ -92,6 +94,7 @@ public sealed record IncidentCommand(
         {
             At = now,
             State = State,
+            Severity = Severity,
             Body = WebUtility.HtmlEncode(Message.Trim()).Replace("\n", "<br>", StringComparison.Ordinal)
         };
         return new()

@@ -64,7 +64,7 @@ export function renderOverview(data: StatusResponse): void {
   if (activeIncidents.length > 0) {
     html += '<section class="incidents-section"><h2>Active Incidents</h2>';
     for (const inc of activeIncidents) {
-      html += renderIncidentCard(inc);
+      html += renderIncidentCard(inc, data);
     }
     html += '</section>';
   }
@@ -85,6 +85,7 @@ export function renderOverview(data: StatusResponse): void {
         <h3><a href="/incident/${escapeHtml(String(m.id))}">${escapeHtml(m.title)}</a></h3>
         <p>${formatDateTime(m.scheduledStart)} — ${formatDateTime(m.scheduledEnd)}</p>
         <span class="badge badge-maintenance">${escapeHtml(m.state)}</span>
+        ${affectedServices(m.components, data)}
       </div>`;
     }
     html += '</section>';
@@ -120,7 +121,20 @@ function renderComponentRow(c: ComponentDto): string {
   </div>`;
 }
 
-function renderIncidentCard(inc: IncidentDto): string {
+function affectedServices(ids: string[], data: StatusResponse): string {
+  const components = flattenComponents(data.components).filter(component => ids.includes(component.id));
+  const leaves = components.filter(component => component.kind === 'leaf');
+  const affected = leaves.length ? leaves : components;
+  return `<p class="affected-services"><strong>Affected services:</strong> ${affected.map(component =>
+    `<a href="/component/${escapeHtml(component.id)}">${escapeHtml(component.name)}</a>`).join(', ') || 'See incident updates'}</p>`;
+}
+
+function issueLink(incident: IncidentDto): string {
+  if (!incident.sourceUrl || !/^https:\/\/github\.com\/[^/?#]+\/[^/?#]+\/issues\/[1-9]\d*$/.test(incident.sourceUrl)) return '';
+  return `<p><a href="${escapeHtml(incident.sourceUrl)}" target="_blank" rel="noopener noreferrer">View GitHub issue</a></p>`;
+}
+
+function renderIncidentCard(inc: IncidentDto, data: StatusResponse): string {
   const info = getStatusInfo(inc.severity);
   return `<div class="incident-card ${info.className}">
     <h3><a href="/incident/${escapeHtml(String(inc.id))}">${escapeHtml(inc.title)}</a></h3>
@@ -129,6 +143,8 @@ function renderIncidentCard(inc: IncidentDto): string {
       <span class="badge badge-state">${escapeHtml(inc.state)}</span>
       <span>${formatRelative(inc.createdAt)}</span>
     </div>
+    ${affectedServices(inc.components, data)}
+    ${issueLink(inc)}
     ${inc.updates.length > 0
       ? `<p class="incident-latest">${excerpt(inc.updates[inc.updates.length - 1].body)}</p>`
       : ''}
@@ -163,9 +179,12 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(component.name)}</h2>
     ${component.description ? `<p>${escapeHtml(component.description)}</p>` : ''}
-    <div class="component-detail-status ${info.className}">${info.label}</div>
+    <div class="component-detail-status ${info.className}">${getStatusDotHtml(component.status)}${info.label}</div>
     ${component.link ? `<p><a href="${escapeHtml(component.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(component.link)}</a></p>` : ''}
     ${renderHistoryBars(component)}
+    <section class="incidents-section"><h3>Incidents affecting this service</h3>
+    ${data.incidents.filter(incident => incident.components.includes(component.id))
+      .map(incident => renderIncidentCard(incident, data)).join('') || '<p>No published incidents for this service.</p>'}</section>
   `);
 }
 
@@ -190,11 +209,16 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
       <span>Opened ${formatDateTime(incident.createdAt)}</span>
       ${incident.resolvedAt ? `<span>Resolved ${formatDateTime(incident.resolvedAt)}</span>` : ''}
     </div>
+    ${affectedServices(incident.components, data)}
+    ${issueLink(incident)}
+    ${!incident.sourceUrl ? '<p class="muted">Published by the status team. This incident has no linked GitHub issue.</p>' : ''}
     <div class="incident-timeline">
   `;
-  for (const update of incident.updates) {
+  for (const update of [...incident.updates].reverse()) {
     html += `<div class="timeline-entry">
-      <div class="timeline-meta">${formatDateTime(update.at)} — <strong>${escapeHtml(update.state)}</strong></div>
+      <div class="timeline-meta">${formatDateTime(update.at)} — <strong>${escapeHtml(update.state)}</strong>
+        ${update.severity ? `<span class="badge badge-${escapeHtml(update.severity)}">${escapeHtml(update.severity)}</span>`
+          : '<span class="muted">Impact level was not recorded for this update</span>'}</div>
       <div class="timeline-body">${update.body}</div>
     </div>`;
   }
@@ -217,6 +241,6 @@ export function renderHistory(data: StatusResponse): void {
     <p>Availability is based on observed checks. Grey periods have no data and are not counted as healthy.</p>
     ${data.dataFreshness?.stale ? '<div class="stale-warning">Live collection is unavailable; showing the last publication.</div>' : ''}
     <section>${flattenComponents(data.components).filter(c => c.kind === 'leaf').map(renderHistoryBars).join('')}</section>
-    <section>${incidents.length ? incidents.map(renderIncidentCard).join('') : '<p>No published incidents.</p>'}</section>
+    <section>${incidents.length ? incidents.map(incident => renderIncidentCard(incident, data)).join('') : '<p>No published incidents.</p>'}</section>
   `);
 }

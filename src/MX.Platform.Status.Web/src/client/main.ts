@@ -3,9 +3,15 @@ import type { StatusResponse } from './api';
 import { addRoute, navigate, resolve } from './router';
 import { renderOverview, renderComponent, renderIncident, renderHistory } from './render';
 
+let generation = 0;
+let loading = false;
+
 async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<void> {
+  const requestGeneration = ++generation;
+  loading = true;
   try {
     const data = await fetchStatus();
+    if (requestGeneration !== generation) return;
     document.title = data.site.displayName;
     const title = document.getElementById('site-title');
     const tagline = document.getElementById('site-tagline');
@@ -13,8 +19,11 @@ async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<
     if (tagline) tagline.textContent = data.site.tagline || '';
     renderer(data);
   } catch (err) {
+    if (requestGeneration !== generation) return;
     const app = document.getElementById('app');
     if (app) app.textContent = 'Unable to load status data. Please try again later.';
+  } finally {
+    if (requestGeneration === generation) loading = false;
   }
 }
 
@@ -23,7 +32,12 @@ addRoute('/component/:id', ({ id }) => loadAndRender(data => renderComponent(dat
 addRoute('/incident/:id', ({ id }) => loadAndRender(data => renderIncident(data, id)));
 addRoute('/history', () => loadAndRender(renderHistory));
 for (const path of ['/ops', '/ops/incidents', '/ops/banners', '/ops/evidence', '/ops/traffic']) addRoute(path, () => {
-  import('./ops').then(module => module.renderOperations(navigate)).catch(() => {
+  const requestGeneration = ++generation;
+  loading = false;
+  return import('./ops').then(module => {
+    if (requestGeneration === generation) return module.renderOperations(navigate);
+  }).catch(() => {
+    if (requestGeneration !== generation) return;
     const app = document.getElementById('app');
     if (app) app.textContent = 'Unable to load operations. Public status remains available.';
   });
@@ -31,9 +45,12 @@ for (const path of ['/ops', '/ops/incidents', '/ops/banners', '/ops/evidence', '
 
 document.addEventListener('DOMContentLoaded', () => resolve());
 
-// Auto-refresh every 30s
-setInterval(() => {
-  if (document.visibilityState === 'visible' && !/^\/ops(?:\/|$)/.test(location.pathname)) {
-    resolve();
-  }
-}, 30_000);
+function refreshVisiblePage(): void {
+  if (document.visibilityState !== 'visible') return;
+  if (/^\/ops(?:\/|$)/.test(location.pathname))
+    document.getElementById('app')?.dispatchEvent(new Event('status:refresh-workspace'));
+  else if (!loading) resolve();
+}
+
+setInterval(refreshVisiblePage, 5_000);
+document.addEventListener('visibilitychange', refreshVisiblePage);

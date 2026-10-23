@@ -42,6 +42,7 @@ public static class GitHubIssueParser
             var resolvedAt = ResolutionTime(state, closedAt, issue.GetProperty("updated_at").GetDateTimeOffset(),
                 previousIncident);
             var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
+            updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, issue.GetProperty("updated_at").GetDateTimeOffset());
             var command = new IncidentCommand(title, components, severity, state, body, published);
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
@@ -57,6 +58,7 @@ public static class GitHubIssueParser
                 Updates = updates,
                 PublicUpdates = published ? updates : [],
                 SourceStateUpdates = stateUpdates,
+                SourceUpdates = sourceUpdates,
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
             });
         }
@@ -128,6 +130,41 @@ public static class GitHubIssueParser
 
     private static IncidentUpdate StateUpdate(DateTimeOffset at, IncidentState state) =>
         new() { At = at, State = state, Body = $"Incident marked {state.ToApiString()} in GitHub." };
+
+    private static IReadOnlyList<IncidentUpdate> PreserveHistory(IReadOnlyList<IncidentUpdate> incoming,
+        IReadOnlyList<IncidentUpdate> sourceUpdates, IncidentRecord? previous, Severity severity, DateTimeOffset updatedAt)
+    {
+        if (previous is null)
+            return incoming.Select(update => update with { Severity = update.At == updatedAt ? severity : null }).ToArray();
+        var history = previous.Updates.ToList();
+        foreach (var update in incoming)
+        {
+            if (UnchangedUpdate(update, sourceUpdates, previous)) continue;
+            var edited = history.Any(known => known.At == update.At);
+            history.Add(update with
+            {
+                At = edited ? updatedAt : update.At,
+                State = edited ? incoming[^1].State : update.State,
+                Severity = severity
+            });
+        }
+        if (previous.Severity != severity)
+            history.Add(new()
+            {
+                At = updatedAt,
+                State = incoming[^1].State,
+                Severity = severity,
+                Body = $"Incident impact changed to {severity.ToApiString()} in GitHub."
+            });
+        return history.Distinct().OrderBy(update => update.At).ToArray();
+    }
+
+    private static bool UnchangedUpdate(IncidentUpdate update, IReadOnlyList<IncidentUpdate> sourceUpdates, IncidentRecord previous)
+    {
+        if (previous.SourceUpdates.Count > 0 && sourceUpdates.Any(source => source.At == update.At && source.Body == update.Body))
+            return previous.SourceUpdates.Any(source => source.At == update.At && source.Body == update.Body);
+        return previous.Updates.Any(known => known.At == update.At && known.Body == update.Body && known.State == update.State);
+    }
 
     private static List<IncidentUpdate> ReadUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options,
         IReadOnlyList<IncidentUpdate>? stateUpdates = null)

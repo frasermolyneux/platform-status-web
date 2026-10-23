@@ -267,7 +267,7 @@ def main():
                 assert len(matches) == 1 and matches[0].attrib["outcome"] == "Passed", case_name
             print(f"All {len(native_cases)} required native PostgreSQL cases executed and passed without skips.")
             command = {
-                "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],
+                "title": "Integration incident", "components": ["mx.sitewatch.geo-location-web"],
                 "severity": "outage", "state": "investigating",
                 "message": "RESTRICTED_DRAFT_MARKER", "published": False,
             }
@@ -276,10 +276,36 @@ def main():
                                        input=json.dumps(command)))
             assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(request(urls["public"], "/api/status")[1])
             command.update(published=True, revision=record["revision"], message="Approved public update")
-            docker("exec", "--interactive", f"{name}-replica", "dotnet", "MX.Platform.Status.Service.dll",
+            started = time.monotonic()
+            record = json.loads(docker("exec", "--interactive", f"{name}-replica", "dotnet", "MX.Platform.Status.Service.dll",
+                                      "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command)))
+            for label, url in urls.items():
+                for host, site in (("mxstatus.io", "mx"), ("status.xtremeidiots.com", "xi")):
+                    wait_for(lambda: any(item["id"] == record["id"]
+                             for item in request(url, "/api/status", host)[1].get("incidents", [])),
+                             f"{label}/{site} shared incident replication", seconds=30)
+                    publication = request(url, "/api/status", host)[1]
+                    component = next(item for item in publication["components"]
+                                     if item["id"] == f"{site}.sitewatch.geo-location-web")
+                    assert component["status"] == "outage"
+                    assert record["id"] in component["openIncidentIds"]
+                    assert "GeoLocation Website" in publication["summary"]["message"]
+            assert time.monotonic() - started < 30, "Shared incident publication must not wait for the probe interval."
+            command.update(revision=record["revision"], severity="degraded", state="identified",
+                           message="Identified the cause; service remains degraded")
+            docker("exec", "--interactive", f"{name}-public", "dotnet", "MX.Platform.Status.Service.dll",
                    "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command))
             for label, url in urls.items():
-                wait_for(lambda: bool(request(url, "/api/status")[1].get("incidents")), f"{label} incident replication")
+                for host in ("mxstatus.io", "status.xtremeidiots.com"):
+                    def updated():
+                        incident = next(item for item in request(url, "/api/status", host)[1]["incidents"]
+                                        if item["id"] == record["id"])
+                        return incident["severity"] == "degraded" and incident["updates"][-1]["state"] == "identified"
+                    wait_for(updated, f"{label}/{host} changed impact and description", seconds=30)
+                    incident = next(item for item in request(url, "/api/status", host)[1]["incidents"]
+                                    if item["id"] == record["id"])
+                    assert [update["severity"] for update in incident["updates"]] == ["outage", "degraded"]
+                    assert [update["state"] for update in incident["updates"]] == ["investigating", "identified"]
             now = datetime.now(timezone.utc)
             maintenance = {
                 "title": "Integration maintenance", "components": ["mx.sitewatch.molyneux-me"],

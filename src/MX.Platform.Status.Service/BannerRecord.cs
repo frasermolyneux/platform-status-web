@@ -11,6 +11,7 @@ public sealed record BannerRecord
     public string Message { get; init; } = "";
     public string Tone { get; init; } = "info";
     public bool Published { get; init; }
+    public bool Archived { get; init; }
     public DateTimeOffset? StartsAt { get; init; }
     public DateTimeOffset? ExpiresAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
@@ -29,10 +30,11 @@ public sealed record BannerRecord
 
 public sealed record BannerCommand(
     string Title, string Message, string Tone, bool Published, int Revision = 0,
-    DateTimeOffset? StartsAt = null, DateTimeOffset? ExpiresAt = null)
+    DateTimeOffset? StartsAt = null, DateTimeOffset? ExpiresAt = null, bool Archived = false)
 {
     public string? Validate()
     {
+        if (Archived && Published) return "Archived notices cannot be published. Restore the notice before publishing.";
         if (string.IsNullOrWhiteSpace(Title) || Title.Length > 120
             || string.IsNullOrWhiteSpace(Message) || Message.Length > 2000)
             return "A title (up to 120 characters) and message (up to 2000 characters) are required.";
@@ -54,6 +56,7 @@ public sealed record BannerCommand(
         Message = Message.Trim(),
         Tone = Tone,
         Published = Published,
+        Archived = Archived,
         StartsAt = StartsAt,
         ExpiresAt = ExpiresAt,
         UpdatedAt = now

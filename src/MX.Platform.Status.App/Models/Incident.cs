@@ -5,6 +5,7 @@ public sealed record Incident
     public int Id { get; init; }
     public string Title { get; init; } = string.Empty;
     public string Url { get; init; } = string.Empty;
+    public string? SourceUrl { get; init; }
     public IReadOnlyList<string> Components { get; init; } = [];
     public Severity Severity { get; init; }
     public IncidentState State { get; init; }
@@ -18,6 +19,7 @@ public sealed record IncidentUpdate
 {
     public DateTimeOffset At { get; init; }
     public IncidentState State { get; init; }
+    public Severity? Severity { get; init; }
     public string Body { get; init; } = string.Empty;
     public string? Author { get; init; }
 }

@@ -48,13 +48,14 @@ export interface IncidentDto {
   id: number;
   title: string;
   url: string;
+  sourceUrl?: string;
   components: string[];
   severity: string;
   state: string;
   createdAt: string;
   startedAt?: string;
   resolvedAt?: string | null;
-  updates: { at: string; state: string; body: string; author?: string }[];
+  updates: { at: string; state: string; severity?: string; body: string; author?: string }[];
 }
 
 export interface MaintenanceDto {
@@ -69,7 +70,7 @@ export interface MaintenanceDto {
 }
 
 export async function fetchStatus(): Promise<StatusResponse> {
-  const res = await fetch('/api/status');
+  const res = await fetch('/api/status', { cache: 'no-store' });
   if (!res.ok) throw new Error(`Status API returned ${res.status}`);
   return res.json();
 }
