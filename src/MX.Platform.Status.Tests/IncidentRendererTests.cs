@@ -25,6 +25,14 @@ public sealed class IncidentRendererTests
         Assert.Equal("Visible content", result);
     }
 
+    [Theory]
+    [InlineData("Visible\n    <!-- internal -->\nsecret\n-->\nMore visible", "Visible\nMore visible")]
+    [InlineData("Visible <!--internal-->secret--> after", "Visible  after")]
+    [InlineData("Visible\n<!-- INTERNAL -->\nsecret\n<!-- internal -->nested-->\nstill secret\n<!-- /internal -->\nMore visible", "Visible\nMore visible")]
+    [InlineData("Visible\n<!-- internal -->\nunclosed secret", "Visible")]
+    public void RedactsIndentedInlineNestedAndUnterminatedInternalNotes(string input, string expected) =>
+        Assert.Equal(expected, IncidentRenderer.Render(input));
+
     [Fact]
     public void HandlesBodyWithNoInternalCommentsUnchanged()
     {

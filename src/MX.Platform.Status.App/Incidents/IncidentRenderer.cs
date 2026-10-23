@@ -14,32 +14,12 @@ public static partial class IncidentRenderer
 
         var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var builder = new StringBuilder();
-        var skipping = false;
+        var depth = 0;
 
         foreach (var rawLine in lines)
         {
-            var line = rawLine;
-            if (skipping)
-            {
-                if (line.Contains("-->", StringComparison.Ordinal))
-                {
-                    skipping = false;
-                }
-
-                continue;
-            }
-
-            if (line.TrimStart().StartsWith("<!-- internal -->", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!line["<!-- internal -->".Length..].Contains("-->", StringComparison.Ordinal))
-                {
-                    skipping = true;
-                }
-
-                continue;
-            }
-
-            line = SingleLineComment().Replace(line, string.Empty);
+            var line = RedactLine(rawLine, ref depth);
+            if (line is null) continue;
             if (builder.Length > 0)
             {
                 builder.Append('\n');
@@ -51,6 +31,32 @@ public static partial class IncidentRenderer
         return builder.ToString().Trim();
     }
 
-    [GeneratedRegex(@"<!--\s*internal\s*-->.*?(?:-->)?", RegexOptions.IgnoreCase)]
-    private static partial Regex SingleLineComment();
+    private static string? RedactLine(string line, ref int depth)
+    {
+        var redacted = depth > 0;
+        var visible = new StringBuilder();
+        var cursor = 0;
+        foreach (Match marker in InternalMarkers().Matches(line))
+        {
+            if (depth == 0) visible.Append(line, cursor, marker.Index - cursor);
+            if (marker.Groups["start"].Success)
+            {
+                depth++;
+                redacted = true;
+            }
+            else if (depth > 0)
+            {
+                depth--;
+                redacted = true;
+            }
+            else visible.Append(marker.Value);
+            cursor = marker.Index + marker.Length;
+        }
+        if (depth == 0) visible.Append(line, cursor, line.Length - cursor);
+        var text = visible.ToString();
+        return redacted && string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    [GeneratedRegex(@"(?<start><!--\s*internal\s*-->)|<!--\s*/internal\s*-->|-->", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex InternalMarkers();
 }

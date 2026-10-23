@@ -43,8 +43,11 @@ public sealed class StatusExperienceTests
         Assert.Empty(GitHubIssueParser.Parse(Issue(["unrelated"], author: "stranger"), [], Catalogue(), new()));
     }
 
-    [Fact]
-    public void GitHubUpdatesExcludeUntrustedCommentsAndInternalNotesAndEscapeHtml()
+    [Theory]
+    [InlineData("")]
+    [InlineData("    ")]
+    [InlineData("\t")]
+    public void GitHubUpdatesExcludeUntrustedCommentsAndInternalNotesAndEscapeHtml(string indentation)
     {
         var comments = new[] {
             JsonSerializer.SerializeToElement(new { body = "UNTRUSTED_COMMENT", user = new { login = "stranger" }, created_at = Created.AddMinutes(1) }),
@@ -52,7 +55,7 @@ public sealed class StatusExperienceTests
         };
         var record = Assert.Single(GitHubIssueParser.Parse(Issue(
             ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage"],
-            body: "Public description.\n<!-- internal -->\nPRIVATE_NOTE\n<!-- /internal -->"), comments, Catalogue(), new()));
+            body: $"Public description.\n{indentation}<!-- internal -->\nPRIVATE_NOTE\n{indentation}<!-- /internal -->"), comments, Catalogue(), new()));
         Assert.Equal([IncidentState.Investigating, IncidentState.Monitoring], record.PublicUpdates.Select(update => update.State));
         Assert.Equal(IncidentState.Monitoring, record.State);
         var output = JsonSerializer.Serialize(record.ToPublicIncident(), StatusJson.Options);
@@ -102,6 +105,37 @@ public sealed class StatusExperienceTests
         Assert.Equal(first.ResolvedAt, followed.PublicUpdates[1].At);
         Assert.Equal(IncidentState.Resolved, followed.PublicUpdates[^1].State);
         Assert.Equal(Created.AddMinutes(12), followed.PublicUpdates[^1].At);
+    }
+
+    [Fact]
+    public void ActiveStateLabelsRetainTheirHistoryAcrossUnrelatedEditsUntrustedCommentsAndReopening()
+    {
+        string[] identifiedLabels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage", "state:identified"];
+        var identified = Assert.Single(GitHubIssueParser.Parse(Issue(identifiedLabels), [], Catalogue(), new()));
+        var monitoringLabels = identifiedLabels.Select(label => label == "state:identified" ? "state:monitoring" : label).ToArray();
+        var monitoring = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels, updatedMinutes: 10), [], Catalogue(), new(), [identified]));
+        Assert.Equal([IncidentState.Investigating, IncidentState.Identified, IncidentState.Monitoring],
+            monitoring.PublicUpdates.Select(update => update.State));
+        var edited = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels, updatedMinutes: 15, title: "Corrected title"), [], Catalogue(), new(), [monitoring]));
+        Assert.Equal(monitoring.PublicUpdates.Select(update => update.At), edited.PublicUpdates.Select(update => update.At));
+        var comment = JsonSerializer.SerializeToElement(new
+        {
+            body = "state: resolved\nUntrusted update.",
+            user = new { login = "stranger" },
+            created_at = Created.AddMinutes(18)
+        });
+        var afterUntrusted = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels, updatedMinutes: 20, title: "Corrected title"), [comment], Catalogue(), new(), [edited]));
+        Assert.Equal(JsonSerializer.Serialize(edited, StatusJson.Options), JsonSerializer.Serialize(afterUntrusted, StatusJson.Options));
+        var closed = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels, closed: true, updatedMinutes: 25), [], Catalogue(), new(), [afterUntrusted]));
+        var reopened = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels, updatedMinutes: 30), [], Catalogue(), new(), [closed]));
+        Assert.Equal([IncidentState.Investigating, IncidentState.Identified, IncidentState.Monitoring, IncidentState.Resolved, IncidentState.Monitoring],
+            reopened.PublicUpdates.Select(update => update.State));
+        Assert.Null(reopened.ResolvedAt);
     }
 
     [Fact]

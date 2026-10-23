@@ -11,6 +11,7 @@ public sealed record GitHubSource(int Number, string SiteId, DateTimeOffset Upda
 public static class GitHubIssueParser
 {
     private const string CreatedAtProperty = "created_at";
+    private sealed record UpdateEvent(DateTimeOffset At, string Body, IncidentState? State = null);
 
     public static bool IsTrusted(string author, RuntimeOptions options) =>
         author.Equals(options.GitHubRepository.Split('/')[0], StringComparison.OrdinalIgnoreCase)
@@ -37,9 +38,10 @@ public static class GitHubIssueParser
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)
         {
+            var previousIncident = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id);
             var resolvedAt = ResolutionTime(state, closedAt, issue.GetProperty("updated_at").GetDateTimeOffset(),
-                previous?.SingleOrDefault(record => record.SiteId == site.Site.Id));
-            var updates = FinalizeUpdates(issue, comments, options, sourceUpdates, state, resolvedAt);
+                previousIncident);
+            var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
             var command = new IncidentCommand(title, components, severity, state, body, published);
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
@@ -54,6 +56,7 @@ public static class GitHubIssueParser
                 ResolvedAt = resolvedAt,
                 Updates = updates,
                 PublicUpdates = published ? updates : [],
+                SourceStateUpdates = stateUpdates,
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
             });
         }
@@ -105,33 +108,41 @@ public static class GitHubIssueParser
         return closedAt ?? updatedAt;
     }
 
-    private static IReadOnlyList<IncidentUpdate> FinalizeUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments,
-        RuntimeOptions options, IReadOnlyList<IncidentUpdate> sourceUpdates, IncidentState state, DateTimeOffset? resolvedAt)
+    private static (IReadOnlyList<IncidentUpdate> Updates, IReadOnlyList<IncidentUpdate> StateUpdates) ReconcileUpdates(
+        JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options, IncidentState state,
+        DateTimeOffset? closedAt, IncidentRecord? previous)
     {
-        var updates = sourceUpdates;
-        if (updates[^1].State == state) return updates;
-        if (resolvedAt.HasValue) updates = ReadUpdates(issue, comments, options, resolvedAt);
-        if (updates[^1].State == state) return updates;
-        return [.. updates, StateUpdate(issue.GetProperty("updated_at").GetDateTimeOffset(), state)];
+        var stateUpdates = previous?.SourceStateUpdates.ToList() ?? [];
+        if (closedAt is { } closed && previous?.State != IncidentState.Resolved)
+            stateUpdates.Add(StateUpdate(closed, IncidentState.Resolved));
+        var updates = ReadUpdates(issue, comments, options, stateUpdates);
+        if (updates[^1].State != state)
+        {
+            stateUpdates.Add(StateUpdate(issue.GetProperty("updated_at").GetDateTimeOffset(), state));
+            updates = ReadUpdates(issue, comments, options, stateUpdates);
+        }
+        if (updates[^1].State != state)
+            throw new InvalidDataException("The issue snapshot predates its durable state history; synchronization will retry.");
+        return (updates, stateUpdates);
     }
 
     private static IncidentUpdate StateUpdate(DateTimeOffset at, IncidentState state) =>
         new() { At = at, State = state, Body = $"Incident marked {state.ToApiString()} in GitHub." };
 
     private static List<IncidentUpdate> ReadUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options,
-        DateTimeOffset? resolvedAt = null)
+        IReadOnlyList<IncidentUpdate>? stateUpdates = null)
     {
-        var events = new List<(DateTimeOffset At, string Body, bool Synthetic)>
+        var events = new List<UpdateEvent>
         {
-            (issue.GetProperty(CreatedAtProperty).GetDateTimeOffset(), issue.GetProperty("body").GetString() ?? "", false)
+            new(issue.GetProperty(CreatedAtProperty).GetDateTimeOffset(), issue.GetProperty("body").GetString() ?? "")
         };
         events.AddRange(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options))
-            .Select(comment => (comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), comment.GetProperty("body").GetString() ?? "", false)));
-        if (resolvedAt is { } at) events.Add((at, "", true));
+            .Select(comment => new UpdateEvent(comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), comment.GetProperty("body").GetString() ?? "")));
+        events.AddRange((stateUpdates ?? []).Select(update => new UpdateEvent(update.At, update.Body, update.State)));
         var updates = new List<IncidentUpdate>();
         foreach (var entry in events.OrderBy(entry => entry.At))
         {
-            if (entry.Synthetic) updates.Add(StateUpdate(entry.At, IncidentState.Resolved));
+            if (entry.State is { } state) updates.Add(new() { At = entry.At, State = state, Body = entry.Body });
             else AddUpdate(updates, entry.Body, entry.At, updates.LastOrDefault()?.State ?? IncidentState.Investigating);
         }
         if (updates.Count == 0)

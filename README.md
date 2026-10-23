@@ -126,7 +126,9 @@ public GitHub repository, regardless of rendering.
 Closing resolves the mapped incident; reopening restores its active state.
 Removing the publish label withdraws it without deleting its audit history.
 Source-owned incidents have stable IDs and are edited in GitHub, not in the
-local incident editor. API failures and incomplete pagination retain the last
+local incident editor. Label, closure and reopening transitions remain in the durable
+timeline; unrelated edits and untrusted comments do not rewrite those transitions.
+API failures and incomplete pagination retain the last
 durable incident state and surface a private integration error. Missing issues
 are checked individually before withdrawal to avoid pagination races.
 

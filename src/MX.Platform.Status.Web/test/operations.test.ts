@@ -192,3 +192,30 @@ test('pending saves freeze submitted fields and never clear or hide a replacemen
   assert.equal(document.querySelector<HTMLTextAreaElement>('[name="message"]')?.value, 'A different unsaved update');
   assert.match(sessionStorage.getItem('status-draft:test-account:mx:banner:new') || '', /A different unsaved update/);
 });
+
+test('workspace fragment navigation preserves its editor and filters with router handlers installed', async () => {
+  const router = await import('../src/client/router');
+  let renders = 0;
+  router.addRoute('/ops', () => { renders++; void renderOperations(); });
+  router.addRoute('/history', () => { renders++; document.getElementById('app')!.textContent = 'History route'; });
+  router.resolve();
+  await until(() => document.querySelectorAll('.evidence-card').length === 2);
+  const filter = document.querySelector<HTMLSelectElement>('[aria-label="Filter evidence by state"]')!;
+  filter.value = 'Fired';
+  filter.dispatchEvent(new window.Event('change'));
+  click('New announcement');
+  setValue('title', 'Retain this editor');
+  const form = document.querySelector('form');
+  document.querySelector<HTMLAnchorElement>('.workspace-nav a[href="#operator-banners"]')!.click();
+  await until(() => location.hash === '#operator-banners');
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
+  assert.equal(renders, 1);
+  assert.equal(document.querySelector('form'), form);
+  assert.equal(filter.value, 'Fired');
+  assert.equal(document.querySelectorAll('.evidence-card').length, 1);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Retain this editor');
+  history.pushState(null, '', '/history');
+  window.dispatchEvent(new window.PopStateEvent('popstate'));
+  assert.equal(renders, 2);
+  assert.equal(document.getElementById('app')?.textContent, 'History route');
+});
