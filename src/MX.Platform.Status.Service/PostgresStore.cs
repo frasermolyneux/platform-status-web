@@ -135,10 +135,10 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         bool publication, CancellationToken ct)
     {
         var records = new List<IncidentRecord>();
-        foreach (var source in catalog.Sites.Select(definition => definition.Site))
-            records.AddRange(publication || source.Id != site.Site.Id
-                ? await ReadPublicationIncidentsAsync(source.Id, ct)
-                : await ReadIncidentsAsync(source.Id, ct));
+        foreach (var sourceId in catalog.Sites.Select(definition => definition.Site.Id))
+            records.AddRange(publication || sourceId != site.Site.Id
+                ? await ReadPublicationIncidentsAsync(sourceId, ct)
+                : await ReadIncidentsAsync(sourceId, ct));
         return catalog.ProjectIncidents(site, records);
     }
 

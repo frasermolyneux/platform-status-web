@@ -33,23 +33,23 @@ public static class GitHubIssueParser
         var body = issue.GetProperty("body").GetString() ?? "";
         var title = issue.GetProperty("title").GetString() ?? "";
         var createdAt = issue.GetProperty(CreatedAtProperty).GetDateTimeOffset();
+        var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
         var sourceUpdates = ReadUpdates(issue, comments, options);
         var state = ReadState(labels, closedAt, sourceUpdates[^1].State);
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)
         {
             var previousIncident = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id);
-            var resolvedAt = ResolutionTime(state, closedAt, issue.GetProperty("updated_at").GetDateTimeOffset(),
-                previousIncident);
+            var resolvedAt = ResolutionTime(state, closedAt, updatedAt, previousIncident);
             var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
-            updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, issue.GetProperty("updated_at").GetDateTimeOffset());
+            updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, updatedAt);
             var publicUpdates = previousIncident?.PublicUpdates ?? [];
             var publicStateUpdates = previousIncident?.PublicSourceStateUpdates ?? [];
             if (published)
             {
                 var approved = ApprovedHistory(previousIncident);
                 var (current, transitions) = ReconcileUpdates(issue, comments, options, state, closedAt, approved);
-                publicUpdates = PreserveHistory(current, sourceUpdates, approved, severity, issue.GetProperty("updated_at").GetDateTimeOffset());
+                publicUpdates = PreserveHistory(current, sourceUpdates, approved, severity, updatedAt);
                 publicStateUpdates = transitions;
             }
             var command = new IncidentCommand(title, components, severity, state, body, published);

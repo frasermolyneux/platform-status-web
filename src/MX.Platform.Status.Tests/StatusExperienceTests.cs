@@ -416,7 +416,10 @@ public sealed class StatusExperienceTests
         var monitoringLabels = identifiedLabels.Select(label => label == "state:identified" ? "state:monitoring" : label).ToArray();
         var monitoring = Assert.Single(GitHubIssueParser.Parse(
             Issue(monitoringLabels, updatedMinutes: 10), [], Catalogue(), new(), [identified]));
-        var legacy = monitoring with { PublicSourceUpdates = [], PublicSourceStateUpdates = [], PublicSourceSeverity = null };
+        var persisted = JsonSerializer.SerializeToNode(monitoring, StatusJson.Options)!.AsObject();
+        foreach (var name in new[] { "publicSourceUpdates", "publicSourceStateUpdates", "publicSourceSeverity" })
+            persisted.Remove(name);
+        var legacy = persisted.Deserialize<IncidentRecord>(StatusJson.Options)!;
         var upgraded = Assert.Single(GitHubIssueParser.Parse(
             Issue(monitoringLabels, updatedMinutes: 15, title: "Corrected title"), [], Catalogue(), new(), [legacy]));
         Assert.Equal(monitoring.PublicUpdates, upgraded.PublicUpdates);
