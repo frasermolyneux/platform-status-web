@@ -52,12 +52,14 @@ public sealed record TrafficConfiguration
 public sealed record TrafficCommand(string Mode, string Reason, string Confirmation, int Revision = 0, string? RouteId = null,
     string? RouteFingerprint = null)
 {
-    public string? Validate(string hostname) =>
-        Mode is not ("normal" or "page" or "redirect") ? "Choose normal traffic, a maintenance page, or a temporary browser redirect."
-        : Confirmation != hostname ? "Type the exact hostname to confirm the traffic change."
-        : string.IsNullOrWhiteSpace(Reason) || Reason.Length > 500 ? "Enter a private audit reason of up to 500 characters."
-        : Revision < 0 ? "Invalid traffic revision."
-        : null;
+    public string? Validate(string hostname)
+    {
+        if (Mode is not ("normal" or "page" or "redirect")) return "Choose normal traffic, a maintenance page, or a temporary browser redirect.";
+        if (Confirmation != hostname) return "Type the exact hostname to confirm the traffic change.";
+        if (string.IsNullOrWhiteSpace(Reason) || Reason.Length > 500) return "Enter a private audit reason of up to 500 characters.";
+        if (Revision < 0) return "Invalid traffic revision.";
+        return null;
+    }
 }
 
 public sealed record TrafficRecord(string Hostname, string Site, int Revision, string Mode, string Phase,
@@ -68,7 +70,7 @@ public sealed record TrafficRow(string Hostname, string Mode, string State, bool
 
 public sealed record TrafficQuota(long? Requests, DateTimeOffset ObservedAt, string? Error)
 {
-    public int FreeDailyAllowance => 100_000;
+    public int FreeDailyAllowance { get; } = 100_000;
     public bool Warning => Requests >= 80_000;
 }
 

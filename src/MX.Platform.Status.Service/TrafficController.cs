@@ -47,7 +47,8 @@ public sealed class TrafficController(RuntimeOptions options, StatusCatalog cata
             }
             if (!verified) error ??= "Cloudflare has the maintenance route, but the expected public response is not yet confirmed.";
         }
-        var state = !verified ? "unverified" : route is null ? "normal" : "active";
+        var state = route is null ? "normal" : "active";
+        if (!verified) state = "unverified";
         if (record?.Phase is "enabling" or "restoring")
         {
             state = DateTimeOffset.UtcNow - record.UpdatedAt < TimeSpan.FromMinutes(2) ? record.Phase : "unconfirmed";

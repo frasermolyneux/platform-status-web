@@ -262,9 +262,9 @@ def main():
             ], check=True, env=integration_environment)
             results = ET.parse(native_results / "native-status.trx").findall(".//{*}UnitTestResult")
             assert len(results) == len(native_cases), "Every required native PostgreSQL case must execute."
-            for name in native_cases:
-                matches = [result for result in results if result.attrib["testName"].split(".")[-1].startswith(name)]
-                assert len(matches) == 1 and matches[0].attrib["outcome"] == "Passed", name
+            for case_name in native_cases:
+                matches = [result for result in results if result.attrib["testName"].split(".")[-1].startswith(case_name)]
+                assert len(matches) == 1 and matches[0].attrib["outcome"] == "Passed", case_name
             print(f"All {len(native_cases)} required native PostgreSQL cases executed and passed without skips.")
             command = {
                 "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],

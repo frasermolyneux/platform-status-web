@@ -17,7 +17,8 @@ public sealed class TrafficUsageWorker(RuntimeOptions options, StatusCatalog cat
                 var configuration = TrafficConfiguration.Read(options, catalog)
                     ?? throw new InvalidDataException("Traffic controls are not configured.");
                 var quota = await cloudflare.QuotaAsync(configuration.AccountId, stoppingToken);
-                var status = quota.Error is not null ? "unavailable" : quota.Warning ? "warning" : "healthy";
+                var status = quota.Warning ? "warning" : "healthy";
+                if (quota.Error is not null) status = "unavailable";
                 if (await database.IsWritableAsync(stoppingToken))
                     await database.SaveEvidenceAsync("cloudflare-workers-usage", configuration.AccountId, quota.ObservedAt,
                         JsonSerializer.SerializeToElement(new
