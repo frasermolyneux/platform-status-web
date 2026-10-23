@@ -7,6 +7,7 @@ let needsInteraction = false;
 let rejectSave = false;
 let loginCount = 0;
 let existingBanners: unknown[] = [];
+let existingHealth: unknown[] = [];
 let saveGate: Promise<void> | undefined;
 const account = {
   homeAccountId: 'test-account', username: 'operator@example.test', name: 'Test operator',
@@ -36,7 +37,7 @@ const writes: { path: string; body: Record<string, unknown> }[] = [];
 const timestamp = '2026-10-23T08:00:00Z';
 
 beforeEach(() => {
-  const dom = new JSDOM('<div id="site-title"></div><main id="app"></main>', { url: 'https://mxstatus.io/ops' });
+  const dom = new JSDOM('<div id="site-title"></div><main id="app"></main>', { url: 'https://mxstatus.io/ops/banners' });
   for (const name of ['window', 'document', 'location', 'history', 'sessionStorage', 'Event', 'HTMLElement', 'HTMLInputElement', 'HTMLSelectElement', 'HTMLTextAreaElement', 'HTMLButtonElement'] as const)
     Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true, writable: true });
   signedIn = true;
@@ -44,6 +45,7 @@ beforeEach(() => {
   account.idTokenClaims.roles = ['Status.Operator'];
   writes.length = loginCount = 0;
   existingBanners = [];
+  existingHealth = [];
   saveGate = undefined;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
@@ -64,6 +66,7 @@ beforeEach(() => {
         sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
       }],
       '/api/ops/banners': existingBanners,
+      '/api/ops/health': existingHealth,
       '/api/ops/evidence': [{
         source: 'azure-alert', id: 'alert-1', observedAt: timestamp,
         evidence: { data: { essentials: { alertRule: 'Database availability', description: 'The database needs attention.', severity: 'Sev1', monitorCondition: 'Fired' } } },
@@ -96,17 +99,22 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 test('operator dashboard renders useful private evidence, filters signals and links source-owned incidents', async () => {
+  history.replaceState(null, '', '/ops/evidence');
   await renderOperations();
   assert.match(document.body.textContent || '', /Database availability/);
   assert.match(document.body.textContent || '', /The database needs attention/);
   assert.equal(document.querySelectorAll('.evidence-card').length, 2);
   assert.equal(document.querySelector('details')?.open, false);
-  assert.equal(document.querySelector<HTMLAnchorElement>('.management-row a')?.href, 'https://github.com/frasermolyneux/status-pages/issues/1');
+  assert.equal(document.querySelector('#operator-incidents'), null);
   const filter = document.querySelector<HTMLSelectElement>('[aria-label="Filter evidence by state"]')!;
   filter.value = 'Fired';
   filter.dispatchEvent(new window.Event('change'));
   assert.equal(document.querySelectorAll('.evidence-card').length, 1);
   assert.match(document.querySelector('.evidence-card')?.textContent || '', /Database availability/);
+  history.pushState(null, '', '/ops/incidents');
+  await renderOperations();
+  assert.equal(document.querySelector<HTMLAnchorElement>('.management-row a')?.href, 'https://github.com/frasermolyneux/status-pages/issues/1');
+  assert.equal(document.querySelector('#operator-evidence'), null);
 });
 
 test('banner editor previews untrusted text safely and sends explicit brand-scoped publication', async () => {
@@ -150,10 +158,13 @@ test('readers get evidence without enabled publishing actions, and signed-out us
   account.idTokenClaims.roles = ['Status.Reader'];
   await renderOperations();
   assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New announcement')?.disabled);
+  history.pushState(null, '', '/ops/evidence');
+  await renderOperations();
   assert.match(document.body.textContent || '', /Database availability/);
+  assert.ok(Array.from(document.querySelectorAll('button')).filter(button => button.textContent === 'Promote to incident').every(button => button.disabled));
   signedIn = false;
   await renderOperations();
-  assert.match(document.querySelector('.login-card')?.textContent || '', /Your operations, in one place/);
+  assert.match(document.querySelector('.login-card')?.textContent || '', /Sign in to operations/);
   assert.equal(document.querySelector('.evidence-card'), null);
 });
 
@@ -193,26 +204,73 @@ test('pending saves freeze submitted fields and never clear or hide a replacemen
   assert.match(sessionStorage.getItem('status-draft:test-account:mx:banner:new') || '', /A different unsaved update/);
 });
 
-test('workspace fragment navigation preserves its editor and filters with router handlers installed', async () => {
+test('dedicated pages retain independent drafts and evidence promotion requires an editable explicit publication', async () => {
+  history.replaceState(null, '', '/ops/evidence');
+  let destination = '';
+  await renderOperations(path => { destination = path; });
+  click('Promote to incident');
+  assert.equal(writes.length, 0);
+  assert.match(destination, /^\/ops\/incidents\?draft=/);
+  history.pushState(null, '', destination);
+  await renderOperations();
+  assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Database availability');
+  assert.equal(document.querySelector<HTMLInputElement>('[name="published"]')?.checked, false);
+  assert.match(document.querySelector('.evidence-context')?.textContent || '', /The database needs attention/);
+  assert.doesNotMatch(document.querySelector<HTMLTextAreaElement>('[name="message"]')!.value, /database needs attention/);
+  setValue('title', 'Edited public title');
+  setValue('message', 'We are investigating intermittent website failures.');
+  const service = document.querySelector<HTMLSelectElement>('[name="components"]')!;
+  service.options[0].selected = true;
+  service.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const published = document.querySelector<HTMLInputElement>('[name="published"]')!;
+  published.checked = true;
+  published.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.match(document.querySelector('.incident-preview')?.textContent || '', /Edited public title/);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.equal(writes[0].path, '/api/ops/incidents');
+  assert.equal(writes[0].body.title, 'Edited public title');
+  assert.equal(writes[0].body.published, true);
+  assert.deepEqual(writes[0].body.components, ['mx.sitewatch.molyneux-me']);
+  assert.doesNotMatch(String(writes[0].body.message), /alert-1|database needs attention|Source evidence/);
+  assert.equal((writes[0].body.evidence as { id: string }).id, 'alert-1');
+  assert.equal(location.search, '');
+  assert.equal(sessionStorage.length, 0);
+});
+
+test('service diagnostics explain incident overrides without blaming a successful check', async () => {
+  existingHealth = [{
+    id: 'mx.sitewatch.molyneux-me', name: 'Website', status: 'degraded',
+    source: 'Independent HTTP probe (publisher)', target: 'https://example.test/',
+    expectedIntervalSeconds: 60, matchesPublication: true,
+    probe: { success: true, httpStatus: 200, durationMilliseconds: 17, observedAt: new Date().toISOString(), observer: 'publisher', error: null },
+    incidents: [{ id: 7, title: 'Intermittent failures', severity: 'degraded', state: 'monitoring' }], maintenance: [],
+  }];
+  history.replaceState(null, '', '/ops');
+  await renderOperations();
+  assert.match(document.querySelector('.health-check')?.textContent || '', /Website: degraded/);
+  assert.match(document.querySelector('.health-check')?.textContent || '', /HTTP 200/);
+  assert.match(document.querySelector('.health-check')?.textContent || '', /Incident #7: Intermittent failures/);
+  assert.match(document.querySelector('.health-check')?.textContent || '', /HTTP check passed; the active incident/);
+  assert.equal(document.querySelector('#operator-banners'), null);
+  assert.equal(document.querySelector('#operator-incidents'), null);
+  assert.equal(document.querySelector('.workspace-nav a[aria-current="page"]')?.getAttribute('href'), '/ops');
+});
+
+test('workspace fragment navigation preserves its editor with router handlers installed', async () => {
   const router = await import('../src/client/router');
   let renders = 0;
-  router.addRoute('/ops', () => { renders++; void renderOperations(); });
+  router.addRoute('/ops/banners', () => { renders++; void renderOperations(); });
   router.addRoute('/history', () => { renders++; document.getElementById('app')!.textContent = 'History route'; });
   router.resolve();
-  await until(() => document.querySelectorAll('.evidence-card').length === 2);
-  const filter = document.querySelector<HTMLSelectElement>('[aria-label="Filter evidence by state"]')!;
-  filter.value = 'Fired';
-  filter.dispatchEvent(new window.Event('change'));
+  await until(() => document.querySelector('#operator-banners') !== null);
   click('New announcement');
   setValue('title', 'Retain this editor');
   const form = document.querySelector('form');
-  document.querySelector<HTMLAnchorElement>('.workspace-nav a[href="#operator-banners"]')!.click();
-  await until(() => location.hash === '#operator-banners');
+  history.pushState(null, '', '#preview');
   window.dispatchEvent(new window.PopStateEvent('popstate'));
   assert.equal(renders, 1);
   assert.equal(document.querySelector('form'), form);
-  assert.equal(filter.value, 'Fired');
-  assert.equal(document.querySelectorAll('.evidence-card').length, 1);
   assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Retain this editor');
   history.pushState(null, '', '/history');
   window.dispatchEvent(new window.PopStateEvent('popstate'));

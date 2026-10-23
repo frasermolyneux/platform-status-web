@@ -9,6 +9,11 @@ namespace MX.Platform.Status.Service;
 
 public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore> logger) : IAsyncDisposable
 {
+    internal const string EvidenceUpsert = """
+        INSERT INTO status_evidence VALUES($1,$2,$3,$4)
+        ON CONFLICT(source,event_id) DO UPDATE SET observed_at=excluded.observed_at,document=excluded.document
+        WHERE status_evidence.observed_at <= excluded.observed_at
+        """;
     private readonly Lazy<NpgsqlDataSource> _source = new(() => NpgsqlDataSource.Create(ConnectionString(options, writer: false)));
     private readonly Lazy<NpgsqlDataSource> _writer = new(() => NpgsqlDataSource.Create(ConnectionString(options, writer: true)));
     private NpgsqlDataSource Source => _source.Value;
@@ -337,11 +342,7 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
 
     public async Task SaveEvidenceAsync(string source, string id, DateTimeOffset observedAt, JsonElement evidence, CancellationToken ct)
     {
-        await using var command = Writer.CreateCommand("""
-            INSERT INTO status_evidence VALUES($1,$2,$3,$4)
-            ON CONFLICT(source,event_id) DO UPDATE SET observed_at=excluded.observed_at,document=excluded.document
-            WHERE status_evidence.observed_at <= excluded.observed_at
-            """);
+        await using var command = Writer.CreateCommand(EvidenceUpsert);
         command.Parameters.AddWithValue(source);
         command.Parameters.AddWithValue(id);
         command.Parameters.AddWithValue(observedAt);
@@ -356,6 +357,20 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
         var result = new List<JsonElement>();
         while (await reader.ReadAsync(ct)) result.Add(JsonSerializer.Deserialize<JsonElement>(reader.GetString(0)));
         return result;
+    }
+
+    public async Task<IReadOnlyList<ProbeObservation>> ReadProbesAsync(string site, CancellationToken ct)
+    {
+        await using var command = Source.CreateCommand("""
+            SELECT document::text FROM status_evidence
+            WHERE source IN ('independent-probe','independent-probe-failure') AND document->>'site'=$1
+            """);
+        command.Parameters.AddWithValue(site);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var result = new List<ProbeObservation>();
+        while (await reader.ReadAsync(ct))
+            result.Add(JsonSerializer.Deserialize<ProbeObservation>(reader.GetString(0), StatusJson.Options)!);
+        return result.Distinct().ToArray();
     }
 
     public async Task PruneAsync(CancellationToken ct)
@@ -377,6 +392,21 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
 public sealed class PublisherLease(NpgsqlConnection connection) : IAsyncDisposable
 {
     internal NpgsqlConnection Connection => connection;
+
+    public async Task SaveProbeEvidenceAsync(ProbeObservation observation, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand(PostgresStore.EvidenceUpsert, connection);
+        command.Parameters.AddWithValue("independent-probe");
+        command.Parameters.AddWithValue($"{observation.Site}/{observation.Component}");
+        command.Parameters.AddWithValue(observation.ObservedAt);
+        command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(observation, StatusJson.Options));
+        await command.ExecuteNonQueryAsync(ct);
+        if (!observation.Success)
+        {
+            command.Parameters[0].Value = "independent-probe-failure";
+            await command.ExecuteNonQueryAsync(ct);
+        }
+    }
 
     public async Task SavePublicationAsync(StatusApiResponse publication, CancellationToken ct)
     {

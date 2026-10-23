@@ -12,6 +12,113 @@ public sealed class StatusExperienceTests
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
     private static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
 
+    [Fact]
+    public void EvidencePromotionKeepsItsSourcePrivatelyAcrossEditsAndNeverAddsItToPublicUpdates()
+    {
+        var source = new IncidentEvidence("azure-alert", "PRIVATE_ALERT_ID", Created, "PRIVATE_MONITOR_DIAGNOSTICS");
+        var command = new IncidentCommand("Website availability", ["mx.sitewatch.molyneux-me"], Severity.Degraded,
+            IncidentState.Investigating, "We are investigating intermittent failures.", true, Evidence: source);
+        Assert.Null(command.Validate(Catalogue().Get("mx")));
+        var first = command.Apply(5, "mx", null, Created);
+        var edited = (command with { Evidence = null, Revision = 1, State = IncidentState.Monitoring })
+            .Apply(5, "mx", first, Created.AddMinutes(1));
+        Assert.Equal(source, edited.Evidence);
+        var publication = JsonSerializer.Serialize(edited.ToPublicIncident(), StatusJson.Options);
+        Assert.DoesNotContain("PRIVATE_ALERT_ID", publication);
+        Assert.DoesNotContain("PRIVATE_MONITOR_DIAGNOSTICS", publication);
+        Assert.NotNull((command with { Evidence = source with { Source = "" } }).Validate(Catalogue().Get("mx")));
+    }
+
+    [Theory]
+    [InlineData(200, true)]
+    [InlineData(302, true)]
+    [InlineData(503, false)]
+    public async Task IndependentChecksRetainTheHttpResultAndTargetForOperators(int status, bool success)
+    {
+        using var client = new HttpClient(new ProbeHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage((HttpStatusCode)status))));
+        var result = await IndependentProbe.ObserveAsync(client, "xi", "xi.sitewatch.forums-web",
+            "Community Forums", "https://www.xtremeidiots.com/", default);
+        Assert.Equal(success, result.Success);
+        Assert.Equal(status, result.HttpStatus);
+        Assert.Equal("https://www.xtremeidiots.com/", result.Target);
+        Assert.Equal("xi.sitewatch.forums-web", result.Component);
+        if (success) Assert.Null(result.Error);
+        else Assert.Contains("HTTP 503", result.Error);
+    }
+
+    [Fact]
+    public async Task ProbeNetworkErrorsStayInspectableAndShutdownIsNotRecordedAsAnOutage()
+    {
+        using var client = new HttpClient(new ProbeHandler((_, _) =>
+            throw new HttpRequestException("Name resolution failed.")));
+        var result = await IndependentProbe.ObserveAsync(client, "mx", "web", "Website", "https://example.test/", default);
+        Assert.False(result.Success);
+        Assert.Null(result.HttpStatus);
+        Assert.Equal("Name resolution failed.", result.Error);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            IndependentProbe.ObserveAsync(client, "mx", "web", "Website", "https://example.test/", canceled.Token));
+    }
+
+    [Fact]
+    public void HealthDiagnosticsSeparateTheProbeFromIncidentOverridesAndKeepBrandsIsolated()
+    {
+        const string id = "xi.sitewatch.forums-web";
+        var probe = new ProbeObservation("xi", id, "Forums", "https://example.test/", "publisher",
+            Created, true, 200, 10, null);
+        var publication = new StatusApiResponse
+        {
+            Components = [new ComponentDto { Id = id, Status = "degraded", LastSampleAt = Created, OpenIncidentIds = [7] }],
+            Incidents = [new IncidentDto { Id = 7, Title = "Investigating intermittent failures", Severity = "degraded" }]
+        };
+        var checks = HealthDiagnostics.Build(Catalogue().Get("xi"), publication,
+            [probe, probe with { Site = "mx", Component = "mx.sitewatch.molyneux-me" }]);
+        var forums = Assert.Single(checks, check => check.Id == id);
+        Assert.Equal("degraded", forums.Status);
+        Assert.True(forums.Probe!.Success);
+        Assert.True(forums.MatchesPublication);
+        Assert.Equal(7, Assert.Single(forums.Incidents).Id);
+        Assert.DoesNotContain(checks, check => check.Id.StartsWith("mx.", StringComparison.Ordinal));
+        var agent = Assert.Single(checks, check => check.Id == "xi.server-agent");
+        Assert.Null(agent.Target);
+        Assert.Null(agent.Probe);
+        Assert.Equal("unknown", agent.Status);
+        var failure = probe with { Success = false, HttpStatus = 503, Error = "HTTP 503", ObservedAt = Created.AddMinutes(-1) };
+        var nextCycle = HealthDiagnostics.Build(Catalogue().Get("xi"), publication,
+            [failure, probe with { ObservedAt = Created.AddMinutes(1) }]);
+        var recovered = Assert.Single(nextCycle, check => check.Id == id);
+        Assert.False(recovered.MatchesPublication);
+        Assert.True(recovered.Probe!.Success);
+        Assert.Equal(failure, recovered.LastFailure);
+    }
+
+    [Fact]
+    public void GeoLocationAndTheServerPipelineHaveApprovedBrandSpecificWorkloadMappings()
+    {
+        var both = GitHubIssueParser.Parse(Issue([
+            "status:incident", "status:published", "site:mx", "site:xi", "workload:geo-location", "severity:outage"
+        ]), [], Catalogue(), new());
+        Assert.Equal(2, both.Count);
+        Assert.Equal(["xi.sitewatch.geo-location-web"], Assert.Single(both, record => record.SiteId == "xi").Components);
+        var xi = Catalogue().Get("xi");
+        foreach (var workload in new[] { "portal-servers-integration", "portal-server-events", "portal-server-agent" })
+        {
+            var record = Assert.Single(GitHubIssueParser.Parse(Issue([
+                "status:incident", "status:published", "site:xi", $"workload:{workload}", "severity:degraded"
+            ]), [], Catalogue(), new()));
+            Assert.Equal(xi.Workloads[workload], record.Components);
+            Assert.All(record.Components, component => Assert.StartsWith("xi.", component));
+        }
+    }
+
+    private sealed class ProbeHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            response(request, cancellationToken);
+    }
+
     private static JsonElement Issue(string[]? labels = null, string author = "frasermolyneux", bool closed = false,
         string body = "We are investigating.", int updatedMinutes = 5, string title = "Availability incident") =>
         JsonSerializer.SerializeToElement(new
@@ -152,7 +259,7 @@ public sealed class StatusExperienceTests
 
     [Theory]
     [InlineData("site:unknown", "workload:geo-location", "severity:outage", "frasermolyneux")]
-    [InlineData("site:xi", "workload:geo-location", "severity:outage", "frasermolyneux")]
+    [InlineData("site:xi", "workload:molyneux-me", "severity:outage", "frasermolyneux")]
     [InlineData("site:mx", "workload:unknown", "severity:outage", "frasermolyneux")]
     [InlineData("site:mx", "component:xi.sitewatch.forums-web", "severity:outage", "frasermolyneux")]
     [InlineData("site:mx", "workload:geo-location", "severity:unknown", "frasermolyneux")]

@@ -59,32 +59,20 @@ public sealed class PublicationWorker(
             var live = new Dictionary<string, ComponentLiveTelemetry>();
             foreach (var (component, target) in site.Probes)
             {
-                var success = false;
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(5));
-                try
-                {
-                    using var request = new HttpRequestMessage(HttpMethod.Get, target);
-                    using var response = await clients.CreateClient("probe").SendAsync(request,
-                        HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-                    success = (int)response.StatusCode is >= 200 and < 400;
-                }
-                catch (HttpRequestException exception)
-                {
-                    logger.LogWarning(exception, "Independent probe failed for {Site}/{Component}.", site.Site.Id, component);
-                }
-                catch (OperationCanceledException exception) when (!ct.IsCancellationRequested)
-                {
-                    logger.LogWarning(exception, "Independent probe timed out for {Site}/{Component}.", site.Site.Id, component);
-                }
-                ct.ThrowIfCancellationRequested();
-                var now = DateTimeOffset.UtcNow;
+                var name = StatusCatalog.Flatten(site.Components.Components).Single(item => item.Id == component).Name;
+                var observation = await IndependentProbe.ObserveAsync(
+                    clients.CreateClient("probe"), site.Site.Id, component, name, target, ct);
+                if (!observation.Success)
+                    logger.LogWarning("Independent probe failed for {Site}/{Component}: {Reason}.",
+                        site.Site.Id, component, observation.Error);
+                await publisherLock.SaveProbeEvidenceAsync(observation, ct);
+                var now = observation.ObservedAt;
                 var maintenance = incidents.Any(i => i.Severity == Severity.Maintenance
                     && i.State != IncidentState.Resolved && i.ScheduledStart <= now && i.ScheduledEnd > now
                     && i.Components.Any(id => StatusCatalog.Flatten(site.Components.Components)
                         .Where(c => c.Id == id).SelectMany(c => StatusCatalog.Flatten([c])).Any(c => c.Id == component)));
-                if (!maintenance) await publisherLock.RecordProbeAsync(site.Site.Id, component, success, ct);
-                live[component] = new ComponentLiveTelemetry(1, success ? 0 : 1, now, null);
+                if (!maintenance) await publisherLock.RecordProbeAsync(site.Site.Id, component, observation.Success, ct);
+                live[component] = new ComponentLiveTelemetry(1, observation.Success ? 0 : 1, now, null);
             }
 
             var history = await database.ReadHistoryAsync(site, ct);

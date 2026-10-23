@@ -128,6 +128,16 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .stat-card strong { display: block; font-size: 1.45rem; letter-spacing: -.04em; }
 .stat-card span { color: var(--color-fg-muted); font-size: .72rem; }
 .workspace-nav { gap: 1.5rem; font-size: .8rem; }
+.workspace-nav [aria-current="page"] { font-weight: 700; text-decoration: underline; text-underline-offset: .4rem; }
+.health-check { border-top: 1px solid var(--color-border); margin-top: 1rem; padding-top: 1rem; font-size: .85rem; overflow-wrap: anywhere; }
+.health-check p { margin-top: .4rem; }
+.evidence-facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: .35rem .75rem; margin: .8rem 0; font-size: .75rem; }
+.evidence-facts dt { font-weight: 600; }
+.evidence-facts dd { margin: 0; overflow-wrap: anywhere; }
+.evidence-card > button { display: block; margin-top: .8rem; }
+.evidence-context, .incident-preview { border: 1px solid var(--color-border); border-radius: 8px; padding: 1rem; background: var(--color-bg-subtle); }
+.evidence-context pre, .incident-preview p { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.evidence-context p { margin-top: .7rem; font-size: .8rem; color: var(--color-fg-muted); }
 .login-card { max-width: 620px; padding: 2rem; margin: 2rem auto; }
 .login-card p { color: var(--color-fg-muted); font-size: .9rem; margin: .8rem 0 1.5rem; }
 .login-card a { display: block; margin-top: 1rem; font-size: .8rem; }

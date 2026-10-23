@@ -48,7 +48,7 @@ export function renderOverview(data: StatusResponse): void {
     : '';
 
   let html = `
-    <div class="page-heading"><p class="eyebrow">LIVE SERVICE HEALTH</p><h2>Every service. One clear picture.</h2>
+    <div class="page-heading"><h2>Current service status</h2>
     <p class="muted">Current availability, planned maintenance and updates from our team.</p></div>
     ${announcements(data)}
     ${staleWarning}
