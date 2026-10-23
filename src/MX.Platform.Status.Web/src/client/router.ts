@@ -26,7 +26,8 @@ export function resolve(): void {
   const path = location.pathname;
   renderedLocation = path + location.search;
   document.querySelectorAll<HTMLAnchorElement>('.site-nav a').forEach(link => {
-    const current = link.pathname === path || link.pathname === '/' && /^\/(incident|component)\//.test(path);
+    const current = link.pathname === path || link.pathname === '/' && /^\/(incident|component)\//.test(path)
+      || link.pathname === '/ops' && path.startsWith('/ops/');
     if (current) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   });

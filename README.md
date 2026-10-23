@@ -84,15 +84,36 @@ allowlisted caller application in `WebhookApplicationIds`. Issuer, audience,
 lifetime, role, and delegated scope are enforced by the API, not the browser.
 Monitoring payloads and subscription details stay behind authentication.
 
-The operations workspace presents evidence cards with source, severity and state
-filters, plus incident and announcement controls. Readers can inspect evidence;
+The operations workspace has dedicated pages: `/ops` for service health,
+`/ops/evidence` for monitoring results, `/ops/incidents` for incidents and
+maintenance, and `/ops/banners` for announcements. Readers can inspect evidence;
 only operators can write. Draft forms stay in the signed-in user's browser tab
 across reauthentication. Conflicts preserve the form, and an older draft is never
 silently restored over a newer saved revision.
 
+Service diagnostics distinguish the live HTTP check from public incident and
+maintenance overrides. Each check records its target, observer, HTTP status,
+duration, failure reason and observation time privately. The dashboard flags stale
+results and checks that do not yet match the public publication, including during
+replication lag. Azure alerts and advisories are context, not automatic public
+availability signals.
+
+Use **Promote to incident** on an evidence item to open an editable, tab-scoped
+incident draft. Known services, severity and state are pre-selected; unmatched
+alerts require the operator to select affected services. Private source context
+is shown separately and retained with a private source reference, not copied into the public update. Review the wording
+and preview, then explicitly choose whether to publish. Promotion alone makes no
+server-side changes.
+
+GeoLocation's website is listed on both brands. XI also includes Servers
+Integration API, Server Events and Server Agent. Server Agent uses private
+Container Apps ingress, so it has no independent public HTTP probe: its status is
+unknown unless an approved incident or maintenance window reports an impact.
+Do not infer healthy availability from the absence of an Azure alert.
+
 ### Manual announcements
 
-Use **New announcement** to preview, save, publish or withdraw a plain-text banner
+Use **New announcement** on `/ops/banners` to preview, save, publish or withdraw a plain-text banner
 on the current brand. Informational, warning and critical appearances are
 available, with optional local-time start and expiry. Drafts remain private.
 Writes are revision-checked and audited, including writes forwarded from the

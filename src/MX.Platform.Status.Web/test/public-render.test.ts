@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { evidenceCards } from '../src/client/evidence';
+import { affectedComponents, evidenceCards, incidentSeed } from '../src/client/evidence';
 
 test('public rendering keeps announcements plain text and incident excerpts readable', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
@@ -54,4 +54,39 @@ test('Azure advisory technical details grow with individual items, not repeated 
   cards.forEach((card, index) => assert.deepEqual(card.record.evidence, items[index]));
   const technicalDetailsLength = cards.reduce((total, card) => total + JSON.stringify(card.record.evidence, null, 2).length, 0);
   assert.ok(technicalDetailsLength <= JSON.stringify({ items }, null, 2).length);
+});
+
+test('probe evidence identifies the failing check and seeds only known affected services without copying private diagnostics', () => {
+  const card = evidenceCards([{
+    source: 'independent-probe', id: 'xi/forums', observedAt: new Date().toISOString(),
+    evidence: {
+      site: 'xi', component: 'xi.sitewatch.forums-web', name: 'Community Forums',
+      success: false, target: 'https://www.xtremeidiots.com/', observer: 'PRIVATE_OBSERVER',
+      httpStatus: 503, durationMilliseconds: 81, error: 'HTTP 503 Service Unavailable',
+    },
+  }])[0];
+  assert.equal(card.state, 'failed');
+  assert.equal(card.summary, 'HTTP 503 Service Unavailable');
+  assert.ok(card.details.some(detail => detail.label === 'HTTP status' && detail.value === '503'));
+  const ids = affectedComponents(card, ['xi.sitewatch.forums-web'], {}, []);
+  assert.deepEqual(ids, ['xi.sitewatch.forums-web']);
+  assert.deepEqual(affectedComponents(card, ['mx.sitewatch.molyneux-me'], {}, []), []);
+  const seed = incidentSeed(card, ids, ['Community Forums']);
+  assert.equal(seed.state, 'investigating');
+  assert.equal(seed.severity, 'outage');
+  assert.match(seed.message, /Community Forums/);
+  assert.doesNotMatch(seed.message, /PRIVATE_OBSERVER|503|xtremeidiots.com/);
+});
+
+test('Azure metric alerts expose measured conditions rather than requiring raw JSON inspection', () => {
+  const card = evidenceCards([{
+    source: 'azure-alert', id: 'metric-alert', observedAt: new Date().toISOString(),
+    evidence: { data: {
+      essentials: { alertRule: 'Queue backlog', monitorCondition: 'Fired', severity: 'Sev2', alertTargetIDs: ['/resources/processor'] },
+      alertContext: { condition: { allOf: [{ metricName: 'ActiveMessages', metricValue: 450, operator: 'GreaterThan', threshold: 100, timeAggregation: 'Average' }] } },
+      customProperties: { workload: 'portal-server-events' },
+    } },
+  }])[0];
+  assert.ok(card.details.some(detail => detail.label === 'ActiveMessages' && detail.value === '450 GreaterThan 100 (Average)'));
+  assert.deepEqual(affectedComponents(card, ['xi.sitewatch.server-events'], { 'portal-server-events': ['xi.sitewatch.server-events'] }, []), ['xi.sitewatch.server-events']);
 });

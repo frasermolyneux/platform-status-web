@@ -3,6 +3,8 @@ using MX.Platform.Status.App.Models;
 
 namespace MX.Platform.Status.Service;
 
+public sealed record IncidentEvidence(string Source, string Id, DateTimeOffset ObservedAt, string Context);
+
 public sealed record IncidentRecord
 {
     public int Id { get; init; }
@@ -21,6 +23,7 @@ public sealed record IncidentRecord
     public IReadOnlyList<IncidentUpdate> PublicUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> SourceStateUpdates { get; init; } = [];
     public string? SourceUrl { get; init; }
+    public IncidentEvidence? Evidence { get; init; }
 
     public Incident ToPublicIncident() => new()
     {
@@ -57,7 +60,7 @@ public sealed record IncidentRecord
 public sealed record IncidentCommand(
     string Title, string[] Components, Severity Severity, IncidentState State,
     string Message, bool Published, int Revision = 0,
-    DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null)
+    DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null, IncidentEvidence? Evidence = null)
 {
     public string? Validate(SiteDefinition site)
     {
@@ -69,6 +72,11 @@ public sealed record IncidentCommand(
             return "Select one or more distinct components from this site.";
         if (!Enum.IsDefined(Severity) || !Enum.IsDefined(State))
             return "Invalid incident severity or state.";
+        if (Evidence is not null && (string.IsNullOrWhiteSpace(Evidence.Source) || Evidence.Source.Length > 100
+            || string.IsNullOrWhiteSpace(Evidence.Id) || Evidence.Id.Length > 2000
+            || string.IsNullOrWhiteSpace(Evidence.Context) || Evidence.Context.Length > 20000
+            || Evidence.ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5)))
+            return "Invalid source evidence reference.";
         if (ScheduledStart.HasValue != ScheduledEnd.HasValue || ScheduledEnd <= ScheduledStart
             || (Severity == Severity.Maintenance) != ScheduledStart.HasValue)
             return "Maintenance requires a valid start/end window; incidents must not specify one.";
@@ -101,7 +109,8 @@ public sealed record IncidentCommand(
             ScheduledStart = ScheduledStart,
             ScheduledEnd = ScheduledEnd,
             Updates = [.. previous?.Updates ?? [], update],
-            PublicUpdates = Published ? [.. previous?.PublicUpdates ?? [], update] : previous?.PublicUpdates ?? []
+            PublicUpdates = Published ? [.. previous?.PublicUpdates ?? [], update] : previous?.PublicUpdates ?? [],
+            Evidence = Evidence ?? previous?.Evidence
         };
     }
 }

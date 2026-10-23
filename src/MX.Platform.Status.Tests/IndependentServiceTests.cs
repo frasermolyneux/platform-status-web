@@ -48,6 +48,7 @@ public sealed class IndependentServiceTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/ready")).StatusCode);
         Assert.Equal("static-shell", await client.GetStringAsync("/component/mx.sitewatch.molyneux-me"));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/evidence")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/health")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/banners")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/api/ops/banners", new BannerCommand("Notice", "Message", "info", true))).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/api/integrations/azure", JsonContent.Create(new { }))).StatusCode);
@@ -318,6 +319,52 @@ public sealed class IndependentServiceTests : IDisposable
             Subject = new ClaimsIdentity([new("oid", Guid.NewGuid().ToString()), new("roles", role), new("scp", scope), new("azp", caller)]),
             SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
         });
+
+    [PostgresFact]
+    public async Task ProbeDiagnosticsPersistUnderPublisherLeaseAndRemainHostScoped()
+    {
+        var connection = Path.Combine(_directory, "connection");
+        File.WriteAllText(connection, Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION"));
+        await using var app = Build(configuredIdentity: true, connection);
+        await app.StartAsync();
+        var database = app.Services.GetRequiredService<PostgresStore>();
+        await database.InitializeAsync(default);
+        var component = "fixture-" + Guid.NewGuid().ToString("N");
+        var probe = new ProbeObservation("mx", component, "Fixture website", "https://example.test/", "test-publisher",
+            DateTimeOffset.UtcNow, false, 503, 13, "HTTP 503 Service Unavailable");
+        try
+        {
+            PublisherLease? lease = null;
+            for (var attempt = 0; lease is null && attempt < 130; attempt++)
+            {
+                lease = await database.TryPublisherLockAsync(default);
+                if (lease is null) await Task.Delay(TimeSpan.FromSeconds(1));
+            }
+            await using (lease)
+            {
+                Assert.NotNull(lease);
+                await lease.SaveProbeEvidenceAsync(probe, default);
+            }
+            Assert.Equal(probe, Assert.Single(await database.ReadProbesAsync("mx", default), record => record.Component == component));
+            Assert.DoesNotContain(await database.ReadProbesAsync("xi", default), record => record.Component == component);
+            using var client = app.GetTestClient();
+            client.DefaultRequestHeaders.Host = "mxstatus.io";
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/health")).StatusCode);
+            client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Reader", "Status.Access", _ingestor));
+            var checks = (await client.GetFromJsonAsync<ComponentHealth[]>("/api/ops/health", StatusJson.Options))!;
+            Assert.All(checks, check => Assert.StartsWith("mx.", check.Id));
+            client.DefaultRequestHeaders.Host = "status.xtremeidiots.com";
+            checks = (await client.GetFromJsonAsync<ComponentHealth[]>("/api/ops/health", StatusJson.Options))!;
+            Assert.All(checks, check => Assert.StartsWith("xi.", check.Id));
+        }
+        finally
+        {
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
+            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id=$1");
+            cleanup.Parameters.AddWithValue($"mx/{component}");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
 
     [PostgresFact]
     public async Task BannerApiPersistsAuditsEnforcesBrandAndRevisionAndRejectsReaderWrites()

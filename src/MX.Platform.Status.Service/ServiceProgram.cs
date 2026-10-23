@@ -113,6 +113,9 @@ public static class ServiceProgram
             .RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/evidence", async (PostgresStore database, CancellationToken ct) =>
             Results.Ok(await database.ReadEvidenceAsync(ct))).RequireAuthorization(ReaderPolicy);
+        app.MapGet("/api/ops/health", async (HttpContext context, PublicationStore files, PostgresStore database, CancellationToken ct) =>
+            Results.Ok(await HealthDiagnostics.ReadAsync(
+                catalog.FindHost(context.Request.Host.Host)!, files, database, ct))).RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/runtime", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
             Results.Ok(new
             {
