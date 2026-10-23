@@ -92,6 +92,12 @@ public sealed class PublicationWorker(
                 incidents.Select(i => i.ToPublicIncident()),
                 incidents.Where(i => i.Severity == Severity.Maintenance).Select(i => i.ToMaintenance(DateTimeOffset.UtcNow)));
             publication = CorrectTodayHistory(publication, history);
+            publication = publication with
+            {
+                Banners = (await database.ReadBannersAsync(site.Site.Id, ct))
+                    .Where(banner => banner.Published && (!banner.ExpiresAt.HasValue || banner.ExpiresAt > DateTimeOffset.UtcNow))
+                    .Select(banner => banner.ToPublicBanner()).ToArray()
+            };
             await publisherLock.SavePublicationAsync(publication, ct);
             await files.WriteAsync(publication, ct);
         }

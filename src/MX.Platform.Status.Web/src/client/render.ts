@@ -18,6 +18,20 @@ function safeHtml(html: string): string {
   return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
 }
 
+function announcements(data: StatusResponse): string {
+  return (data.banners || []).map(banner => `<aside class="announcement announcement-${escapeHtml(banner.tone)}" aria-label="Site announcement">
+    <span class="eyebrow">Notice</span><h2>${escapeHtml(banner.title)}</h2><p>${escapeHtml(banner.message)}</p>
+  </aside>`).join('');
+}
+
+function excerpt(html: string): string {
+  const content = document.createElement('div');
+  content.innerHTML = safeHtml(html);
+  content.querySelectorAll('br').forEach(lineBreak => lineBreak.replaceWith(' '));
+  const text = content.textContent || '';
+  return escapeHtml(text.slice(0, 220)) + (text.length > 220 ? '...' : '');
+}
+
 export function renderOverview(data: StatusResponse): void {
   const app = document.getElementById('app');
   if (!app) return;
@@ -34,21 +48,16 @@ export function renderOverview(data: StatusResponse): void {
     : '';
 
   let html = `
+    <div class="page-heading"><p class="eyebrow">LIVE SERVICE HEALTH</p><h2>Every service. One clear picture.</h2>
+    <p class="muted">Current availability, planned maintenance and updates from our team.</p></div>
+    ${announcements(data)}
     ${staleWarning}
     <div class="summary-banner ${summaryInfo.className}">
       <span class="summary-icon">${getStatusDotHtml(data.summary.status)}</span>
-      <span class="summary-text">${data.summary.message ? escapeHtml(data.summary.message) : summaryInfo.label}</span>
+      <div><span class="eyebrow">Current status</span><p class="summary-text">${data.summary.message ? escapeHtml(data.summary.message) : summaryInfo.label}</p></div>
     </div>
-    <div class="updated-at">${new Date(data.generatedAt).getTime() <= 0 ? 'Awaiting first observation' : `Updated ${formatRelative(data.generatedAt)}`}</div>
+    <div class="updated-at">${new Date(data.generatedAt).getTime() <= 0 ? 'Awaiting first observation' : `Last checked ${formatRelative(data.generatedAt)}`}<span>Automatically refreshed</span></div>
   `;
-
-  // Components
-  html += '<section class="components-section"><h2>Components</h2>';
-  for (const c of data.components) {
-    html += renderComponentRow(c);
-    for (const child of flattenComponents(c.children || [])) html += renderComponentRow(child);
-  }
-  html += '</section>';
 
   // Active incidents
   const activeIncidents = data.incidents.filter(i => i.state !== 'resolved' && i.severity !== 'maintenance');
@@ -59,6 +68,13 @@ export function renderOverview(data: StatusResponse): void {
     }
     html += '</section>';
   }
+
+  html += '<section class="components-section panel"><div class="section-heading"><h2>Service availability</h2><span class="muted">Live observations</span></div>';
+  for (const c of data.components) {
+    html += renderComponentRow(c);
+    for (const child of flattenComponents(c.children || [])) html += renderComponentRow(child);
+  }
+  html += '</section>';
 
   // Maintenance
   const upcomingMaintenance = data.maintenance.filter(m => m.state !== 'completed');
@@ -76,7 +92,7 @@ export function renderOverview(data: StatusResponse): void {
 
   // History bars (90-day)
   if (data.components.length > 0) {
-    html += '<section class="history-section"><h2>Uptime</h2>';
+    html += '<section class="history-section panel"><div class="section-heading"><h2>Availability history</h2><a href="/history">View incident history</a></div><p class="muted history-intro">The last 90 days. Grey periods have no observations and are not counted as healthy.</p>';
     for (const c of data.components) {
       html += renderHistoryBars(c);
     }
@@ -97,10 +113,10 @@ export function renderOverview(data: StatusResponse): void {
 function renderComponentRow(c: ComponentDto): string {
   const info = getStatusInfo(c.status);
   const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}%` : '—';
-  return `<div class="component-row">
+  return `<div class="component-row${c.kind === 'group' ? ' component-group' : ''}">
     <a href="/component/${escapeHtml(c.id)}" data-component-id="${escapeHtml(c.id)}" class="component-name">${escapeHtml(c.name)}</a>
     <span class="component-uptime">${escapeHtml(uptime)}</span>
-    <span class="component-status ${info.className}">${info.label}</span>
+    <span class="component-status ${info.className}">${getStatusDotHtml(c.status)}${info.label}</span>
   </div>`;
 }
 
@@ -114,7 +130,7 @@ function renderIncidentCard(inc: IncidentDto): string {
       <span>${formatRelative(inc.createdAt)}</span>
     </div>
     ${inc.updates.length > 0
-      ? `<p class="incident-latest">${inc.updates[inc.updates.length - 1].body.slice(0, 200)}</p>`
+      ? `<p class="incident-latest">${excerpt(inc.updates[inc.updates.length - 1].body)}</p>`
       : ''}
   </div>`;
 }
@@ -143,6 +159,7 @@ export function renderComponent(data: StatusResponse, componentId: string): void
   }
   const info = getStatusInfo(component.status);
   app.innerHTML = safeHtml(`
+    ${announcements(data)}
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(component.name)}</h2>
     ${component.description ? `<p>${escapeHtml(component.description)}</p>` : ''}
@@ -163,6 +180,7 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
 
   const maintenance = data.maintenance.find(window => window.id === incident.id);
   let html = `
+    ${announcements(data)}
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
     <h2>${escapeHtml(incident.title)}</h2>
     ${maintenance ? `<p>Maintenance: ${formatDateTime(maintenance.scheduledStart)} — ${formatDateTime(maintenance.scheduledEnd)} (${escapeHtml(maintenance.state)})</p>` : ''}
@@ -193,6 +211,7 @@ export function renderHistory(data: StatusResponse): void {
   if (!app) return;
   const incidents = [...data.incidents].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   app.innerHTML = safeHtml(`
+    ${announcements(data)}
     <nav class="breadcrumb"><a href="/">Back to current status</a></nav>
     <h2>Incident and maintenance history</h2>
     <p>Availability is based on observed checks. Grey periods have no data and are not counted as healthy.</p>

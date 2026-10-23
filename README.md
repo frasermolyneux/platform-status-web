@@ -84,6 +84,61 @@ allowlisted caller application in `WebhookApplicationIds`. Issuer, audience,
 lifetime, role, and delegated scope are enforced by the API, not the browser.
 Monitoring payloads and subscription details stay behind authentication.
 
+The operations workspace presents evidence cards with source, severity and state
+filters, plus incident and announcement controls. Readers can inspect evidence;
+only operators can write. Draft forms stay in the signed-in user's browser tab
+across reauthentication. Conflicts preserve the form, and an older draft is never
+silently restored over a newer saved revision.
+
+### Manual announcements
+
+Use **New announcement** to preview, save, publish or withdraw a plain-text banner
+on the current brand. Informational, warning and critical appearances are
+available, with optional local-time start and expiry. Drafts remain private.
+Writes are revision-checked and audited, including writes forwarded from the
+standby application to the primary writer. Public scheduling and expiry are
+evaluated against cached publications even if PostgreSQL is unavailable.
+
+### GitHub incident publishing
+
+The independent service polls the public `frasermolyneux/status-pages` repository
+every five minutes, separately from public publication and probe collection.
+Use that repository's incident templates and maintainer instructions.
+
+An eligible issue needs `status:incident`, `site:mx` and/or `site:xi`, exactly one
+`severity:degraded` or `severity:outage`, and `workload:<name>` labels matching
+the checked-in catalogue. Explicit `component:<public-component-id>` labels are
+also supported. Every selected site must have affected public components.
+An authorized repository maintainer adds **`status:published`** to approve
+publication; without it, imported incidents are private drafts.
+
+The repository owner is a trusted author by default. Additional authors must be
+explicitly configured in `GitHubTrustedAuthors`; GitHub author-association claims
+do not grant publishing trust. Untrusted issues and comments cannot supply
+public content. Once published, trusted edits and comments synchronize without
+adding another label. A comment may begin with `state: identified`,
+`state: monitoring` or another supported state. Without a state label, the last
+trusted update selects the active state; resolve by closing the issue or adding
+`state:resolved`. Plain text is HTML-escaped;
+internal comment blocks are removed. Do not put confidential information in a
+public GitHub repository, regardless of rendering.
+
+Closing resolves the mapped incident; reopening restores its active state.
+Removing the publish label withdraws it without deleting its audit history.
+Source-owned incidents have stable IDs and are edited in GitHub, not in the
+local incident editor. Label, closure and reopening transitions remain in the durable
+timeline; unrelated edits and untrusted comments do not rewrite those transitions.
+API failures and incomplete pagination retain the last
+durable incident state and surface a private integration error. Missing issues
+are checked individually before withdrawal to avoid pagination races.
+
+`GitHubEnabled` (default `true`), `GitHubRepository`, `GitHubTrustedAuthors`, `GitHubRefreshSeconds` (60-3600)
+and an optional read-only `GitHubTokenFile` are runtime options. No token is
+needed for the current small public repository; anonymous GitHub API limits
+apply. Unchanged comments are cached for at most 30 minutes to constrain requests.
+If volume grows, provision a read-only token through platform-owned secret
+mounts rather than placing credentials in runtime JSON or source control.
+
 During an Entra outage, a host administrator can submit an incident JSON command
 on standard input to the running service executable with
 `--emergency-publish <site> [incident-id]`. This uses the same validation,
@@ -102,13 +157,18 @@ Set-Location src
 dotnet test MX.Platform.Status.slnx
 Set-Location MX.Platform.Status.Web
 npm ci
+npm test
 npm run build
 npx tsc --noEmit
 ```
 
 CI additionally builds both images and exercises real primary/standby replication,
+authenticated banner persistence, revision/brand checks, GitHub publication,
+resolution/reopening/withdrawal, source ownership and rate-limit retention,
 draft privacy, writes through the standby application, local-cache survival after
 database loss and application restart, and truthful staleness.
+Image-test runtimes explicitly disable external GitHub ingestion; the controlled
+GitHub fixture covers incident synchronization without importing live incidents.
 
 Successful `main` CI publishes immutable images to the existing platform ACR.
 Manifest-only and documentation-only changes do not rebuild images while a source

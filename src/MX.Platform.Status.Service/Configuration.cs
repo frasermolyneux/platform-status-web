@@ -24,6 +24,11 @@ public sealed record RuntimeOptions
     public string? AzureCollectorClientId { get; init; }
     public Uri AzureStatusFeed { get; init; } = new("https://azure.status.microsoft/status/feed/");
     public string[] WebhookApplicationIds { get; init; } = [];
+    public bool GitHubEnabled { get; init; } = true;
+    public string GitHubRepository { get; init; } = "frasermolyneux/status-pages";
+    public string[] GitHubTrustedAuthors { get; init; } = [];
+    public string? GitHubTokenFile { get; init; }
+    public int GitHubRefreshSeconds { get; init; } = 300;
 
     public void Validate()
     {
@@ -34,6 +39,9 @@ public sealed record RuntimeOptions
             throw new InvalidOperationException("A publisher requires a database connection.");
         if (DatabasePort is < 1 or > 65535 || WriterPort is < 1 or > 65535)
             throw new InvalidOperationException("Invalid database port.");
+        if (!Regex.IsMatch(GitHubRepository, @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(100)) || GitHubRefreshSeconds is < 60 or > 3600)
+            throw new InvalidOperationException("GitHub integration requires an owner/repository and a 60-3600 second interval.");
     }
 
     private void ValidateIdentity()
@@ -53,6 +61,7 @@ public sealed record SiteDefinition
     public Site Site { get; init; } = new();
     public ComponentsDocument Components { get; init; } = new();
     public Dictionary<string, string> Probes { get; init; } = [];
+    public Dictionary<string, string[]> Workloads { get; init; } = [];
 
     public SiteConfigurationSnapshot Snapshot => new(Site, Components, "", "", DateTimeOffset.UtcNow);
 }
@@ -79,6 +88,10 @@ public sealed class StatusCatalog
             if (components.Length == 0 || components.Select(c => c.Id).Distinct().Count() != components.Length)
                 throw new InvalidOperationException("Status component IDs must be unique within a site.");
             ValidateProbes(definition, components);
+            if (definition.Workloads.Any(workload => string.IsNullOrWhiteSpace(workload.Key)
+                || workload.Value.Length == 0 || workload.Value.Distinct().Count() != workload.Value.Length
+                || workload.Value.Any(id => !PublicComponents(definition.Components.Components).Any(c => c.Id == id))))
+                throw new InvalidOperationException("Workload mappings must name distinct public components from their own site.");
         }
     }
 

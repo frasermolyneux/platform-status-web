@@ -7,6 +7,7 @@ interface Route {
 }
 
 const routes: Route[] = [];
+let renderedLocation: string | undefined;
 
 export function addRoute(path: string, handler: RouteHandler): void {
   const keys: string[] = [];
@@ -23,6 +24,12 @@ export function navigate(path: string): void {
 
 export function resolve(): void {
   const path = location.pathname;
+  renderedLocation = path + location.search;
+  document.querySelectorAll<HTMLAnchorElement>('.site-nav a').forEach(link => {
+    const current = link.pathname === path || link.pathname === '/' && /^\/(incident|component)\//.test(path);
+    if (current) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
   for (const route of routes) {
     const match = path.match(route.pattern);
     if (match) {
@@ -36,4 +43,6 @@ export function resolve(): void {
   routes[0]?.handler({});
 }
 
-window.addEventListener('popstate', () => resolve());
+window.addEventListener('popstate', () => {
+  if (renderedLocation !== location.pathname + location.search) resolve();
+});

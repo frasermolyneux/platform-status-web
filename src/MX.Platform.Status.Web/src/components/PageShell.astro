@@ -17,24 +17,31 @@ const { title, description = 'System status and incident history.' } = Astro.pro
   <link rel="stylesheet" href="/styles/github-minimal.css" />
 </head>
 <body>
+  <a class="skip-link" href="#app">Skip to status</a>
   <header class="site-header">
     <div class="container">
-      <h1 class="site-title" id="site-title">Status</h1>
-      <p class="site-tagline" id="site-tagline"></p>
+      <a class="brand" href="/" aria-label="Status overview">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <span>
+          <h1 class="site-title" id="site-title">Status</h1>
+          <p class="site-tagline" id="site-tagline">Service availability &amp; incident updates</p>
+        </span>
+      </a>
       <nav class="site-nav" aria-label="Status navigation">
         <a href="/">Current status</a>
         <a href="/history">History</a>
-        <a href="/feed.xml">RSS</a>
-        <a href="/ops">Operator sign-in</a>
+        <a href="/feed.xml">Subscribe via RSS</a>
+        <a href="/ops" class="operator-link">Operations</a>
       </nav>
     </div>
   </header>
-  <main class="container" id="app">
+  <main class="container" id="app" tabindex="-1">
     <slot />
   </main>
   <footer class="site-footer">
     <div class="container">
-      <p>&copy; {new Date().getFullYear()} &middot; Powered by <a href="https://github.com/frasermolyneux/platform-status-web">platform-status-web</a></p>
+      <p>Transparent updates. Independent infrastructure.</p>
+      <p>&copy; {new Date().getFullYear()} &middot; <a href="https://github.com/frasermolyneux/platform-status-web">Platform status</a></p>
     </div>
   </footer>
 </body>

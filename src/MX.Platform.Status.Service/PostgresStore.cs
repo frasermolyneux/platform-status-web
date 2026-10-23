@@ -45,7 +45,10 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
 
     public async Task InitializeAsync(CancellationToken ct)
     {
-        await using var command = Source.CreateCommand("""
+        await using var connection = await Source.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await using var command = new NpgsqlCommand("""
+            SELECT pg_advisory_xact_lock(814233109);
             CREATE TABLE IF NOT EXISTS status_incidents (
                 id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 site_id text NOT NULL, revision integer NOT NULL, document jsonb NOT NULL);
@@ -62,8 +65,21 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
             CREATE TABLE IF NOT EXISTS status_evidence (
                 source text NOT NULL, event_id text NOT NULL, observed_at timestamptz NOT NULL,
                 document jsonb NOT NULL, PRIMARY KEY (source, event_id));
-            """);
+            CREATE TABLE IF NOT EXISTS status_banners (
+                id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                site_id text NOT NULL, revision integer NOT NULL, document jsonb NOT NULL);
+            CREATE TABLE IF NOT EXISTS status_banner_audit (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                at timestamptz NOT NULL DEFAULT now(), site_id text NOT NULL,
+                banner_id integer NOT NULL, actor text NOT NULL, revision integer NOT NULL);
+            CREATE TABLE IF NOT EXISTS status_github_sources (
+                repository text NOT NULL, issue_number integer NOT NULL, site_id text NOT NULL,
+                incident_id integer NOT NULL REFERENCES status_incidents(id),
+                updated_at timestamptz NOT NULL,
+                PRIMARY KEY(repository,issue_number,site_id));
+            """, connection, transaction);
         await command.ExecuteNonQueryAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<bool> IsWritableAsync(CancellationToken ct)
@@ -141,7 +157,7 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
             var json = await read.ExecuteScalarAsync(ct) as string;
             if (json is null) return null;
             previous = JsonSerializer.Deserialize<IncidentRecord>(json, StatusJson.Options)!;
-            if (previous.Revision != request.Revision) return null;
+            if (previous.Revision != request.Revision || previous.SourceUrl is not null) return null;
         }
         else
         {
@@ -150,13 +166,68 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
             id = (int)(await insert.ExecuteScalarAsync(ct))!;
         }
         var record = request.Apply(id.Value, site, previous, DateTimeOffset.UtcNow);
+        await WriteIncidentAsync(connection, transaction, record, actor, ct);
+        await transaction.CommitAsync(ct);
+        return record;
+    }
+
+    private static async Task WriteIncidentAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+        IncidentRecord record, string actor, CancellationToken ct)
+    {
         await using var write = new NpgsqlCommand("UPDATE status_incidents SET revision=$1,document=$2 WHERE id=$3 AND site_id=$4", connection, transaction);
+        write.Parameters.AddWithValue(record.Revision);
+        write.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(record, StatusJson.Options));
+        write.Parameters.AddWithValue(record.Id);
+        write.Parameters.AddWithValue(record.SiteId);
+        await write.ExecuteNonQueryAsync(ct);
+        await using var audit = new NpgsqlCommand("INSERT INTO status_audit(site_id,incident_id,actor,revision) VALUES($1,$2,$3,$4)", connection, transaction);
+        audit.Parameters.AddWithValue(record.SiteId);
+        audit.Parameters.AddWithValue(record.Id);
+        audit.Parameters.AddWithValue(actor);
+        audit.Parameters.AddWithValue(record.Revision);
+        await audit.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<BannerRecord>> ReadBannersAsync(string site, CancellationToken ct)
+    {
+        await using var command = Source.CreateCommand("SELECT document::text FROM status_banners WHERE site_id=$1 ORDER BY id DESC");
+        command.Parameters.AddWithValue(site);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var result = new List<BannerRecord>();
+        while (await reader.ReadAsync(ct))
+            result.Add(JsonSerializer.Deserialize<BannerRecord>(reader.GetString(0), StatusJson.Options)!);
+        return result;
+    }
+
+    public async Task<BannerRecord?> SaveBannerAsync(string site, int? id, BannerCommand request, string actor, CancellationToken ct)
+    {
+        await using var connection = await Writer.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        BannerRecord? previous = null;
+        if (id.HasValue)
+        {
+            await using var read = new NpgsqlCommand("SELECT document::text FROM status_banners WHERE id=$1 AND site_id=$2 FOR UPDATE", connection, transaction);
+            read.Parameters.AddWithValue(id.Value);
+            read.Parameters.AddWithValue(site);
+            var json = await read.ExecuteScalarAsync(ct) as string;
+            if (json is null) return null;
+            previous = JsonSerializer.Deserialize<BannerRecord>(json, StatusJson.Options)!;
+            if (previous.Revision != request.Revision) return null;
+        }
+        else
+        {
+            await using var insert = new NpgsqlCommand("INSERT INTO status_banners(site_id,revision,document) VALUES($1,0,'{}') RETURNING id", connection, transaction);
+            insert.Parameters.AddWithValue(site);
+            id = (int)(await insert.ExecuteScalarAsync(ct))!;
+        }
+        var record = request.Apply(id.Value, site, previous, DateTimeOffset.UtcNow);
+        await using var write = new NpgsqlCommand("UPDATE status_banners SET revision=$1,document=$2 WHERE id=$3 AND site_id=$4", connection, transaction);
         write.Parameters.AddWithValue(record.Revision);
         write.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(record, StatusJson.Options));
         write.Parameters.AddWithValue(record.Id);
         write.Parameters.AddWithValue(site);
         await write.ExecuteNonQueryAsync(ct);
-        await using var audit = new NpgsqlCommand("INSERT INTO status_audit(site_id,incident_id,actor,revision) VALUES($1,$2,$3,$4)", connection, transaction);
+        await using var audit = new NpgsqlCommand("INSERT INTO status_banner_audit(site_id,banner_id,actor,revision) VALUES($1,$2,$3,$4)", connection, transaction);
         audit.Parameters.AddWithValue(site);
         audit.Parameters.AddWithValue(record.Id);
         audit.Parameters.AddWithValue(actor);
@@ -164,6 +235,68 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
         await audit.ExecuteNonQueryAsync(ct);
         await transaction.CommitAsync(ct);
         return record;
+    }
+
+    public async Task<IReadOnlyList<GitHubSource>> ReadGitHubSourcesAsync(string repository, CancellationToken ct)
+    {
+        await using var command = Source.CreateCommand("""
+            SELECT issue_number,s.site_id,updated_at,i.document::text
+            FROM status_github_sources s JOIN status_incidents i ON i.id=s.incident_id
+            WHERE repository=$1
+            """);
+        command.Parameters.AddWithValue(repository);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var result = new List<GitHubSource>();
+        while (await reader.ReadAsync(ct))
+            result.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2),
+                JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(3), StatusJson.Options)!));
+        return result;
+    }
+
+    public async Task SaveGitHubIncidentAsync(PublisherLease publisher, string repository, int number, DateTimeOffset updatedAt,
+        IncidentRecord incoming, CancellationToken ct)
+    {
+        var connection = publisher.Connection;
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await using var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock(814233110)", connection, transaction);
+        await gate.ExecuteNonQueryAsync(ct);
+        await using var read = new NpgsqlCommand("""
+            SELECT i.document::text FROM status_github_sources s
+            JOIN status_incidents i ON i.id=s.incident_id
+            WHERE repository=$1 AND issue_number=$2 AND s.site_id=$3 FOR UPDATE OF i
+            """, connection, transaction);
+        read.Parameters.AddWithValue(repository);
+        read.Parameters.AddWithValue(number);
+        read.Parameters.AddWithValue(incoming.SiteId);
+        var json = await read.ExecuteScalarAsync(ct) as string;
+        IncidentRecord record;
+        var changed = true;
+        if (json is null)
+        {
+            await using var insert = new NpgsqlCommand("INSERT INTO status_incidents(site_id,revision,document) VALUES($1,0,'{}') RETURNING id", connection, transaction);
+            insert.Parameters.AddWithValue(incoming.SiteId);
+            record = incoming with { Id = (int)(await insert.ExecuteScalarAsync(ct))!, Revision = 1 };
+        }
+        else
+        {
+            var previous = JsonSerializer.Deserialize<IncidentRecord>(json, StatusJson.Options)!;
+            record = incoming with { Id = previous.Id, Revision = previous.Revision + 1 };
+            changed = JsonSerializer.Serialize(previous with { Revision = 0 }, StatusJson.Options)
+                != JsonSerializer.Serialize(record with { Revision = 0 }, StatusJson.Options);
+        }
+        if (changed) await WriteIncidentAsync(connection, transaction, record, $"github:{repository}#{number}", ct);
+        await using var source = new NpgsqlCommand("""
+            INSERT INTO status_github_sources VALUES($1,$2,$3,$4,$5)
+            ON CONFLICT(repository,issue_number,site_id)
+            DO UPDATE SET updated_at=excluded.updated_at
+            """, connection, transaction);
+        source.Parameters.AddWithValue(repository);
+        source.Parameters.AddWithValue(number);
+        source.Parameters.AddWithValue(incoming.SiteId);
+        source.Parameters.AddWithValue(record.Id);
+        source.Parameters.AddWithValue(updatedAt);
+        await source.ExecuteNonQueryAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<StatusApiResponse?> ReadPublicationAsync(string site, CancellationToken ct)
@@ -243,6 +376,8 @@ public sealed class PostgresStore(RuntimeOptions options, ILogger<PostgresStore>
 
 public sealed class PublisherLease(NpgsqlConnection connection) : IAsyncDisposable
 {
+    internal NpgsqlConnection Connection => connection;
+
     public async Task SavePublicationAsync(StatusApiResponse publication, CancellationToken ct)
     {
         await using var command = new NpgsqlCommand("""

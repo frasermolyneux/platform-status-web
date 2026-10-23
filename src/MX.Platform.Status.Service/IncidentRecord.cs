@@ -19,6 +19,8 @@ public sealed record IncidentRecord
     public DateTimeOffset? ScheduledEnd { get; init; }
     public IReadOnlyList<IncidentUpdate> Updates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicUpdates { get; init; } = [];
+    public IReadOnlyList<IncidentUpdate> SourceStateUpdates { get; init; } = [];
+    public string? SourceUrl { get; init; }
 
     public Incident ToPublicIncident() => new()
     {
