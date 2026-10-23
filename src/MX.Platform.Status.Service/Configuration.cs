@@ -24,6 +24,7 @@ public sealed record RuntimeOptions
     public string? AzureCollectorClientId { get; init; }
     public Uri AzureStatusFeed { get; init; } = new("https://azure.status.microsoft/status/feed/");
     public string[] WebhookApplicationIds { get; init; } = [];
+    public bool GitHubEnabled { get; init; } = true;
     public string GitHubRepository { get; init; } = "frasermolyneux/status-pages";
     public string[] GitHubTrustedAuthors { get; init; } = [];
     public string? GitHubTokenFile { get; init; }

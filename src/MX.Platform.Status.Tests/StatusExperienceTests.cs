@@ -12,16 +12,17 @@ public sealed class StatusExperienceTests
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
     private static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
 
-    private static JsonElement Issue(string[]? labels = null, string author = "frasermolyneux", bool closed = false, string body = "We are investigating.") =>
+    private static JsonElement Issue(string[]? labels = null, string author = "frasermolyneux", bool closed = false,
+        string body = "We are investigating.", int updatedMinutes = 5, string title = "Availability incident") =>
         JsonSerializer.SerializeToElement(new
         {
             number = 42,
-            title = "Availability incident",
+            title,
             body,
             user = new { login = author },
             created_at = Created,
-            updated_at = Created.AddMinutes(5),
-            closed_at = closed ? Created.AddMinutes(5) : (DateTimeOffset?)null,
+            updated_at = Created.AddMinutes(updatedMinutes),
+            closed_at = closed ? Created.AddMinutes(updatedMinutes) : (DateTimeOffset?)null,
             labels = (labels ?? ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage"])
                 .Select(name => new { name })
         });
@@ -77,6 +78,42 @@ public sealed class StatusExperienceTests
         var reopened = Assert.Single(GitHubIssueParser.Parse(Issue(), [resolvedComment], Catalogue(), new()));
         Assert.Equal(IncidentState.Investigating, reopened.State);
         Assert.Null(reopened.ResolvedAt);
+    }
+
+    [Fact]
+    public void ResolvedLabelsKeepTheirTransitionTimeAfterTitleEditsAndFollowupComments()
+    {
+        string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage", "state:resolved"];
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(labels), [], Catalogue(), new()));
+        var edited = Assert.Single(GitHubIssueParser.Parse(
+            Issue(labels, updatedMinutes: 10, title: "Corrected title"), [], Catalogue(), new(), [first]));
+        Assert.Equal(first.ResolvedAt, edited.ResolvedAt);
+        Assert.Equal(first.Updates.Select(update => update.At), edited.Updates.Select(update => update.At));
+        var comment = JsonSerializer.SerializeToElement(new
+        {
+            body = "Follow-up details after recovery.",
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(12)
+        });
+        var followed = Assert.Single(GitHubIssueParser.Parse(
+            Issue(labels, updatedMinutes: 15, title: "Corrected title"), [comment], Catalogue(), new(), [edited]));
+        Assert.Equal(first.ResolvedAt, followed.ResolvedAt);
+        Assert.Equal(3, followed.PublicUpdates.Count);
+        Assert.Equal(first.ResolvedAt, followed.PublicUpdates[1].At);
+        Assert.Equal(IncidentState.Resolved, followed.PublicUpdates[^1].State);
+        Assert.Equal(Created.AddMinutes(12), followed.PublicUpdates[^1].At);
+    }
+
+    [Fact]
+    public async Task DisabledGitHubIngestionDoesNotReadTheDatabaseOrContactGitHub()
+    {
+        var options = new RuntimeOptions { Publisher = true, GitHubEnabled = false, DatabaseConnectionFile = "not-a-real-connection-file" };
+        using var api = new GitHubApiFixture();
+        await using var database = new PostgresStore(options, NullLogger<PostgresStore>.Instance);
+        using var worker = new GitHubIssueWorker(Catalogue(), options, database, api, NullLogger<GitHubIssueWorker>.Instance);
+        await worker.StartAsync(default);
+        await worker.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, api.Requests);
     }
 
     [Theory]

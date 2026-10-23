@@ -198,6 +198,7 @@ def main():
                 (node / "catalog.json").write_text(json.dumps(catalog))
                 (node / "runtime.json").write_text(json.dumps({"Status": {
                     "Publisher": role == "primary", "RefreshSeconds": 30, "StaleAfterSeconds": 60,
+                    "GitHubEnabled": False,
                     "DataDirectory": "/data", "DatabaseHost": f"{name}-{role}",
                     "WriterHost": f"{name}-primary", "WriterPort": 5432,
                     "CatalogPath": "/node/catalog.json",

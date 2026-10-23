@@ -118,7 +118,7 @@ public static class ServiceProgram
             {
                 publisher = options.Publisher,
                 writable = await database.IsWritableAsync(ct),
-                github = new { repository = options.GitHubRepository, pollSeconds = options.GitHubRefreshSeconds },
+                github = new { enabled = options.GitHubEnabled, repository = options.GitHubRepository, pollSeconds = options.GitHubRefreshSeconds },
                 workloads = catalog.FindHost(context.Request.Host.Host)!.Workloads
             }))
             .RequireAuthorization(ReaderPolicy);

@@ -18,11 +18,12 @@ internal sealed class GitHubApiFixture : HttpMessageHandler, IHttpClientFactory
         return Task.FromResult(new HttpResponseMessage(Status) { Content = JsonContent.Create(Issues) });
     }
 
-    public static JsonElement Incident(bool published, int revision, bool closed = false)
+    public static JsonElement Incident(bool published, int revision, bool closed = false, bool resolved = false)
     {
         var created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
         var labels = new List<string> { "status:incident", "site:mx", "workload:molyneux-me", "severity:outage" };
         if (published) labels.Add("status:published");
+        if (resolved) labels.Add("state:resolved");
         return JsonSerializer.SerializeToElement(new
         {
             number = 42,

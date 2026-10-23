@@ -30,7 +30,7 @@ interface Banner {
 interface Runtime {
   publisher: boolean;
   writable: boolean;
-  github: { repository: string; pollSeconds: number };
+  github: { enabled: boolean; repository: string; pollSeconds: number };
   workloads: Record<string, string[]>;
 }
 
@@ -435,7 +435,8 @@ export async function renderOperations(): Promise<void> {
       const sourceUrl = `https://github.com/${runtime.github.repository}`;
       const sourceNote = element('p', undefined, 'muted');
       sourceNote.append('GitHub-managed incidents are edited in ', link(runtime.github.repository, sourceUrl),
-        `. A trusted author, matching workload labels and status:published are required. Synced every ${runtime.github.pollSeconds / 60} minutes.`);
+        '. A trusted author, matching workload labels and status:published are required.',
+        runtime.github.enabled ? ` Synced every ${runtime.github.pollSeconds / 60} minutes.` : ' GitHub ingestion is disabled on this origin.');
       incidentSection.append(sourceNote, link('Declare an incident in GitHub', `${sourceUrl}/issues/new/choose`));
       if (!incidents.length) incidentSection.append(element('p', 'No incidents or maintenance windows yet.', 'empty-state'));
       for (const incident of incidents) {

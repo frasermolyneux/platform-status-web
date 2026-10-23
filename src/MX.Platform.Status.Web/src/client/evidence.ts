@@ -54,6 +54,7 @@ export function evidenceCards(records: EvidenceRecord[]): EvidenceCard[] {
         const entry = object(item);
         return {
           ...base, title: text(entry.title, 'Azure service advisory'),
+          record: { ...record, evidence: entry },
           summary: text(entry.description).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
           severity: 'advisory', state: 'published', href: httpsLink(entry.link),
         };

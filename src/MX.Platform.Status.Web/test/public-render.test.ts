@@ -35,3 +35,18 @@ test('evidence summaries retain source state and reject unsafe advisory links', 
   assert.equal(cards[0].href, undefined);
   assert.equal(cards[0].state, 'published');
 });
+
+test('Azure advisory technical details grow with individual items, not repeated copies of the entire feed', () => {
+  const items = Array.from({ length: 50 }, (_, index) => ({
+    title: `Advisory ${index}`, description: 'An individual service advisory.'.repeat(100),
+    link: `https://azure.status.microsoft/advisory/${index}`,
+  }));
+  const cards = evidenceCards([{
+    source: 'azure-public-status', id: 'azure', observedAt: '2026-10-23T08:00:00Z',
+    evidence: { items, rawFeed: 'RAW_FEED_NOT_REPEATED_IN_CARDS'.repeat(1000) },
+  }]);
+  assert.equal(cards.length, 50);
+  cards.forEach((card, index) => assert.deepEqual(card.record.evidence, items[index]));
+  const technicalDetailsLength = cards.reduce((total, card) => total + JSON.stringify(card.record.evidence, null, 2).length, 0);
+  assert.ok(technicalDetailsLength <= JSON.stringify({ items }, null, 2).length);
+});

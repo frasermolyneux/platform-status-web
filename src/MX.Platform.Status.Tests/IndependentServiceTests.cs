@@ -414,7 +414,15 @@ public sealed class IndependentServiceTests : IDisposable
             var reopened = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
             Assert.Equal(IncidentState.Investigating, reopened.Incident.State);
             Assert.Null(reopened.Incident.ResolvedAt);
-            api.Issues = [GitHubApiFixture.Incident(false, 4)];
+            api.Issues = [GitHubApiFixture.Incident(true, 4, resolved: true)];
+            await worker.SynchronizeAsync(default);
+            var resolved = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            api.Issues = [GitHubApiFixture.Incident(true, 5, resolved: true)];
+            await worker.SynchronizeAsync(default);
+            var unchangedResolution = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.Equal(resolved.Incident.ResolvedAt, unchangedResolution.Incident.ResolvedAt);
+            Assert.Equal(resolved.Incident.Revision, unchangedResolution.Incident.Revision);
+            api.Issues = [GitHubApiFixture.Incident(false, 6, resolved: true)];
             await worker.SynchronizeAsync(default);
             var withdrawn = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
             Assert.False(withdrawn.Incident.Published);
@@ -422,7 +430,7 @@ public sealed class IndependentServiceTests : IDisposable
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile));
             await using var audit = source.CreateCommand("SELECT count(*) FROM status_audit WHERE incident_id=$1");
             audit.Parameters.AddWithValue(first.Incident.Id);
-            Assert.Equal(5L, await audit.ExecuteScalarAsync());
+            Assert.Equal(6L, await audit.ExecuteScalarAsync());
         }
         finally
         {

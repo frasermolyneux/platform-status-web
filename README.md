@@ -130,7 +130,7 @@ local incident editor. API failures and incomplete pagination retain the last
 durable incident state and surface a private integration error. Missing issues
 are checked individually before withdrawal to avoid pagination races.
 
-`GitHubRepository`, `GitHubTrustedAuthors`, `GitHubRefreshSeconds` (60-3600)
+`GitHubEnabled` (default `true`), `GitHubRepository`, `GitHubTrustedAuthors`, `GitHubRefreshSeconds` (60-3600)
 and an optional read-only `GitHubTokenFile` are runtime options. No token is
 needed for the current small public repository; anonymous GitHub API limits
 apply. Unchanged comments are cached for at most 30 minutes to constrain requests.
@@ -165,6 +165,8 @@ authenticated banner persistence, revision/brand checks, GitHub publication,
 resolution/reopening/withdrawal, source ownership and rate-limit retention,
 draft privacy, writes through the standby application, local-cache survival after
 database loss and application restart, and truthful staleness.
+Image-test runtimes explicitly disable external GitHub ingestion; the controlled
+GitHub fixture covers incident synchronization without importing live incidents.
 
 Successful `main` CI publishes immutable images to the existing platform ACR.
 Manifest-only and documentation-only changes do not rebuild images while a source

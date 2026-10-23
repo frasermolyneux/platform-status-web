@@ -58,7 +58,7 @@ beforeEach(() => {
         site: { id: 'mx', displayName: 'MX status' }, summary: { status: 'operational' },
         components: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website', kind: 'leaf', children: [] }],
       },
-      '/api/ops/runtime': { publisher: true, writable: true, github: { repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
+      '/api/ops/runtime': { publisher: true, writable: true, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
       '/api/ops/incidents': [{
         id: 1, title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
         sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',

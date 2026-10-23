@@ -17,7 +17,7 @@ public static class GitHubIssueParser
         || options.GitHubTrustedAuthors.Contains(author, StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlyList<IncidentRecord> Parse(JsonElement issue, IReadOnlyList<JsonElement> comments,
-        StatusCatalog catalog, RuntimeOptions options)
+        StatusCatalog catalog, RuntimeOptions options, IReadOnlyList<IncidentRecord>? previous = null)
     {
         var labels = issue.GetProperty("labels").EnumerateArray()
             .Select(label => label.GetProperty("name").GetString()!.ToLowerInvariant()).ToHashSet();
@@ -32,21 +32,14 @@ public static class GitHubIssueParser
         var body = issue.GetProperty("body").GetString() ?? "";
         var title = issue.GetProperty("title").GetString() ?? "";
         var createdAt = issue.GetProperty(CreatedAtProperty).GetDateTimeOffset();
-        var updates = ReadUpdates(issue, comments, options);
-        var state = ReadState(labels, closedAt, updates[^1].State);
-        if (updates[^1].State != state)
-            updates.Add(new()
-            {
-                At = closedAt ?? issue.GetProperty("updated_at").GetDateTimeOffset(),
-                State = state,
-                Body = $"Incident marked {state.ToApiString()} in GitHub."
-            });
+        var sourceUpdates = ReadUpdates(issue, comments, options);
+        var state = ReadState(labels, closedAt, sourceUpdates[^1].State);
         var records = new List<IncidentRecord>();
-        DateTimeOffset? resolvedAt = null;
-        if (state == IncidentState.Resolved)
-            resolvedAt = closedAt ?? issue.GetProperty("updated_at").GetDateTimeOffset();
         foreach (var (site, components) in targets)
         {
+            var resolvedAt = ResolutionTime(state, closedAt, issue.GetProperty("updated_at").GetDateTimeOffset(),
+                previous?.SingleOrDefault(record => record.SiteId == site.Site.Id));
+            var updates = FinalizeUpdates(issue, comments, options, sourceUpdates, state, resolvedAt);
             var command = new IncidentCommand(title, components, severity, state, body, published);
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
@@ -105,15 +98,41 @@ public static class GitHubIssueParser
         return latest == IncidentState.Resolved ? IncidentState.Investigating : latest;
     }
 
-    private static List<IncidentUpdate> ReadUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options)
+    private static DateTimeOffset? ResolutionTime(IncidentState state, DateTimeOffset? closedAt, DateTimeOffset updatedAt, IncidentRecord? previous)
     {
-        var updates = new List<IncidentUpdate>();
-        AddUpdate(updates, issue.GetProperty("body").GetString() ?? "", issue.GetProperty(CreatedAtProperty).GetDateTimeOffset(), IncidentState.Investigating);
-        foreach (var comment in comments.OrderBy(comment => comment.GetProperty(CreatedAtProperty).GetDateTimeOffset()))
+        if (state != IncidentState.Resolved) return null;
+        if (previous?.State == IncidentState.Resolved && previous.ResolvedAt is { } resolvedAt) return resolvedAt;
+        return closedAt ?? updatedAt;
+    }
+
+    private static IReadOnlyList<IncidentUpdate> FinalizeUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments,
+        RuntimeOptions options, IReadOnlyList<IncidentUpdate> sourceUpdates, IncidentState state, DateTimeOffset? resolvedAt)
+    {
+        var updates = sourceUpdates;
+        if (updates[^1].State == state) return updates;
+        if (resolvedAt.HasValue) updates = ReadUpdates(issue, comments, options, resolvedAt);
+        if (updates[^1].State == state) return updates;
+        return [.. updates, StateUpdate(issue.GetProperty("updated_at").GetDateTimeOffset(), state)];
+    }
+
+    private static IncidentUpdate StateUpdate(DateTimeOffset at, IncidentState state) =>
+        new() { At = at, State = state, Body = $"Incident marked {state.ToApiString()} in GitHub." };
+
+    private static List<IncidentUpdate> ReadUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options,
+        DateTimeOffset? resolvedAt = null)
+    {
+        var events = new List<(DateTimeOffset At, string Body, bool Synthetic)>
         {
-            if (!IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)) continue;
-            AddUpdate(updates, comment.GetProperty("body").GetString() ?? "",
-                comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), updates.LastOrDefault()?.State ?? IncidentState.Investigating);
+            (issue.GetProperty(CreatedAtProperty).GetDateTimeOffset(), issue.GetProperty("body").GetString() ?? "", false)
+        };
+        events.AddRange(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options))
+            .Select(comment => (comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), comment.GetProperty("body").GetString() ?? "", false)));
+        if (resolvedAt is { } at) events.Add((at, "", true));
+        var updates = new List<IncidentUpdate>();
+        foreach (var entry in events.OrderBy(entry => entry.At))
+        {
+            if (entry.Synthetic) updates.Add(StateUpdate(entry.At, IncidentState.Resolved));
+            else AddUpdate(updates, entry.Body, entry.At, updates.LastOrDefault()?.State ?? IncidentState.Investigating);
         }
         if (updates.Count == 0)
             throw new InvalidDataException("An incident needs a public description, not only internal notes.");
@@ -153,7 +172,7 @@ public sealed class GitHubIssueWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Publisher || options.DatabaseConnectionFile is null && options.DatabaseHost is null) return;
+        if (!options.GitHubEnabled || !options.Publisher || options.DatabaseConnectionFile is null && options.DatabaseHost is null) return;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -234,7 +253,8 @@ public sealed class GitHubIssueWorker(
         try
         {
             var comments = await ReadCommentsAsync(issue, ct);
-            return new(number, updatedAt, GitHubIssueParser.Parse(issue, comments, catalog, options));
+            return new(number, updatedAt, GitHubIssueParser.Parse(issue, comments, catalog, options,
+                previous.Select(source => source.Incident).ToArray()));
         }
         catch (InvalidDataException exception)
         {
