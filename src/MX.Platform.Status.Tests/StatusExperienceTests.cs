@@ -112,6 +112,71 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void GitHubPublicHistoryNeverIncludesSupersededDraftsOrUnapprovedStateTransitions()
+    {
+        var catalog = Catalogue();
+        string[] draftLabels = ["status:incident", "site:mx", "workload:geo-location", "severity:outage", "state:identified"];
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(draftLabels, body: "PRIVATE_FIRST"), [], catalog, new()));
+        var draft = Assert.Single(GitHubIssueParser.Parse(Issue(draftLabels, body: "PRIVATE_REPLACEMENT", updatedMinutes: 10),
+            [], catalog, new(), [first]));
+        var approvedLabels = draftLabels.Select(label => label == "state:identified" ? "state:monitoring" : label)
+            .Append("status:published").ToArray();
+        var approved = Assert.Single(GitHubIssueParser.Parse(Issue(approvedLabels, body: "Approved update", updatedMinutes: 15),
+            [], catalog, new(), [draft]));
+        var withdrawn = Assert.Single(GitHubIssueParser.Parse(Issue(draftLabels, body: "PRIVATE_WITHDRAWN", updatedMinutes: 20),
+            [], catalog, new(), [approved]));
+        var republished = Assert.Single(GitHubIssueParser.Parse(Issue(approvedLabels, body: "Approved correction", updatedMinutes: 25),
+            [], catalog, new(), [withdrawn]));
+        Assert.Contains(republished.Updates, update => update.Body == "PRIVATE_FIRST");
+        Assert.Contains(republished.PublicUpdates, update => update.Body == "Approved update");
+        Assert.Contains(republished.PublicUpdates, update => update.Body == "Approved correction");
+        Assert.DoesNotContain(republished.PublicUpdates, update => update.State == IncidentState.Identified);
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(republished.ToPublicIncident(), StatusJson.Options));
+        var shared = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [republished]));
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(shared, StatusJson.Options));
+    }
+
+    [Fact]
+    public void GitHubUpdatesDiscoveredBeforeAnImpactChangeKeepTheirHistoricSeverityUnknown()
+    {
+        var catalog = Catalogue();
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(), [], catalog, new()));
+        var comment = JsonSerializer.SerializeToElement(new
+        {
+            body = "An earlier update",
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(6)
+        });
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(
+            ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:degraded"], updatedMinutes: 10),
+            [comment], catalog, new(), [first]));
+        Assert.Null(Assert.Single(edited.PublicUpdates, update => update.Body == "An earlier update").Severity);
+        Assert.Equal(Severity.Degraded, edited.PublicUpdates[^1].Severity);
+        Assert.Equal(Created.AddMinutes(10), edited.PublicUpdates[^1].At);
+    }
+
+    [Fact]
+    public void GitHubStateOnlyCommentEditsCreateOneObservedHistoryEntry()
+    {
+        var catalog = Catalogue();
+        static JsonElement Comment(string state) => JsonSerializer.SerializeToElement(new
+        {
+            body = $"state: {state}\nSame description",
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(1)
+        });
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(), [Comment("investigating")], catalog, new()));
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(updatedMinutes: 10),
+            [Comment("identified")], catalog, new(), [first]));
+        Assert.Equal(IncidentState.Identified, edited.State);
+        Assert.Equal(IncidentState.Identified, edited.PublicUpdates[^1].State);
+        Assert.Equal(Created.AddMinutes(10), edited.PublicUpdates[^1].At);
+        var repeated = Assert.Single(GitHubIssueParser.Parse(Issue(updatedMinutes: 15, title: "Renamed"),
+            [Comment("identified")], catalog, new(), [edited]));
+        Assert.Equal(edited.PublicUpdates, repeated.PublicUpdates);
+    }
+
+    [Fact]
     public void PublicationUsesTheLatestObservationWithoutMakingPersistedEvidenceAppearFresh()
     {
         var site = Catalogue().Get("mx");

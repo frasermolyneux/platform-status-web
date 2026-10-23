@@ -157,7 +157,10 @@ public sealed class StatusCatalog
             Evidence = null,
             Updates = record.PublicUpdates,
             SourceStateUpdates = [],
-            SourceUpdates = []
+            SourceUpdates = [],
+            PublicSourceUpdates = [],
+            PublicSourceStateUpdates = [],
+            PublicSourceSeverity = null
         };
     }
 

@@ -43,6 +43,15 @@ public static class GitHubIssueParser
                 previousIncident);
             var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
             updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, issue.GetProperty("updated_at").GetDateTimeOffset());
+            var publicUpdates = previousIncident?.PublicUpdates ?? [];
+            var publicStateUpdates = previousIncident?.PublicSourceStateUpdates ?? [];
+            if (published)
+            {
+                var approved = ApprovedHistory(previousIncident);
+                var (current, transitions) = ReconcileUpdates(issue, comments, options, state, closedAt, approved);
+                publicUpdates = PreserveHistory(current, sourceUpdates, approved, severity, issue.GetProperty("updated_at").GetDateTimeOffset());
+                publicStateUpdates = transitions;
+            }
             var command = new IncidentCommand(title, components, severity, state, body, published);
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
@@ -56,14 +65,27 @@ public static class GitHubIssueParser
                 StartedAt = createdAt,
                 ResolvedAt = resolvedAt,
                 Updates = updates,
-                PublicUpdates = published ? updates : [],
+                PublicUpdates = publicUpdates,
                 SourceStateUpdates = stateUpdates,
                 SourceUpdates = sourceUpdates,
+                PublicSourceUpdates = published ? sourceUpdates : previousIncident?.PublicSourceUpdates ?? [],
+                PublicSourceStateUpdates = publicStateUpdates,
+                PublicSourceSeverity = published ? severity : previousIncident?.PublicSourceSeverity,
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
             });
         }
         return records;
     }
+
+    private static IncidentRecord? ApprovedHistory(IncidentRecord? previous) =>
+        previous is { PublicUpdates.Count: > 0 } ? previous with
+        {
+            Updates = previous.PublicUpdates,
+            SourceUpdates = previous.PublicSourceUpdates,
+            SourceStateUpdates = previous.PublicSourceStateUpdates,
+            Severity = previous.PublicSourceSeverity ?? previous.Severity,
+            State = previous.PublicUpdates[^1].State
+        } : null;
 
     private static (SiteDefinition Site, string[] Components)[] ReadTargets(HashSet<string> labels, StatusCatalog catalog)
     {
@@ -145,7 +167,7 @@ public static class GitHubIssueParser
             {
                 At = edited ? updatedAt : update.At,
                 State = edited ? incoming[^1].State : update.State,
-                Severity = severity
+                Severity = edited || update.At == updatedAt ? severity : null
             });
         }
         if (previous.Severity != severity)
@@ -161,8 +183,9 @@ public static class GitHubIssueParser
 
     private static bool UnchangedUpdate(IncidentUpdate update, IReadOnlyList<IncidentUpdate> sourceUpdates, IncidentRecord previous)
     {
-        if (previous.SourceUpdates.Count > 0 && sourceUpdates.Any(source => source.At == update.At && source.Body == update.Body))
-            return previous.SourceUpdates.Any(source => source.At == update.At && source.Body == update.Body);
+        var current = sourceUpdates.FirstOrDefault(source => source.At == update.At && source.Body == update.Body);
+        if (previous.SourceUpdates.Count > 0 && current is not null)
+            return previous.SourceUpdates.Any(source => source.At == current.At && source.Body == current.Body && source.State == current.State);
         return previous.Updates.Any(known => known.At == update.At && known.Body == update.Body && known.State == update.State);
     }
 
