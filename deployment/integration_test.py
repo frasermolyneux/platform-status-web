@@ -175,8 +175,12 @@ def main():
         with runtime_directory(containers) as root:
             for directory in ("primary", "standby", "public", "replica", "secrets", "writer-node", "reader-node"):
                 (root / directory).mkdir()
-            for filename in ("postgres-password", "app-password", "replication-password"):
-                (root / "secrets" / filename).write_text(secrets.token_hex(32))
+            credentials = {
+                filename: secrets.token_hex(32)
+                for filename in ("postgres-password", "app-password", "replication-password")
+            }
+            for filename, password in credentials.items():
+                (root / "secrets" / filename).write_text(password)
                 (root / "secrets" / filename).chmod(0o640)
             catalog_path = Path(__file__).resolve().parents[1] / "src" / "MX.Platform.Status.Service" / "catalog.json"
             catalog = json.loads(catalog_path.read_text())
@@ -243,7 +247,7 @@ def main():
             integration_environment = dict(os.environ)
             integration_environment["STATUS_TEST_CONNECTION"] = (
                 f"Host=127.0.0.1;Port={connection_port};Database=status;Username=status_app;"
-                f"Password={(root / 'secrets' / 'app-password').read_text()}"
+                f"Password={credentials['app-password']}"
             )
             subprocess.run([
                 "dotnet", "test", "src/MX.Platform.Status.Tests/MX.Platform.Status.Tests.csproj",

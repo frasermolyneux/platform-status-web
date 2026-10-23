@@ -253,11 +253,16 @@ export async function renderOperations(): Promise<void> {
         save.disabled = true;
         try {
           await submit();
+          let draftWarning = '';
           try { sessionStorage.removeItem(key); }
-          catch { message('Your changes were saved, but the browser could not clear its local draft.', true); }
+          catch { draftWarning = ' The browser could not clear its old draft; close this tab when finished.'; }
           editor.hidden = true;
-          await refreshData();
-          message('Changes saved. Public updates appear after the next publication, normally within one minute.');
+          try {
+            await refreshData();
+            message(`Changes saved. Public updates appear after the next publication, normally within one minute.${draftWarning}`, !!draftWarning);
+          } catch {
+            message(`Your changes were saved, but the workspace could not refresh. Refresh it before editing again.${draftWarning}`, true);
+          }
         } catch (error) {
           message(error instanceof Error ? error.message : 'Unable to save changes. Your form has been preserved.', true);
         } finally { save.disabled = !canWrite || !runtime.writable; }
@@ -465,5 +470,6 @@ export async function renderOperations(): Promise<void> {
     renderLists();
   } catch (error) {
     message(error instanceof Error ? error.message : 'Operations are unavailable. Public status remains available.', true);
+    root.append(button('Try again', () => { void renderOperations(); }));
   }
 }

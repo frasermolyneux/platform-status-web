@@ -117,7 +117,9 @@ explicitly configured in `GitHubTrustedAuthors`; GitHub author-association claim
 do not grant publishing trust. Untrusted issues and comments cannot supply
 public content. Once published, trusted edits and comments synchronize without
 adding another label. A comment may begin with `state: identified`,
-`state: monitoring` or another supported state. Plain text is HTML-escaped;
+`state: monitoring` or another supported state. Without a state label, the last
+trusted update selects the active state; resolve by closing the issue or adding
+`state:resolved`. Plain text is HTML-escaped;
 internal comment blocks are removed. Do not put confidential information in a
 public GitHub repository, regardless of rendering.
 

@@ -57,6 +57,8 @@ public static class GitHubIssueParser
         }
         if (updates.Count == 0)
             throw new InvalidDataException("An incident needs a public description, not only internal notes.");
+        if (!closedAt.HasValue && states.Length == 0)
+            state = updates[^1].State == IncidentState.Resolved ? IncidentState.Investigating : updates[^1].State;
         if (updates[^1].State != state)
             updates.Add(new()
             {
@@ -153,6 +155,7 @@ public sealed class GitHubIssueWorker(
         var sources = await database.ReadGitHubSourcesAsync(options.GitHubRepository, ct);
         var observed = new HashSet<(int, string)>();
         var changes = new List<(int Number, DateTimeOffset UpdatedAt, IncidentRecord Incident)>();
+        var problems = new List<object>();
         var errors = 0;
         var imported = 0;
         foreach (var issue in issues.Where(issue => !issue.TryGetProperty("pull_request", out _)))
@@ -187,6 +190,7 @@ public sealed class GitHubIssueWorker(
             catch (InvalidDataException exception)
             {
                 errors++;
+                if (problems.Count < 20) problems.Add(new { issue = number, summary = exception.Message });
                 var published = issue.GetProperty("labels").EnumerateArray()
                     .Any(label => string.Equals(label.GetProperty("name").GetString(), "status:published", StringComparison.OrdinalIgnoreCase));
                 var trusted = GitHubIssueParser.IsTrusted(issue.GetProperty("user").GetProperty("login").GetString()!, options);
@@ -210,6 +214,7 @@ public sealed class GitHubIssueWorker(
                 {
                     response.EnsureSuccessStatusCode();
                     errors++;
+                    if (problems.Count < 20) problems.Add(new { issue = source.Number, summary = "Issue moved during pagination; retrying the next snapshot." });
                     logger.LogWarning("GitHub issue #{Number} moved during pagination; retaining its publication until the next complete snapshot.", source.Number);
                     continue;
                 }
@@ -233,7 +238,7 @@ public sealed class GitHubIssueWorker(
             {
                 status = errors == 0 ? "healthy" : "error", repository = options.GitHubRepository,
                 summary = errors == 0 ? "GitHub issues are synchronized." : $"{errors} issue(s) need metadata or maintainer corrections.",
-                imported, errors, pollSeconds = options.GitHubRefreshSeconds
+                imported, errors, problems, pollSeconds = options.GitHubRefreshSeconds
             }), ct);
     }
 

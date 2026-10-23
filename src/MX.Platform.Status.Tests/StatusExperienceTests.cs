@@ -46,9 +46,10 @@ public sealed class StatusExperienceTests
             JsonSerializer.SerializeToElement(new { body = "state: monitoring\nRecovered <script>unsafe()</script>.", user = new { login = "frasermolyneux" }, created_at = Created.AddMinutes(2) }),
         };
         var record = Assert.Single(GitHubIssueParser.Parse(Issue(
-            ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage", "state:monitoring"],
+            ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage"],
             body: "Public description.\n<!-- internal -->\nPRIVATE_NOTE\n<!-- /internal -->"), comments, Catalogue(), new()));
         Assert.Equal([IncidentState.Investigating, IncidentState.Monitoring], record.PublicUpdates.Select(update => update.State));
+        Assert.Equal(IncidentState.Monitoring, record.State);
         var output = JsonSerializer.Serialize(record.ToPublicIncident(), StatusJson.Options);
         Assert.DoesNotContain("UNTRUSTED_COMMENT", output);
         Assert.DoesNotContain("PRIVATE_NOTE", output);
@@ -63,7 +64,11 @@ public sealed class StatusExperienceTests
         Assert.Equal(IncidentState.Resolved, closed.State);
         Assert.Equal(Created.AddMinutes(5), closed.ResolvedAt);
         Assert.Equal(IncidentState.Resolved, closed.PublicUpdates.Last().State);
-        var reopened = Assert.Single(GitHubIssueParser.Parse(Issue(), [], Catalogue(), new()));
+        var resolvedComment = JsonSerializer.SerializeToElement(new
+        {
+            body = "state: resolved\nPreviously recovered.", user = new { login = "frasermolyneux" }, created_at = Created.AddMinutes(4)
+        });
+        var reopened = Assert.Single(GitHubIssueParser.Parse(Issue(), [resolvedComment], Catalogue(), new()));
         Assert.Equal(IncidentState.Investigating, reopened.State);
         Assert.Null(reopened.ResolvedAt);
     }
