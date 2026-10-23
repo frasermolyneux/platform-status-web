@@ -9,7 +9,7 @@
   "services": [
     {
       "name": "platform-status-service",
-      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/service@sha256:1358eca2c85936a4c22d5c19ae925660dc72415d74a047cf80dd2ad2239d6dc1",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/service@sha256:975814d8fe7f96bef596c3ef985789c3b88676ecf81883e2c8c69abdf1e5b449",
       "runAs": "10001:10001",
       "environment": {
         "STATUS_RUNTIME_FILE": "/node/runtime.json"
@@ -20,7 +20,9 @@
         {"id": "configuration", "target": "/node", "readOnly": true}
       ],
       "secrets": [
-        {"id": "app-password", "target": "app-password"}
+        {"id": "app-password", "target": "app-password"},
+        {"id": "traffic-configuration", "target": "traffic-configuration"},
+        {"id": "traffic-api-token", "target": "traffic-api-token"}
       ],
       "tmpfs": ["/tmp"],
       "resources": {"cpus": 0.5, "memoryMb": 512, "pids": 128},
