@@ -7,6 +7,17 @@ export interface StatusResponse {
   components: ComponentDto[];
   incidents: IncidentDto[];
   maintenance: MaintenanceDto[];
+  banners?: BannerDto[];
+}
+
+export interface BannerDto {
+  id: number;
+  title: string;
+  message: string;
+  tone: 'info' | 'warning' | 'critical';
+  startsAt?: string;
+  expiresAt?: string;
+  updatedAt: string;
 }
 
 export interface ComponentDto {

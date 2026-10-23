@@ -33,7 +33,7 @@ jobs:
         run: python3 -m unittest discover -s deployment -p 'test_*.py'
       - name: Build and check frontend
         working-directory: src/MX.Platform.Status.Web
-        run: npm ci && npm run build && npx tsc --noEmit
+        run: npm ci && npm test && npm run build && npx tsc --noEmit
       - name: Build constrained runtime images
         run: |
           docker build --tag status-service:ci .

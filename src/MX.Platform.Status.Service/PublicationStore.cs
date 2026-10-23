@@ -22,6 +22,13 @@ public sealed class PublicationStore(StatusCatalog catalog, RuntimeOptions optio
             ?? throw new InvalidDataException("Invalid status publication.");
         if (publication.Site.Id != site)
             throw new InvalidDataException("Publication site does not match its catalogue.");
+        var now = DateTimeOffset.UtcNow;
+        publication = publication with
+        {
+            Banners = publication.Banners.Where(banner =>
+                (!banner.StartsAt.HasValue || banner.StartsAt <= now)
+                && (!banner.ExpiresAt.HasValue || banner.ExpiresAt > now)).ToArray()
+        };
         var stale = DateTimeOffset.UtcNow - publication.GeneratedAt > TimeSpan.FromSeconds(options.StaleAfterSeconds);
         if (!stale) return publication;
         return publication with

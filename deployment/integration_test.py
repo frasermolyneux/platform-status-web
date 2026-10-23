@@ -211,7 +211,7 @@ def main():
                 container = f"{name}-{role}"
                 containers.append(container)
                 docker("run", "--detach", "--name", container, "--network", name,
-                       "--ip", f"100.120.200{address}", *restrictions,
+                       "--ip", f"100.120.200{address}", "--publish", "127.0.0.1::5432", *restrictions,
                        "--mount", f"type=bind,src={root / role},dst=/var/lib/postgresql/data",
                        "--mount", f"type=bind,src={root / node},dst=/node,readonly",
                        "--mount", f"type=bind,src={root / 'secrets'},dst=/run/secrets,readonly",
@@ -239,6 +239,17 @@ def main():
             verify_database_restart_recovery(f"{name}-primary", f"{name}-standby", urls)
             verify_publisher_fencing(f"{name}-primary")
             verify_historic_thresholds(f"{name}-primary", urls)
+            connection_port = docker("port", f"{name}-primary", "5432/tcp").split(":")[-1]
+            integration_environment = dict(os.environ)
+            integration_environment["STATUS_TEST_CONNECTION"] = (
+                f"Host=127.0.0.1;Port={connection_port};Database=status;Username=status_app;"
+                f"Password={(root / 'secrets' / 'app-password').read_text()}"
+            )
+            subprocess.run([
+                "dotnet", "test", "src/MX.Platform.Status.Tests/MX.Platform.Status.Tests.csproj",
+                "--configuration", "Release", "--no-build", "--nologo",
+                "--filter", "FullyQualifiedName~BannerApiPersists|FullyQualifiedName~GitHubSourceKeeps",
+            ], check=True, env=integration_environment)
             command = {
                 "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],
                 "severity": "outage", "state": "investigating",
@@ -271,6 +282,24 @@ def main():
                 assert request(url, f"/incident/{maintenance_record['id']}")[0] == 200
                 assert "Integration maintenance" in request(url, "/feed.xml")[1]
                 assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(publication)
+            banner_expiry = datetime.now(timezone.utc) + timedelta(seconds=120)
+            database_sql(f"{name}-primary", f"""
+                INSERT INTO status_banners(site_id,revision,document) VALUES
+                ('mx',1,jsonb_build_object('id',9001,'siteId','mx','revision',1,'title','Cached notice',
+                    'message','Public integration notice','tone','info','published',true,'updatedAt',now())),
+                ('mx',1,jsonb_build_object('id',9002,'siteId','mx','revision',1,'title','PRIVATE_BANNER_DRAFT',
+                    'message','Private draft','tone','info','published',false,'updatedAt',now())),
+                ('mx',1,jsonb_build_object('id',9003,'siteId','mx','revision',1,'title','Expiring notice',
+                    'message','Temporary public notice','tone','warning','published',true,
+                    'expiresAt','{banner_expiry.isoformat()}','updatedAt',now()));
+                """)
+            for label, url in urls.items():
+                wait_for(lambda: any(banner["title"] == "Cached notice"
+                         for banner in request(url, "/api/status")[1].get("banners", [])),
+                         f"{label} cached public banner")
+                assert "PRIVATE_BANNER_DRAFT" not in json.dumps(request(url, "/api/status")[1])
+                assert any(banner["title"] == "Expiring notice" for banner in request(url, "/api/status")[1]["banners"])
+                assert not request(url, "/api/status", "status.xtremeidiots.com")[1].get("banners")
             docker("exec", "--interactive", f"{name}-primary", "sh", "-ec",
                    'PGPASSWORD="$(cat /run/secrets/app-password)" psql '
                    '-h 127.0.0.1 -U status_app -d status --set=ON_ERROR_STOP=1', input=f"""
@@ -309,13 +338,15 @@ def main():
                 publication = request(url, "/api/status")[1]
                 assert any(item["title"] == "Integration incident" for item in publication["incidents"])
                 assert publication["generatedAt"] >= snapshots[label]
+                assert any(banner["title"] == "Cached notice" for banner in publication["banners"])
                 assert request(url, "/feed.xml")[0] == 200
-            time.sleep(65)
+            time.sleep(max(65, (banner_expiry - datetime.now(timezone.utc)).total_seconds() + 1))
             for url in urls.values():
                 stale = request(url, "/api/status")[1]
                 assert stale["dataFreshness"]["stale"]
                 assert stale["summary"]["status"] == "unknown"
                 assert "Integration incident" in request(url, "/feed.xml")[1]
+                assert [banner["title"] for banner in stale["banners"]] == ["Cached notice"]
             print("Publisher fencing, historic SLA thresholds, primary/standby publishing, draft privacy, "
                   "standby writes, and database-independent restart passed.")
     finally:

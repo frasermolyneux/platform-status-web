@@ -15,6 +15,11 @@
         {"id": "mx.sitewatch.bishopsbees", "name": "Bishops Bees", "kind": "leaf", "source": {"kind": "probe"}}
       ]
     },
+    "workloads": {
+      "molyneux-me": ["mx.sitewatch.molyneux-me"],
+      "geo-location": ["mx.sitewatch.geo-location-web", "mx.sitewatch.geo-location-api"],
+      "bishops-bees": ["mx.sitewatch.bishopsbees"]
+    },
     "probes": {
       "mx.sitewatch.molyneux-me": "https://www.molyneux.me/",
       "mx.sitewatch.geo-location-web": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live",
@@ -38,6 +43,12 @@
         {"id": "xi.sitewatch.repository-api-v2", "name": "Repository API v2", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "xi.sitewatch.redirect", "name": "Community redirects", "kind": "leaf", "source": {"kind": "probe"}}
       ]
+    },
+    "workloads": {
+      "xi-forums": ["xi.sitewatch.forums-web"],
+      "portal-web": ["xi.sitewatch.portal-web"],
+      "portal-repository": ["xi.sitewatch.repository-api-v1", "xi.sitewatch.repository-api-v2"],
+      "xi-redirect": ["xi.sitewatch.redirect"]
     },
     "probes": {
       "xi.sitewatch.forums-web": "https://www.xtremeidiots.com/",

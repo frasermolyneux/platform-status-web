@@ -48,6 +48,8 @@ public sealed class IndependentServiceTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/ready")).StatusCode);
         Assert.Equal("static-shell", await client.GetStringAsync("/component/mx.sitewatch.molyneux-me"));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/evidence")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/banners")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/api/ops/banners", new BannerCommand("Notice", "Message", "info", true))).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/api/integrations/azure", JsonContent.Create(new { }))).StatusCode);
     }
 
@@ -317,7 +319,125 @@ public sealed class IndependentServiceTests : IDisposable
             SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256)
         });
 
-    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false)
+    [PostgresFact]
+    public async Task BannerApiPersistsAuditsEnforcesBrandAndRevisionAndRejectsReaderWrites()
+    {
+        var connection = Path.Combine(_directory, "connection");
+        File.WriteAllText(connection, Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION"));
+        await using var app = Build(configuredIdentity: true, connection);
+        await app.StartAsync();
+        var database = app.Services.GetRequiredService<PostgresStore>();
+        await database.InitializeAsync(default);
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Host = "mxstatus.io";
+        client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Reader", "Status.Access", _ingestor));
+        var command = new BannerCommand("Persistence test notice", "Plain <script>text()</script>", "warning", false);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync("/api/ops/banners", command)).StatusCode);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Operator", "Status.Access", _ingestor));
+        var response = await client.PostAsJsonAsync("/api/ops/banners", command);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var banner = (await response.Content.ReadFromJsonAsync<BannerRecord>(StatusJson.Options))!;
+        try
+        {
+            client.DefaultRequestHeaders.Host = "status.xtremeidiots.com";
+            var otherSite = (await client.GetFromJsonAsync<BannerRecord[]>("/api/ops/banners", StatusJson.Options))!;
+            Assert.DoesNotContain(otherSite, record => record.Id == banner.Id);
+            Assert.Equal(HttpStatusCode.Conflict, (await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command with { Revision = 1 })).StatusCode);
+            client.DefaultRequestHeaders.Host = "mxstatus.io";
+            Assert.Equal(HttpStatusCode.Conflict, (await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command)).StatusCode);
+            response = await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command with { Published = true, Revision = 1 });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(2, (await response.Content.ReadFromJsonAsync<BannerRecord>(StatusJson.Options))!.Revision);
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
+            await using var audit = source.CreateCommand("SELECT count(*) FROM status_banner_audit WHERE banner_id=$1 AND site_id='mx'");
+            audit.Parameters.AddWithValue(banner.Id);
+            Assert.Equal(2L, await audit.ExecuteScalarAsync());
+            response = await client.PutAsJsonAsync($"/api/ops/banners/{banner.Id}", command with { Revision = 2 });
+            Assert.False((await response.Content.ReadFromJsonAsync<BannerRecord>(StatusJson.Options))!.Published);
+        }
+        finally
+        {
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
+            await using var cleanup = source.CreateCommand("DELETE FROM status_banner_audit WHERE banner_id=$1; DELETE FROM status_banners WHERE id=$1");
+            cleanup.Parameters.AddWithValue(banner.Id);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
+    public async Task GitHubSourceKeepsStableIdsWithoutAuditChurnAndCannotBeEditedLocally()
+    {
+        var options = new RuntimeOptions
+        {
+            DatabaseConnectionFile = Path.Combine(_directory, "connection")
+        };
+        File.WriteAllText(options.DatabaseConnectionFile, Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION"));
+        await using var database = new PostgresStore(options, NullLogger<PostgresStore>.Instance);
+        await database.InitializeAsync(default);
+        const string repository = "status-fixture/persistence-tests";
+        options = options with { GitHubRepository = repository };
+        using var api = new GitHubApiFixture { Issues = [GitHubApiFixture.Incident(false, 0)] };
+        using var worker = new GitHubIssueWorker(Catalogue(), options, database, api, NullLogger<GitHubIssueWorker>.Instance);
+        var command = new IncidentCommand("GitHub persistence fixture", ["mx.sitewatch.molyneux-me"],
+            Severity.Outage, IncidentState.Investigating, "Approved initial update", true);
+        try
+        {
+            await worker.SynchronizeAsync(default);
+            var first = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.False(first.Incident.Published);
+            Assert.Empty(first.Incident.PublicUpdates);
+            await worker.SynchronizeAsync(default);
+            var repeated = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.Equal(first.Incident.Id, repeated.Incident.Id);
+            Assert.Equal(first.Incident.Revision, repeated.Incident.Revision);
+            Assert.Null(await database.SaveIncidentAsync("mx", first.Incident.Id, command with { Revision = first.Incident.Revision }, "operator", default));
+            api.Issues = [GitHubApiFixture.Incident(true, 1)];
+            await worker.SynchronizeAsync(default);
+            var published = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.True(published.Incident.Published);
+            Assert.Equal(first.Incident.Id, published.Incident.Id);
+            Assert.Equal(["mx.sitewatch.molyneux-me"], published.Incident.Components);
+            api.Status = HttpStatusCode.TooManyRequests;
+            await Assert.ThrowsAsync<HttpRequestException>(() => worker.SynchronizeAsync(default));
+            Assert.True(Assert.Single(await database.ReadGitHubSourcesAsync(repository, default)).Incident.Published);
+            api.Status = HttpStatusCode.OK;
+            api.Issues = [GitHubApiFixture.Incident(true, 2, closed: true)];
+            await worker.SynchronizeAsync(default);
+            var closed = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.Equal(first.Incident.Id, closed.Incident.Id);
+            Assert.Equal(IncidentState.Resolved, closed.Incident.State);
+            api.Issues = [GitHubApiFixture.Incident(true, 3)];
+            await worker.SynchronizeAsync(default);
+            var reopened = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.Equal(IncidentState.Investigating, reopened.Incident.State);
+            Assert.Null(reopened.Incident.ResolvedAt);
+            api.Issues = [GitHubApiFixture.Incident(false, 4)];
+            await worker.SynchronizeAsync(default);
+            var withdrawn = Assert.Single(await database.ReadGitHubSourcesAsync(repository, default));
+            Assert.False(withdrawn.Incident.Published);
+            Assert.DoesNotContain(await database.ReadPublicationIncidentsAsync("mx", default), record => record.Id == withdrawn.Incident.Id);
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile));
+            await using var audit = source.CreateCommand("SELECT count(*) FROM status_audit WHERE incident_id=$1");
+            audit.Parameters.AddWithValue(first.Incident.Id);
+            Assert.Equal(5L, await audit.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile));
+            await using var connection = await source.OpenConnectionAsync();
+            await using var remove = connection.CreateCommand();
+            remove.CommandText = """
+                WITH ids AS (DELETE FROM status_github_sources WHERE repository=$1 RETURNING incident_id),
+                audit AS (DELETE FROM status_audit WHERE incident_id IN(SELECT incident_id FROM ids))
+                DELETE FROM status_incidents WHERE id IN(SELECT incident_id FROM ids);
+                DELETE FROM status_evidence WHERE source='github-issues' AND event_id=$1
+                """;
+            remove.Parameters.AddWithValue(repository);
+            await remove.ExecuteNonQueryAsync();
+        }
+    }
+
+    private Microsoft.AspNetCore.Builder.WebApplication Build(bool configuredIdentity = false, string? connectionFile = null)
     {
         var webRoot = Path.Combine(_directory, "webroot");
         Directory.CreateDirectory(webRoot);
@@ -329,6 +449,7 @@ public sealed class IndependentServiceTests : IDisposable
             {
                 ["Status:CatalogPath"] = Path.Combine(AppContext.BaseDirectory, "catalog.json"),
                 ["Status:DataDirectory"] = _directory,
+                ["Status:DatabaseConnectionFile"] = connectionFile,
                 ["Status:TenantId"] = configuredIdentity ? _tenant : null,
                 ["Status:ClientId"] = configuredIdentity ? _client : null,
                 ["Status:WebhookApplicationIds:0"] = _ingestor
@@ -341,10 +462,20 @@ public sealed class IndependentServiceTests : IDisposable
                     settings.Configuration.SigningKeys.Add(_signingKey);
                 });
             }
+
         });
     }
 
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
 
     public void Dispose() => Directory.Delete(_directory, recursive: true);
+}
+
+internal sealed class PostgresFactAttribute : FactAttribute
+{
+    public PostgresFactAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION")))
+            Skip = "Runs against the ephemeral primary/standby database in deployment/integration_test.py.";
+    }
 }

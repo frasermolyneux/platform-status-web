@@ -64,9 +64,15 @@ public static class ServiceProgram
         builder.Services.AddSingleton<PostgresStore>();
         builder.Services.AddHostedService<PublicationWorker>();
         builder.Services.AddHostedService<EvidenceWorker>();
+        builder.Services.AddHostedService<GitHubIssueWorker>();
         builder.Services.AddHttpClient("probe", client => client.DefaultRequestHeaders.UserAgent.ParseAdd("MXStatus/1.0"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         builder.Services.AddHttpClient("vendor", client => client.Timeout = TimeSpan.FromSeconds(15));
+        builder.Services.AddHttpClient("github", client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.MaxResponseContentBufferSize = 4_000_000;
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         builder.Services.ConfigureHttpJsonOptions(settings =>
         {
             foreach (var converter in StatusJson.Options.Converters) settings.SerializerOptions.Converters.Add(converter);
@@ -106,9 +112,21 @@ public static class ServiceProgram
             .RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/evidence", async (PostgresStore database, CancellationToken ct) =>
             Results.Ok(await database.ReadEvidenceAsync(ct))).RequireAuthorization(ReaderPolicy);
-        app.MapGet("/api/ops/runtime", async (PostgresStore database, CancellationToken ct) =>
-            Results.Ok(new { publisher = options.Publisher, writable = await database.IsWritableAsync(ct) }))
+        app.MapGet("/api/ops/runtime", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
+            Results.Ok(new
+            {
+                publisher = options.Publisher, writable = await database.IsWritableAsync(ct),
+                github = new { repository = options.GitHubRepository, pollSeconds = options.GitHubRefreshSeconds },
+                workloads = catalog.FindHost(context.Request.Host.Host)!.Workloads
+            }))
             .RequireAuthorization(ReaderPolicy);
+        app.MapGet("/api/ops/banners", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
+            Results.Json(await database.ReadBannersAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, ct), StatusJson.Options))
+            .RequireAuthorization(ReaderPolicy);
+        app.MapPost("/api/ops/banners", (HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
+            SaveBannerAsync(context, command, null, catalog, database, ct)).RequireAuthorization("operator");
+        app.MapPut("/api/ops/banners/{id:int}", (int id, HttpContext context, BannerCommand command, PostgresStore database, CancellationToken ct) =>
+            SaveBannerAsync(context, command, id, catalog, database, ct)).RequireAuthorization("operator");
         app.MapPost("/api/ops/incidents", (HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
             SaveIncidentAsync(context, command, null, catalog, database, ct)).RequireAuthorization("operator");
         app.MapPut("/api/ops/incidents/{id:int}", (int id, HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
@@ -206,8 +224,20 @@ public static class ServiceProgram
         var record = await database.SaveIncidentAsync(site.Site.Id, id, command,
             context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct);
         var statusCode = id is null ? StatusCodes.Status201Created : StatusCodes.Status200OK;
-        return record is null ? Results.Conflict(new { error = "Incident changed or does not exist. Reload before editing." })
+        return record is null ? Results.Conflict(new { error = "Incident changed, is managed in GitHub, or does not exist. Reload before editing." })
             : Results.Json(record, StatusJson.Options, statusCode: statusCode);
+    }
+
+    private static async Task<IResult> SaveBannerAsync(HttpContext context, BannerCommand command, int? id,
+        StatusCatalog catalog, PostgresStore database, CancellationToken ct)
+    {
+        if (command.Validate() is { } error) return Results.BadRequest(new { error });
+        if (!await database.IsWritableAsync(ct))
+            return Results.Json(new { error = "Banner publishing is temporarily read-only because the writer is unavailable." }, statusCode: 503);
+        var record = await database.SaveBannerAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, id, command,
+            context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct);
+        return record is null ? Results.Conflict(new { error = "Banner changed or does not exist. Reload before editing." })
+            : Results.Json(record, StatusJson.Options, statusCode: id.HasValue ? 200 : 201);
     }
 
     private static async Task WriteFeedAsync(HttpContext context, StatusCatalog catalog, PublicationStore files, CancellationToken ct)

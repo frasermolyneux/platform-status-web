@@ -27,6 +27,20 @@ public sealed record StatusApiResponse
 
     [JsonPropertyName("maintenance")]
     public IReadOnlyList<MaintenanceDto> Maintenance { get; init; } = [];
+
+    [JsonPropertyName("banners")]
+    public IReadOnlyList<BannerDto> Banners { get; init; } = [];
+}
+
+public sealed record BannerDto
+{
+    public int Id { get; init; }
+    public string Title { get; init; } = "";
+    public string Message { get; init; } = "";
+    public string Tone { get; init; } = "info";
+    public DateTimeOffset? StartsAt { get; init; }
+    public DateTimeOffset? ExpiresAt { get; init; }
+    public DateTimeOffset UpdatedAt { get; init; }
 }
 
 public sealed record SiteInfo

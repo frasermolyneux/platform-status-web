@@ -23,6 +23,11 @@ export function navigate(path: string): void {
 
 export function resolve(): void {
   const path = location.pathname;
+  document.querySelectorAll<HTMLAnchorElement>('.site-nav a').forEach(link => {
+    const current = link.pathname === path || link.pathname === '/' && /^\/(incident|component)\//.test(path);
+    if (current) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
   for (const route of routes) {
     const match = path.match(route.pattern);
     if (match) {
