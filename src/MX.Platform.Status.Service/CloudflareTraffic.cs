@@ -120,19 +120,19 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
         var script = configuration.Scripts[mode];
         if (MatchesTarget(previous, pattern, script)) return;
         var payload = new { pattern, script, request_limit_fail_open = false };
-        if (previous is null)
+        if (previous is not null)
         {
-            var created = await SendAsync(HttpMethod.Post, path, payload, ct, requireLease);
-            var id = RequiredString(created, "id");
-            var installed = (await RoutesAsync(host.ZoneId, ct)).Where(route => AffectsHost(route, host.Hostname)).ToArray();
-            if (installed.Length != 1 || installed[0].Id != id || installed[0].Pattern != host.Hostname + "/*"
-                || installed[0].Script != configuration.Scripts[mode])
-                throw new TrafficConflictException("The created route changed before fail-closed verification. No later route was overwritten.");
-            // Only correct a flag that the create/read-back did not already establish.
-            if (!MatchesTarget(installed[0], pattern, script))
-                await SendAsync(HttpMethod.Put, $"{path}/{id}", payload, ct, requireLease);
+            await SendAsync(HttpMethod.Put, $"{path}/{previous.Id}", payload, ct, requireLease);
+            return;
         }
-        else await SendAsync(HttpMethod.Put, $"{path}/{previous.Id}", payload, ct, requireLease);
+        var created = await SendAsync(HttpMethod.Post, path, payload, ct, requireLease);
+        var id = RequiredString(created, "id");
+        var installed = (await RoutesAsync(host.ZoneId, ct)).Where(route => AffectsHost(route, host.Hostname)).ToArray();
+        if (installed.Length != 1 || installed[0].Id != id || installed[0].Pattern != pattern || installed[0].Script != script)
+            throw new TrafficConflictException("The created route changed before fail-closed verification. No later route was overwritten.");
+        // Only correct a flag that the create/read-back did not already establish.
+        if (!MatchesTarget(installed[0], pattern, script))
+            await SendAsync(HttpMethod.Put, $"{path}/{id}", payload, ct, requireLease);
     }
 
     private static bool MatchesTarget(TrafficRoute? route, string pattern, string script) =>
