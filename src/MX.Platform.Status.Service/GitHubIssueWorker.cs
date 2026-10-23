@@ -77,15 +77,20 @@ public static class GitHubIssueParser
         return records;
     }
 
-    private static IncidentRecord? ApprovedHistory(IncidentRecord? previous) =>
-        previous is { PublicUpdates.Count: > 0 } ? previous with
+    private static IncidentRecord? ApprovedHistory(IncidentRecord? previous)
+    {
+        if (previous is not { PublicUpdates.Count: > 0 }) return null;
+        return previous with
         {
             Updates = previous.PublicUpdates,
             SourceUpdates = previous.PublicSourceUpdates,
-            SourceStateUpdates = previous.PublicSourceStateUpdates,
+            SourceStateUpdates = previous.PublicSourceStateUpdates.Count > 0 ? previous.PublicSourceStateUpdates
+                : previous.SourceStateUpdates.Where(source => previous.PublicUpdates.Any(approved =>
+                    approved.At == source.At && approved.Body == source.Body && approved.State == source.State)).ToArray(),
             Severity = previous.PublicSourceSeverity ?? previous.Severity,
             State = previous.PublicUpdates[^1].State
-        } : null;
+        };
+    }
 
     private static (SiteDefinition Site, string[] Components)[] ReadTargets(HashSet<string> labels, StatusCatalog catalog)
     {
