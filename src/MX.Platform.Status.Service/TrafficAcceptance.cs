@@ -31,6 +31,13 @@ public static class TrafficAcceptance
                         || method == HttpMethod.Head && (await response.Content.ReadAsByteArrayAsync(ct)).Length != 0)
                         throw new InvalidDataException("The isolated canary did not block a non-browser request correctly. No real application was intercepted.");
                 }
+                using var htmlFetch = new HttpRequestMessage(HttpMethod.Get, $"https://{canary.Hostname}/acceptance-fragment");
+                htmlFetch.Headers.Accept.ParseAdd("text/html");
+                htmlFetch.Headers.Add("Sec-Fetch-Mode", "cors");
+                htmlFetch.Headers.Add("Sec-Fetch-Dest", "empty");
+                using var fetched = await clients.CreateClient("traffic-verification").SendAsync(htmlFetch, ct);
+                if ((int)fetched.StatusCode != 503 || fetched.Headers.Location is not null)
+                    throw new InvalidDataException("An HTML subrequest was redirected instead of blocked on the isolated canary.");
             }
             else await RequireBaselineAsync();
             Console.WriteLine($"Isolated maintenance canary: {mode}, verified={current.Verified}.");

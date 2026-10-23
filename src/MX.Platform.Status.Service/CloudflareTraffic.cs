@@ -105,6 +105,8 @@ public sealed class CloudflareTraffic(IHttpClientFactory clients, RuntimeOptions
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, $"https://{host.Hostname}/");
         request.Headers.Accept.ParseAdd("text/html");
+        request.Headers.Add("Sec-Fetch-Mode", "navigate");
+        request.Headers.Add("Sec-Fetch-Dest", "document");
         using var response = await clients.CreateClient("traffic-verification").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         var marker = response.Headers.TryGetValues("X-Platform-Maintenance", out var values) && values.Contains("v1");
         var status = (int)response.StatusCode;

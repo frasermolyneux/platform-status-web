@@ -123,8 +123,10 @@ The shared Worker is deployed by `platform-connectivity`. The controller owns
 only its exact-host maintenance routes; Terraform never manages those routes.
 Normal traffic does not invoke the maintenance Worker. Page mode returns a
 self-contained, noncacheable `503` with `Retry-After` and a status link. Redirect
-mode sends only browser GET/HEAD navigation to the correct status brand with a
-temporary `302`; API, form, probe and download requests still receive `503`.
+mode sends only HTML GET/HEAD requests with top-level browser navigation metadata
+to the correct status brand with a temporary `302`; API, form, probe, download
+and HTML fetch requests still receive `503`. Older clients without navigation
+metadata receive the maintenance page rather than a redirect.
 Paths, queries, cookies and request bodies are never forwarded to the status site.
 Custom public wording belongs in separately approved banners or incidents.
 
