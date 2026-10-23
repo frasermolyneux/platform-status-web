@@ -113,6 +113,24 @@ public sealed class StatusExperienceTests
         }
     }
 
+    [Theory]
+    [InlineData("scheduled", "operational", 0)]
+    [InlineData("in-progress", "maintenance", 1)]
+    [InlineData("completed", "operational", 0)]
+    public void MaintenanceIsExplainedOnlyWhileItActuallyOverridesAvailability(string phase, string status, int overrides)
+    {
+        const string id = "mx.sitewatch.molyneux-me";
+        var publication = new StatusApiResponse
+        {
+            Components = [new ComponentDto { Id = id, Status = status, OpenIncidentIds = [99] }],
+            Incidents = [new IncidentDto { Id = 99, Severity = "maintenance", Components = [id] }],
+            Maintenance = [new MaintenanceDto { Id = 99, Components = [id], State = phase }]
+        };
+        var health = Assert.Single(HealthDiagnostics.Build(Catalogue().Get("mx"), publication, []), check => check.Id == id);
+        Assert.Empty(health.Incidents);
+        Assert.Equal(overrides, health.Maintenance.Count);
+    }
+
     private sealed class ProbeHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

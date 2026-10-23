@@ -36,7 +36,19 @@ interface Runtime {
 }
 
 type Control = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+type EvidenceDraft = ReturnType<typeof incidentSeed>;
 let authentication: PublicClientApplication | undefined;
+
+function readEvidenceDraft(saved: string): EvidenceDraft {
+  const seed: EvidenceDraft = JSON.parse(saved);
+  if (!seed || typeof seed.title !== 'string' || typeof seed.message !== 'string' || typeof seed.context !== 'string'
+    || !Array.isArray(seed.components) || seed.components.some(id => typeof id !== 'string')
+    || !seed.evidence || typeof seed.evidence.source !== 'string' || typeof seed.evidence.id !== 'string'
+    || typeof seed.evidence.observedAt !== 'string' || !Number.isFinite(Date.parse(seed.evidence.observedAt))
+    || !['degraded', 'outage'].includes(seed.severity) || !['investigating', 'monitoring'].includes(seed.state))
+    throw new Error('The saved evidence draft is invalid. Return to monitoring evidence to prepare it again.');
+  return seed;
+}
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
   const result = document.createElement(tag);
@@ -180,6 +192,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     let runtime: Runtime = await runtimeResponse.json();
     let evidence: EvidenceRecord[] = await evidenceResponse.json();
     let health: ComponentHealth[] = await healthResponse.json();
+    const evidenceDraftPrefix = `status-evidence-draft:${account.homeAccountId}:${status.site.id}:`;
     const overview = element('div', undefined, 'operator-stats');
     const editor = element('section', undefined, 'editor-panel');
     editor.hidden = true;
@@ -190,6 +203,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     const evidenceSection = element('section', undefined, 'panel');
     evidenceSection.id = 'operator-evidence';
     const healthSection = element('section', undefined, 'panel');
+    const draftsSection = element('section', undefined, 'panel');
+    draftsSection.id = 'operator-evidence-drafts';
     const actions = element('div', undefined, 'operator-actions');
     const refresh = button('Refresh workspace', () => {
       void refreshData().catch(error => message(error instanceof Error ? error.message : 'The workspace could not be refreshed.', true));
@@ -210,7 +225,11 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     if (page === 'overview') root.append(overview, healthSection);
     if (page === 'evidence') root.append(healthSection, evidenceSection);
     if (page === 'banners') root.append(editor, bannerSection);
-    if (page === 'incidents') root.append(editor, incidentSection);
+    if (page === 'incidents') root.append(draftsSection, editor, incidentSection);
+
+    function formDraftKey(kind: string, id?: number): string {
+      return `status-draft:${account!.homeAccountId}:${status.site.id}:${kind}:${id || 'new'}`;
+    }
 
     function rememberDraft(form: HTMLFormElement, key: string, revision: number): void {
       const controls = (): Control[] => Array.from(form.querySelectorAll<Control>('input,select,textarea'));
@@ -256,7 +275,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       save.type = 'submit';
       save.disabled = !canWrite || !runtime.writable;
       editor.append(form);
-      return { form, save, key: `status-draft:${account!.homeAccountId}:${status.site.id}:${kind}:${id || 'new'}` };
+      return { form, save, key: formDraftKey(kind, id) };
     }
 
     function finishForm(form: HTMLFormElement, save: HTMLButtonElement, key: string, revision: number, submit: () => Promise<void>, onSaved?: () => void): void {
@@ -301,7 +320,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       });
     }
 
-    function openIncident(incident?: Incident, seed?: ReturnType<typeof incidentSeed>, draftId?: string): void {
+    function openIncident(incident?: Incident, seed?: EvidenceDraft, draftId?: string): void {
       const { form, save, key } = openForm(incident ? `Update incident #${incident.id}` : 'Create an incident or maintenance window',
         draftId ? `incident-evidence:${draftId}` : 'incident', incident?.id);
       const privateContext = seed?.context || incident?.evidence?.context;
@@ -367,7 +386,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         });
       }, () => {
         if (draftId) {
-          sessionStorage.removeItem(`status-evidence-draft:${account!.homeAccountId}:${status.site.id}:${draftId}`);
+          sessionStorage.removeItem(evidenceDraftPrefix + draftId);
           if (current() && new URLSearchParams(location.search).get('draft') === draftId)
             history.replaceState(null, '', '/ops/incidents');
         }
@@ -475,12 +494,39 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       const seed = incidentSeed(card, ids, components.filter(component => ids.includes(component.id)).map(component => component.name));
       const id = crypto.randomUUID();
       try {
-        sessionStorage.setItem(`status-evidence-draft:${account!.homeAccountId}:${status.site.id}:${id}`, JSON.stringify(seed));
+        sessionStorage.setItem(evidenceDraftPrefix + id, JSON.stringify(seed));
       } catch {
         message('This browser could not save the evidence draft. Enable session storage or create an incident manually; nothing was published.', true);
         return;
       }
       navigateTo(`/ops/incidents?draft=${id}`);
+    }
+
+    function renderEvidenceDrafts(): void {
+      draftsSection.replaceChildren(element('h3', 'Unsubmitted evidence drafts'),
+        element('p', 'These drafts are saved in this browser tab. Resume one to review, edit or save it.', 'muted'));
+      let count = 0;
+      try {
+        for (let index = 0; index < sessionStorage.length; index++) {
+          const key = sessionStorage.key(index);
+          if (!key?.startsWith(evidenceDraftPrefix)) continue;
+          count++;
+          const id = key.slice(evidenceDraftPrefix.length);
+          try {
+            const seed = readEvidenceDraft(sessionStorage.getItem(key) || '');
+            const saved: { values?: { title?: unknown } } = JSON.parse(sessionStorage.getItem(formDraftKey(`incident-evidence:${id}`)) || '{}');
+            const title = typeof saved.values?.title === 'string' ? saved.values.title : seed.title;
+            const row = element('article', undefined, 'management-row');
+            row.append(element('h4', title), link('Resume draft', `/ops/incidents?draft=${encodeURIComponent(id)}`));
+            draftsSection.append(row);
+          } catch {
+            draftsSection.append(element('p', 'An evidence draft could not be read. Return to its monitoring source to prepare it again.', 'error'));
+          }
+        }
+      } catch {
+        message('This browser cannot list saved evidence drafts. Keep the original draft tab open or create an incident manually.', true);
+      }
+      draftsSection.hidden = count === 0;
     }
 
     function renderHealth(): void {
@@ -556,9 +602,10 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         row.append(copy, edit);
         bannerSection.append(row);
       }
+      message(`${status.site.displayName}. ${runtime.writable ? 'Writer connected.' : 'Writer unavailable; publishing is read-only.'} ${canWrite ? 'You can publish public communications.' : 'Your access is read-only.'}`);
       if (page === 'evidence') renderEvidence();
       if (page === 'overview' || page === 'evidence') renderHealth();
-      message(`${status.site.displayName}. ${runtime.writable ? 'Writer connected.' : 'Writer unavailable; publishing is read-only.'} ${canWrite ? 'You can publish public communications.' : 'Your access is read-only.'}`);
+      if (page === 'incidents') renderEvidenceDrafts();
     }
 
     async function refreshData(): Promise<void> {
@@ -578,15 +625,9 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     const draftId = new URLSearchParams(location.search).get('draft');
     if (page === 'incidents' && draftId) {
       try {
-        const saved = sessionStorage.getItem(`status-evidence-draft:${account.homeAccountId}:${status.site.id}:${draftId}`);
+        const saved = sessionStorage.getItem(evidenceDraftPrefix + draftId);
         if (!saved) throw new Error('This evidence draft is no longer available in this tab. Return to monitoring evidence to prepare it again.');
-        const seed: ReturnType<typeof incidentSeed> = JSON.parse(saved);
-        if (!seed || typeof seed.title !== 'string' || typeof seed.message !== 'string' || typeof seed.context !== 'string'
-          || !Array.isArray(seed.components) || seed.components.some(id => typeof id !== 'string')
-          || !seed.evidence || typeof seed.evidence.source !== 'string' || typeof seed.evidence.id !== 'string'
-          || typeof seed.evidence.observedAt !== 'string'
-          || !['degraded', 'outage'].includes(seed.severity) || !['investigating', 'monitoring'].includes(seed.state))
-          throw new Error('The saved evidence draft is invalid. Return to monitoring evidence to prepare it again.');
+        const seed = readEvidenceDraft(saved);
         openIncident(undefined, seed, draftId);
       } catch (error) {
         message(error instanceof Error ? error.message : 'The evidence draft could not be opened.', true);

@@ -257,6 +257,34 @@ test('service diagnostics explain incident overrides without blaming a successfu
   assert.equal(document.querySelector('.workspace-nav a[aria-current="page"]')?.getAttribute('href'), '/ops');
 });
 
+test('promoted drafts can be resumed with their edits after normal cross-page navigation', async () => {
+  history.replaceState(null, '', '/ops/evidence');
+  let destination = '';
+  await renderOperations(path => { destination = path; });
+  click('Promote to incident');
+  history.pushState(null, '', destination);
+  await renderOperations();
+  setValue('title', 'Keep this edited incident title');
+  setValue('message', 'Keep this edited public update.');
+  history.pushState(null, '', '/ops/banners');
+  await renderOperations();
+  click('New announcement');
+  setValue('title', 'Independent banner draft');
+  history.pushState(null, '', '/ops/incidents');
+  await renderOperations();
+  assert.equal(document.querySelector('form'), null);
+  const resume = document.querySelector<HTMLAnchorElement>('#operator-evidence-drafts a')!;
+  assert.ok(resume);
+  assert.match(document.querySelector('#operator-evidence-drafts')?.textContent || '', /Keep this edited incident title/);
+  history.pushState(null, '', resume.href);
+  await renderOperations();
+  assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Keep this edited incident title');
+  assert.equal(document.querySelector<HTMLTextAreaElement>('[name="message"]')?.value, 'Keep this edited public update.');
+  assert.match(document.querySelector('.evidence-context')?.textContent || '', /The database needs attention/);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="published"]')?.checked, false);
+  assert.match(sessionStorage.getItem('status-draft:test-account:mx:banner:new') || '', /Independent banner draft/);
+});
+
 test('workspace fragment navigation preserves its editor with router handlers installed', async () => {
   const router = await import('../src/client/router');
   let renders = 0;

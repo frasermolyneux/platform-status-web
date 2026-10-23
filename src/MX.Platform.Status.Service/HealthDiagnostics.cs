@@ -35,7 +35,8 @@ public static class HealthDiagnostics
                 target is null ? "Incident-based; no public HTTP check" : "Independent HTTP probe (publisher)",
                 target, component.Sla.ExpectedIntervalSeconds, published?.LastSampleAt, probe, failure,
                 probe is not null && published?.LastSampleAt == probe.ObservedAt,
-                publication.Incidents.Where(incident => published?.OpenIncidentIds?.Contains(incident.Id) == true).ToArray(),
+                publication.Incidents.Where(incident => incident.Severity != "maintenance"
+                    && published?.OpenIncidentIds?.Contains(incident.Id) == true).ToArray(),
                 publication.Maintenance.Where(window => window.Components.Contains(component.Id) && window.State == "in-progress").ToArray());
         }).ToArray();
     }
