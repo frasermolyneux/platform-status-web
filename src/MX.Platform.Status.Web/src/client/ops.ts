@@ -250,13 +250,21 @@ export async function renderOperations(): Promise<void> {
       editor.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
       form.addEventListener('submit', async event => {
         event.preventDefault();
-        save.disabled = true;
+        const controls = Array.from(form.querySelectorAll<Control | HTMLButtonElement>('input,select,textarea,button'));
+        const disabled = controls.map(control => control.disabled);
+        controls.forEach(control => { control.disabled = true; });
+        let submittedDraft: string | null | undefined;
+        try { submittedDraft = sessionStorage.getItem(key); }
+        catch { message('The browser cannot read its draft storage. Keep this tab open until saving completes.', true); }
         try {
           await submit();
           let draftWarning = '';
-          try { sessionStorage.removeItem(key); }
+          try {
+            if (submittedDraft !== undefined && sessionStorage.getItem(key) === submittedDraft) sessionStorage.removeItem(key);
+            else draftWarning = ' A newer draft was retained in this tab; review it against the latest saved revision.';
+          }
           catch { draftWarning = ' The browser could not clear its old draft; close this tab when finished.'; }
-          editor.hidden = true;
+          if (editor.contains(form)) editor.hidden = true;
           try {
             await refreshData();
             message(`Changes saved. Public updates appear after the next publication, normally within one minute.${draftWarning}`, !!draftWarning);
@@ -265,7 +273,10 @@ export async function renderOperations(): Promise<void> {
           }
         } catch (error) {
           message(error instanceof Error ? error.message : 'Unable to save changes. Your form has been preserved.', true);
-        } finally { save.disabled = !canWrite || !runtime.writable; }
+        } finally {
+          controls.forEach((control, index) => { control.disabled = disabled[index]; });
+          save.disabled = !canWrite || !runtime.writable;
+        }
       });
     }
 

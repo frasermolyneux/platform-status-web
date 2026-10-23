@@ -7,6 +7,7 @@ let needsInteraction = false;
 let rejectSave = false;
 let loginCount = 0;
 let existingBanners: unknown[] = [];
+let saveGate: Promise<void> | undefined;
 const account = {
   homeAccountId: 'test-account', username: 'operator@example.test', name: 'Test operator',
   idTokenClaims: { roles: ['Status.Operator'] },
@@ -43,10 +44,12 @@ beforeEach(() => {
   account.idTokenClaims.roles = ['Status.Operator'];
   writes.length = loginCount = 0;
   existingBanners = [];
+  saveGate = undefined;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
       writes.push({ path, body: JSON.parse(String(init.body)) });
+      await saveGate;
       return Response.json(rejectSave ? { error: 'Banner changed. Reload before editing.' } : { id: 2, revision: 1 }, { status: rejectSave ? 409 : 201 });
     }
     const fixtures: Record<string, unknown> = {
@@ -165,4 +168,27 @@ test('restoring a stale draft requires deliberate review rather than silently re
   click('Restore older draft');
   assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Older draft title');
   assert.match(document.querySelector('.announcement')?.textContent || '', /Older draft text/);
+});
+
+test('pending saves freeze submitted fields and never clear or hide a replacement form', async () => {
+  let complete!: () => void;
+  saveGate = new Promise(resolve => { complete = resolve; });
+  await renderOperations();
+  click('New announcement');
+  setValue('title', 'Submitted title');
+  setValue('message', 'Submitted update');
+  const submitted = document.querySelector('form')!;
+  submitted.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.ok(submitted.querySelector<HTMLTextAreaElement>('textarea')?.disabled);
+  click('New announcement');
+  const replacement = document.querySelector('form')!;
+  assert.notEqual(replacement, submitted);
+  setValue('message', 'A different unsaved update');
+  complete();
+  await until(() => (document.querySelector('[role="status"]')?.textContent || '').includes('newer draft'));
+  assert.equal(document.querySelector('form'), replacement);
+  assert.equal(document.querySelector<HTMLElement>('.editor-panel')?.hidden, false);
+  assert.equal(document.querySelector<HTMLTextAreaElement>('[name="message"]')?.value, 'A different unsaved update');
+  assert.match(sessionStorage.getItem('status-draft:test-account:mx:banner:new') || '', /A different unsaved update/);
 });

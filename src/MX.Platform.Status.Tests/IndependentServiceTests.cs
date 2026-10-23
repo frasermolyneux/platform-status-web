@@ -358,7 +358,10 @@ public sealed class IndependentServiceTests : IDisposable
         finally
         {
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
-            await using var cleanup = source.CreateCommand("DELETE FROM status_banner_audit WHERE banner_id=$1; DELETE FROM status_banners WHERE id=$1");
+            await using var cleanup = source.CreateCommand("""
+                WITH audit AS (DELETE FROM status_banner_audit WHERE banner_id=$1)
+                DELETE FROM status_banners WHERE id=$1
+                """);
             cleanup.Parameters.AddWithValue(banner.Id);
             await cleanup.ExecuteNonQueryAsync();
         }
@@ -428,9 +431,9 @@ public sealed class IndependentServiceTests : IDisposable
             await using var remove = connection.CreateCommand();
             remove.CommandText = """
                 WITH ids AS (DELETE FROM status_github_sources WHERE repository=$1 RETURNING incident_id),
-                audit AS (DELETE FROM status_audit WHERE incident_id IN(SELECT incident_id FROM ids))
-                DELETE FROM status_incidents WHERE id IN(SELECT incident_id FROM ids);
-                DELETE FROM status_evidence WHERE source='github-issues' AND event_id=$1
+                audit AS (DELETE FROM status_audit WHERE incident_id IN(SELECT incident_id FROM ids)),
+                evidence AS (DELETE FROM status_evidence WHERE source='github-issues' AND event_id=$1)
+                DELETE FROM status_incidents WHERE id IN(SELECT incident_id FROM ids)
                 """;
             remove.Parameters.AddWithValue(repository);
             await remove.ExecuteNonQueryAsync();

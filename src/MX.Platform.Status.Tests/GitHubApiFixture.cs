@@ -25,8 +25,13 @@ internal sealed class GitHubApiFixture : HttpMessageHandler, IHttpClientFactory
         if (published) labels.Add("status:published");
         return JsonSerializer.SerializeToElement(new
         {
-            number = 42, title = "GitHub persistence fixture", body = "Approved initial update", comments = 0,
-            user = new { login = "status-fixture" }, created_at = created, updated_at = created.AddMinutes(revision),
+            number = 42,
+            title = "GitHub persistence fixture",
+            body = "Approved initial update",
+            comments = 0,
+            user = new { login = "status-fixture" },
+            created_at = created,
+            updated_at = created.AddMinutes(revision),
             closed_at = closed ? created.AddMinutes(revision) : (DateTimeOffset?)null,
             labels = labels.Select(name => new { name })
         });

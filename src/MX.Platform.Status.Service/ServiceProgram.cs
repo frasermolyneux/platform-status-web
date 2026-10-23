@@ -115,7 +115,8 @@ public static class ServiceProgram
         app.MapGet("/api/ops/runtime", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
             Results.Ok(new
             {
-                publisher = options.Publisher, writable = await database.IsWritableAsync(ct),
+                publisher = options.Publisher,
+                writable = await database.IsWritableAsync(ct),
                 github = new { repository = options.GitHubRepository, pollSeconds = options.GitHubRefreshSeconds },
                 workloads = catalog.FindHost(context.Request.Host.Host)!.Workloads
             }))

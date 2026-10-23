@@ -63,7 +63,8 @@ public static class GitHubIssueParser
             updates.Add(new()
             {
                 At = closedAt ?? issue.GetProperty("updated_at").GetDateTimeOffset(),
-                State = state, Body = $"Incident marked {state.ToApiString()} in GitHub."
+                State = state,
+                Body = $"Incident marked {state.ToApiString()} in GitHub."
             });
         var records = new List<IncidentRecord>();
         foreach (var site in sites)
@@ -75,11 +76,17 @@ public static class GitHubIssueParser
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
             {
-                SiteId = site.Site.Id, Title = title.Trim(), Components = components,
-                Severity = severity, State = state, Published = published,
-                StartedAt = createdAt, ResolvedAt = state == IncidentState.Resolved
+                SiteId = site.Site.Id,
+                Title = title.Trim(),
+                Components = components,
+                Severity = severity,
+                State = state,
+                Published = published,
+                StartedAt = createdAt,
+                ResolvedAt = state == IncidentState.Resolved
                     ? closedAt ?? issue.GetProperty("updated_at").GetDateTimeOffset() : null,
-                Updates = updates, PublicUpdates = published ? updates : [],
+                Updates = updates,
+                PublicUpdates = published ? updates : [],
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
             });
         }
@@ -135,7 +142,8 @@ public sealed class GitHubIssueWorker(
                     await database.SaveEvidenceAsync("github-issues", options.GitHubRepository, DateTimeOffset.UtcNow,
                         JsonSerializer.SerializeToElement(new
                         {
-                            status = "error", repository = options.GitHubRepository,
+                            status = "error",
+                            repository = options.GitHubRepository,
                             summary = "Issue synchronization failed. Existing incidents remain available; check service logs."
                         }), stoppingToken);
                 }
@@ -236,9 +244,13 @@ public sealed class GitHubIssueWorker(
         await database.SaveEvidenceAsync("github-issues", options.GitHubRepository, DateTimeOffset.UtcNow,
             JsonSerializer.SerializeToElement(new
             {
-                status = errors == 0 ? "healthy" : "error", repository = options.GitHubRepository,
+                status = errors == 0 ? "healthy" : "error",
+                repository = options.GitHubRepository,
                 summary = errors == 0 ? "GitHub issues are synchronized." : $"{errors} issue(s) need metadata or maintainer corrections.",
-                imported, errors, problems, pollSeconds = options.GitHubRefreshSeconds
+                imported,
+                errors,
+                problems,
+                pollSeconds = options.GitHubRefreshSeconds
             }), ct);
     }
 

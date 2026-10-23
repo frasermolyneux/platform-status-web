@@ -15,8 +15,12 @@ public sealed class StatusExperienceTests
     private static JsonElement Issue(string[]? labels = null, string author = "frasermolyneux", bool closed = false, string body = "We are investigating.") =>
         JsonSerializer.SerializeToElement(new
         {
-            number = 42, title = "Availability incident", body,
-            user = new { login = author }, created_at = Created, updated_at = Created.AddMinutes(5),
+            number = 42,
+            title = "Availability incident",
+            body,
+            user = new { login = author },
+            created_at = Created,
+            updated_at = Created.AddMinutes(5),
             closed_at = closed ? Created.AddMinutes(5) : (DateTimeOffset?)null,
             labels = (labels ?? ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage"])
                 .Select(name => new { name })
@@ -66,7 +70,9 @@ public sealed class StatusExperienceTests
         Assert.Equal(IncidentState.Resolved, closed.PublicUpdates.Last().State);
         var resolvedComment = JsonSerializer.SerializeToElement(new
         {
-            body = "state: resolved\nPreviously recovered.", user = new { login = "frasermolyneux" }, created_at = Created.AddMinutes(4)
+            body = "state: resolved\nPreviously recovered.",
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(4)
         });
         var reopened = Assert.Single(GitHubIssueParser.Parse(Issue(), [resolvedComment], Catalogue(), new()));
         Assert.Equal(IncidentState.Investigating, reopened.State);
@@ -116,7 +122,8 @@ public sealed class StatusExperienceTests
             var store = new PublicationStore(Catalogue(), new() { DataDirectory = directory });
             await store.WriteAsync(new()
             {
-                Site = new SiteInfo { Id = "mx" }, GeneratedAt = now.AddHours(-1),
+                Site = new SiteInfo { Id = "mx" },
+                GeneratedAt = now.AddHours(-1),
                 Banners = [
                     new() { Id = 1, Title = "Current", StartsAt = now.AddMinutes(-1), ExpiresAt = now.AddHours(1) },
                     new() { Id = 2, Title = "Future", StartsAt = now.AddHours(1) },

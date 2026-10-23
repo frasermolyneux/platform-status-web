@@ -17,8 +17,13 @@ public sealed record BannerRecord
 
     public BannerDto ToPublicBanner() => new()
     {
-        Id = Id, Title = Title, Message = Message, Tone = Tone,
-        StartsAt = StartsAt, ExpiresAt = ExpiresAt, UpdatedAt = UpdatedAt
+        Id = Id,
+        Title = Title,
+        Message = Message,
+        Tone = Tone,
+        StartsAt = StartsAt,
+        ExpiresAt = ExpiresAt,
+        UpdatedAt = UpdatedAt
     };
 }
 
@@ -42,8 +47,15 @@ public sealed record BannerCommand(
 
     public BannerRecord Apply(int id, string site, BannerRecord? previous, DateTimeOffset now) => new()
     {
-        Id = id, SiteId = site, Revision = (previous?.Revision ?? 0) + 1,
-        Title = Title.Trim(), Message = Message.Trim(), Tone = Tone,
-        Published = Published, StartsAt = StartsAt, ExpiresAt = ExpiresAt, UpdatedAt = now
+        Id = id,
+        SiteId = site,
+        Revision = (previous?.Revision ?? 0) + 1,
+        Title = Title.Trim(),
+        Message = Message.Trim(),
+        Tone = Tone,
+        Published = Published,
+        StartsAt = StartsAt,
+        ExpiresAt = ExpiresAt,
+        UpdatedAt = now
     };
 }
