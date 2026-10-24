@@ -124,8 +124,8 @@ public sealed class PublicationWorker(
     internal async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct, bool sampleTelemetry = true)
     {
         var previous = new Dictionary<string, IReadOnlyList<ProbeObservation>>();
-        foreach (var site in catalog.Sites)
-            previous[site.Site.Id] = await database.ReadProbesAsync(site.Site.Id, ct);
+        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
+            previous[siteId] = await database.ReadProbesAsync(siteId, ct);
         var now = DateTimeOffset.UtcNow;
         using var concurrency = new SemaphoreSlim(5);
         var collected = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http")
