@@ -211,7 +211,7 @@ public sealed partial class IndependentServiceTests
             Assert.NotNull(peer.ToMaintenance(DateTimeOffset.UtcNow));
             var adjusted = maintenance with
             {
-                Components = ["xi.sitewatch.geo-location-web"],
+                Components = ["xi.sitewatch.geo-location-web", "xi.sitewatch.server-events"],
                 Message = "Schedule adjusted",
                 ScheduledStart = schedule.AddMinutes(-1),
                 Revision = peer.Revision,
@@ -231,13 +231,13 @@ public sealed partial class IndependentServiceTests
             record = await Read();
             Assert.Equal("synced", record.GitHub!.State);
 
+            await VerifySiteWithdrawalAsync(importer, maintenance);
             var labels = api.Issue!["labels"]!.AsArray();
             labels.Remove(labels.Single(label => label!["name"]!.GetValue<string>() == "status:incident"));
             api.Touch();
             await importer.SynchronizeAsync(default);
             Assert.False((await Read()).Published);
             labels.Add(new JsonObject { ["name"] = "status:incident" });
-            api.Touch();
             await importer.SynchronizeAsync(default);
             Assert.True((await Read()).Published);
             var approvedBody = api.Issue["body"]!.GetValue<string>();
@@ -274,6 +274,7 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("draft", record.GitHub!.State);
             Assert.Equal("PRIVATE_TITLE", record.Title);
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
+            await VerifyStaleDraftImportAsync(importer);
             api.Issue!["labels"]!.AsArray().Add(new JsonObject { ["name"] = "status:published" });
             api.Touch();
             await importer.SynchronizeAsync(default);
@@ -288,6 +289,69 @@ public sealed partial class IndependentServiceTests
 
         async Task<IncidentRecord> Read() =>
             (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id);
+
+        async Task VerifySiteWithdrawalAsync(GitHubIssueWorker importer, IncidentCommand maintenance)
+        {
+            var labels = api.Issue!["labels"]!.AsArray();
+            var removed = labels.Where(label => label!["name"]!.GetValue<string>() == "site:xi"
+                || label!["name"]!.GetValue<string>().StartsWith("component:xi.", StringComparison.Ordinal)).ToArray();
+            foreach (var label in removed) labels.Remove(label);
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            var peer = (await database.ReadGitHubSourcesAsync(options.GitHubRepository, default))
+                .Single(source => source.SiteId == "xi").Incident;
+            Assert.False(peer.Published);
+            Assert.True(peer.GitHubSiteWithdrawn);
+            Assert.Contains("xi.sitewatch.server-events", peer.Components);
+            record = await Read();
+            api.Offline = true;
+            record = (await database.SaveIncidentAsync("mx", record.Id, maintenance with
+            {
+                Message = "Approved MX-only update",
+                Revision = record.Revision,
+                OperationId = Guid.NewGuid()
+            }, "operator", default))!;
+            peer = (await database.ReadIncidentsAsync("xi", default)).Single(item => item.Id == peer.Id);
+            Assert.False(peer.Published);
+            Assert.True(peer.GitHubSiteWithdrawn);
+            api.Offline = false;
+            Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            labels = api.Issue!["labels"]!.AsArray();
+            foreach (var label in removed) labels.Add(label);
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            peer = (await database.ReadIncidentsAsync("xi", default)).Single(item => item.Id == peer.Id);
+            Assert.True(peer.Published);
+            Assert.False(peer.GitHubSiteWithdrawn);
+            record = await Read();
+        }
+
+        async Task VerifyStaleDraftImportAsync(GitHubIssueWorker importer)
+        {
+            var sources = await database.ReadGitHubSourcesAsync(options.GitHubRepository, default);
+            var remote = await github.ReadAsync(42, default);
+            var incoming = GitHubIssueParser.Parse(remote.Issue, remote.Comments, Catalogue(), options,
+                sources.Select(source => source.Incident).ToArray()).Single(item => item.SiteId == "mx");
+            record = (await database.SaveIncidentAsync("mx", record.Id, command with
+            {
+                Message = "PRIVATE_NEWER_NOTE",
+                Revision = record.Revision,
+                OperationId = Guid.NewGuid()
+            }, "operator", default))!;
+            Assert.True(await worker.RunOnceAsync(default));
+            var revision = record.Revision;
+            await using (var lease = await database.TryPublisherLockAsync(default)
+                ?? throw new InvalidOperationException("Fixture publisher is busy."))
+                await database.SaveGitHubIncidentAsync(lease, options.GitHubRepository, 42, remote.UpdatedAt, incoming, default);
+            record = await Read();
+            Assert.Equal(revision, record.Revision);
+            Assert.Contains(record.Updates, update => update.Body == "PRIVATE_NEWER_NOTE");
+            await importer.SynchronizeAsync(default);
+            record = await Read();
+            Assert.Contains(record.Updates, update => update.Body == "PRIVATE_NEWER_NOTE");
+            Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
+        }
     }
 
     private static async Task VerifyIndependentGitHubJobsDrainAsync(PostgresStore database, RuntimeOptions options)

@@ -66,6 +66,7 @@ public static class GitHubIssueParser
             records.Add(new()
             {
                 SiteId = site.Site.Id,
+                Revision = own?.Revision ?? 0,
                 Title = title.Trim(),
                 Components = components,
                 Severity = severity,
@@ -337,12 +338,13 @@ public sealed class GitHubIssueWorker(
 
     internal async Task SynchronizeAsync(CancellationToken ct)
     {
-        var issues = await ReadPagesAsync("issues?state=all&sort=updated&direction=desc", ct);
         var sources = await database.ReadGitHubSourcesAsync(options.GitHubRepository, ct);
+        var issues = await ReadPagesAsync("issues?state=all&sort=updated&direction=desc", ct);
+        var fetched = issues.GroupBy(issue => issue.GetProperty(NumberProperty).GetInt32())
+            .ToDictionary(group => group.Key,
+                group => group.OrderByDescending(issue => issue.GetProperty("updated_at").GetDateTimeOffset()).First());
         var imports = new List<IssueImport>();
-        foreach (var issue in issues.Where(issue => !issue.TryGetProperty("pull_request", out _))
-            .GroupBy(issue => issue.GetProperty(NumberProperty).GetInt32())
-            .Select(group => group.OrderByDescending(issue => issue.GetProperty("updated_at").GetDateTimeOffset()).First()))
+        foreach (var issue in fetched.Values.Where(issue => !issue.TryGetProperty("pull_request", out _)))
         {
             var number = issue.GetProperty(NumberProperty).GetInt32();
             imports.Add(await ReadImportAsync(issue, sources.Where(source => source.Number == number).ToArray(), ct));
@@ -353,12 +355,18 @@ public sealed class GitHubIssueWorker(
         var problems = new List<SyncProblem>();
         foreach (var import in imports)
             if (import.Problem is { } problem) problems.Add(new(import.Number, problem));
-        var fetchedNumbers = issues.Select(issue => issue.GetProperty(NumberProperty).GetInt32()).ToHashSet();
-        foreach (var source in sources.Where(source => source.Incident.Published && !observed.Contains((source.Number, source.SiteId))))
+        foreach (var source in sources.Where(source => !observed.Contains((source.Number, source.SiteId))))
         {
-            if (await CanWithdrawAsync(source.Number, fetchedNumbers.Contains(source.Number), ct))
-                changes.Add((source.Number, DateTimeOffset.UtcNow,
-                    source.Incident with { Published = false, GitHubBaseVersion = source.Incident.GitHubVersion }));
+            var inSnapshot = fetched.TryGetValue(source.Number, out var issue);
+            if (await CanWithdrawAsync(source.Number, inSnapshot, ct))
+                changes.Add((source.Number, inSnapshot ? issue.GetProperty("updated_at").GetDateTimeOffset() : source.UpdatedAt,
+                    source.Incident with
+                    {
+                        Published = false,
+                        GitHubSiteWithdrawn = source.Incident.GitHubSiteWithdrawn
+                            || !inSnapshot || !HasLabel(issue, $"site:{source.SiteId}"),
+                        GitHubBaseVersion = source.Incident.GitHubVersion
+                    }));
             else problems.Add(new(source.Number, "Issue moved during pagination; retrying the next snapshot."));
         }
         await PersistChangesAsync(changes, ct);
@@ -394,7 +402,8 @@ public sealed class GitHubIssueWorker(
             return new(number, updatedAt, previous.Select(source =>
                 source.Incident with
                 {
-                    Published = source.Incident.Published && approved,
+                    Published = source.Incident.Published && approved && HasLabel(issue, $"site:{source.SiteId}"),
+                    GitHubSiteWithdrawn = source.Incident.GitHubSiteWithdrawn || !HasLabel(issue, $"site:{source.SiteId}"),
                     GitHubBaseVersion = source.Incident.GitHubVersion
                 }).ToArray(), exception.Message);
         }

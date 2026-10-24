@@ -70,7 +70,7 @@ public sealed partial class PostgresStore
                 Title = record.Title,
                 Severity = record.Severity,
                 State = record.State,
-                Published = record.Published,
+                Published = record.Published && !peer.GitHubSiteWithdrawn,
                 ResolvedAt = record.ResolvedAt,
                 ScheduledStart = record.ScheduledStart,
                 ScheduledEnd = record.ScheduledEnd,

@@ -327,6 +327,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 previousAt = reader.GetFieldValue<DateTimeOffset>(1);
             }
         if (previous?.GitHub is { State: not ("synced" or "draft") } || previousAt > updatedAt
+            || previous is not null && incoming.Revision != previous.Revision
             || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion)) return;
         IncidentRecord record;
         if (previous is null)

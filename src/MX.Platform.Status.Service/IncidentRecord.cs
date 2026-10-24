@@ -34,6 +34,7 @@ public sealed record IncidentRecord
     public IncidentEvidence? Evidence { get; init; }
     public GitHubDelivery? GitHub { get; init; }
     public string? GitHubVersion { get; init; }
+    public bool GitHubSiteWithdrawn { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string? GitHubBaseVersion { get; init; }
 
@@ -142,6 +143,7 @@ public sealed record IncidentCommand(
             SiteId = site,
             Revision = (previous?.Revision ?? 0) + 1,
             Published = Published,
+            GitHubSiteWithdrawn = !Published && previous?.GitHubSiteWithdrawn == true,
             Title = Title.Trim(),
             Components = Components,
             Severity = Severity,
