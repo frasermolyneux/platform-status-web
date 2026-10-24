@@ -296,6 +296,7 @@ public sealed class GitHubIssueWorker(
 {
     private readonly GitHubIncidentClient githubClient = github ?? new(options, catalog, clients);
     private const string NumberProperty = "number";
+    private const string UpdatedAtProperty = "updated_at";
     private readonly Dictionary<int, (DateTimeOffset UpdatedAt, DateTimeOffset CheckedAt, List<JsonElement> Items)> commentCache = [];
     private sealed record IssueImport(int Number, DateTimeOffset UpdatedAt, IReadOnlyList<IncidentRecord> Records, string? Problem = null);
     private sealed record SyncProblem(int Issue, string Summary);
@@ -342,7 +343,7 @@ public sealed class GitHubIssueWorker(
         var issues = await ReadPagesAsync("issues?state=all&sort=updated&direction=desc", ct);
         var fetched = issues.GroupBy(issue => issue.GetProperty(NumberProperty).GetInt32())
             .ToDictionary(group => group.Key,
-                group => group.OrderByDescending(issue => issue.GetProperty("updated_at").GetDateTimeOffset()).First());
+                group => group.OrderByDescending(issue => issue.GetProperty(UpdatedAtProperty).GetDateTimeOffset()).First());
         var imports = new List<IssueImport>();
         foreach (var issue in fetched.Values.Where(issue => !issue.TryGetProperty("pull_request", out _)))
         {
@@ -359,7 +360,7 @@ public sealed class GitHubIssueWorker(
         {
             var inSnapshot = fetched.TryGetValue(source.Number, out var issue);
             if (await CanWithdrawAsync(source.Number, inSnapshot, ct))
-                changes.Add((source.Number, inSnapshot ? issue.GetProperty("updated_at").GetDateTimeOffset() : source.UpdatedAt,
+                changes.Add((source.Number, inSnapshot ? issue.GetProperty(UpdatedAtProperty).GetDateTimeOffset() : source.UpdatedAt,
                     source.Incident with
                     {
                         Published = false,
@@ -387,7 +388,7 @@ public sealed class GitHubIssueWorker(
     private async Task<IssueImport> ReadImportAsync(JsonElement issue, IReadOnlyList<GitHubSource> previous, CancellationToken ct)
     {
         var number = issue.GetProperty(NumberProperty).GetInt32();
-        var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
+        var updatedAt = issue.GetProperty(UpdatedAtProperty).GetDateTimeOffset();
         try
         {
             var comments = await ReadCommentsAsync(issue, ct);
@@ -414,7 +415,7 @@ public sealed class GitHubIssueWorker(
         if (!HasLabel(issue, "status:incident") || issue.GetProperty("comments").GetInt32() == 0
             || !GitHubIssueParser.IsTrusted(issue.GetProperty("user").GetProperty("login").GetString()!, options)) return [];
         var number = issue.GetProperty(NumberProperty).GetInt32();
-        var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
+        var updatedAt = issue.GetProperty(UpdatedAtProperty).GetDateTimeOffset();
         if (commentCache.TryGetValue(number, out var cached) && cached.UpdatedAt == updatedAt
             && cached.CheckedAt > DateTimeOffset.UtcNow.AddMinutes(-30)) return cached.Items;
         var comments = await ReadPagesAsync($"issues/{number}/comments?", ct);
