@@ -78,6 +78,19 @@ public sealed class MonitoringAvailabilityTests
     }
 
     [Fact]
+    public void PrivateEvidenceRetainsPublicComponentScopeAndCanonicalMonitoringProvenance()
+    {
+        var check = Check with { Component = "xi.shared", Name = "Routing" };
+        var result = MonitoringAvailability.Project("xi", check,
+            [Row("uksouth", false), Row("eastus", true), Row("westeurope", true)], Now)!;
+        Assert.Equal(check.Component, result.Component);
+        Assert.Equal(check.Name, result.Name);
+        Assert.Equal(Check.Monitoring, result.Monitoring);
+        Assert.Contains("uksouth (HTTP 503", result.Detail);
+        Assert.Equal(3, result.Regions.Count);
+    }
+
+    [Fact]
     public void QueriesAreExplicitlyScopedAndChooseLatestMeasurementsRatherThanWindowRatios()
     {
         var query = MonitoringAvailability.BuildQuery([Check.Monitoring!]);

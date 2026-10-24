@@ -596,23 +596,21 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         if (check.target) row.append(link(check.target, check.target));
         if (check.probe) {
           const probe = check.probe;
-          row.append(element('p', `${probe.success ? 'Passed' : 'Failed'} / ${probe.httpStatus === null ? 'No HTTP response' : `HTTP ${probe.httpStatus}`} / ${probe.durationMilliseconds} ms / ${formatDateTime(probe.observedAt)}`),
+          row.append(element('p', `Archived HTTP observation: ${probe.success ? 'passed' : 'failed'} / ${probe.httpStatus === null ? 'No HTTP response' : `HTTP ${probe.httpStatus}`} / ${probe.durationMilliseconds} ms / ${formatDateTime(probe.observedAt)}`),
             element('p', `Observer: ${probe.observer}. ${probe.error || ''}`, 'muted'));
-          if (!check.matchesPublication) row.append(element('p', 'This check does not match the displayed publication yet. Compare timestamps; publication or replication may still be catching up.', 'stale-warning'));
-          if (Date.now() - new Date(probe.observedAt).getTime() > check.expectedIntervalSeconds * 3000)
-            row.append(element('p', 'This check is stale. Do not treat its last successful result as current availability.', 'stale-warning'));
-        } else {
-          row.append(element('p', check.target ? 'No check result is available yet.' : 'No public HTTP check is configured. Azure evidence can be reviewed and promoted to an incident; absence of an alert does not prove availability.', 'muted'));
+        } else if (!check.checks?.length && check.source !== 'Service aggregate from components') {
+          row.append(element('p', 'No monitoring result is available yet. Missing evidence does not prove availability.', 'muted'));
         }
+        if (!check.matchesPublication) row.append(element('p', 'Monitoring observations do not match the displayed publication yet. Compare timestamps; publication or replication may still be catching up.', 'stale-warning'));
         for (const signal of check.checks || [])
           row.append(element('p', `Check: ${signal.name} / ${signal.status}${signal.observedAt ? ` / ${formatDateTime(signal.observedAt)}` : ' / awaiting observation'}${signal.target ? ` / ${signal.target}` : ''}${signal.probe?.error ? ` / ${signal.probe.error}` : ''}${signal.detail ? ` / ${signal.detail}` : ''}`));
         for (const incident of check.incidents)
           row.append(element('p', `Incident #${incident.id}: ${incident.title} (${incident.severity}, ${incident.state})`));
         for (const maintenance of check.maintenance) row.append(element('p', `Maintenance #${maintenance.id}: ${maintenance.title}`));
         if (check.lastFailure && check.lastFailure.observedAt !== check.probe?.observedAt)
-          row.append(element('p', `Last failed check: ${formatDateTime(check.lastFailure.observedAt)} / ${check.lastFailure.error || 'No HTTP response'}`));
-        if (check.probe?.success && check.incidents.length)
-          row.append(element('p', 'The HTTP check passed; the active incident still affects the public status.'));
+          row.append(element('p', `Archived failed HTTP check: ${formatDateTime(check.lastFailure.observedAt)} / ${check.lastFailure.error || 'No HTTP response'}`));
+        if (check.checks?.length && check.checks.every(signal => signal.status === 'operational') && check.incidents.length)
+          row.append(element('p', 'Monitoring checks are healthy; the active incident still affects the public status.'));
         healthSection.append(row);
       }
       if (!health.length) healthSection.append(element('p', 'No service diagnostics are available.', 'empty-state'));

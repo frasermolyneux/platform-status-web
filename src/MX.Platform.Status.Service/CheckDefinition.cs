@@ -24,6 +24,9 @@ public sealed record CheckDefinition
 
 public sealed record CheckResult(string Site, string CheckId, [property: JsonRequired] ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
 {
+    public string? Component { get; init; }
+    public string? Name { get; init; }
+    public MonitoringReference? Monitoring { get; init; }
     public string? ObservationKey { get; init; }
     public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
 

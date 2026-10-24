@@ -104,6 +104,9 @@ internal static class MonitoringAvailability
             + (missing.Length == 0 ? "" : $" Missing/stale: {string.Join(", ", missing)}.");
         return new(site, check.Id, status, latest.Max(observation => observation.ObservedAt), detail)
         {
+            Component = check.Component,
+            Name = check.Name,
+            Monitoring = source,
             ObservationKey = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(latest.Select(
                 observation => new { observation.Region, observation.ObservedAt, observation.Success })))),
             Regions = latest.Select(observation => new RegionAvailabilityTelemetry(

@@ -88,13 +88,25 @@ export function evidenceCards(records: EvidenceRecord[]): EvidenceCard[] {
       source: record.source, observedAt: record.observedAt, record, site: text(data.site) || undefined,
       components: text(data.component) ? [text(data.component)] : [], details: [] as EvidenceCard['details'],
     };
-    if (record.source === 'check-result') return [{
-      ...base, title: text(data.name, text(data.checkId, 'Telemetry check')),
-      summary: text(data.detail, 'Authenticated telemetry check observation.'),
-      severity: data.status === 'outage' ? 'critical' : data.status === 'operational' ? 'info' : 'warning',
-      state: text(data.status, 'unknown'),
-      details: [{ label: 'Check', value: text(data.checkId) }, { label: 'Status', value: text(data.status, 'unknown') }],
-    }];
+    if (record.source === 'check-result') {
+      const monitoring = object(data.monitoring);
+      const regions = Array.isArray(data.regions) ? data.regions.map(object) : [];
+      return [{
+        ...base, title: text(data.name, text(data.checkId, 'Telemetry check')),
+        summary: text(data.detail, 'Authenticated telemetry check observation.'),
+        severity: data.status === 'outage' ? 'critical' : data.status === 'operational' ? 'info' : 'warning',
+        state: text(data.status, 'unknown'),
+        details: [
+          { label: 'Check', value: text(data.checkId) },
+          { label: 'Status', value: text(data.status, 'unknown') },
+          { label: 'Source', value: monitoring.checkId ? 'Sitewatch via Application Insights' : 'Authenticated telemetry ingestion' },
+          ...regions.map(region => ({
+            label: text(region.region, 'Unknown region'),
+            value: `${display(region.failures)} failed / ${display(region.samples)} samples${region.lastSeen ? ` / ${text(region.lastSeen)}` : ''}`,
+          })),
+        ],
+      }];
+    }
     if (record.source === 'independent-probe' || record.source === 'independent-probe-failure') {
       return [{
         ...base, title: text(data.name, text(data.component, 'HTTP availability check')),
@@ -103,8 +115,8 @@ export function evidenceCards(records: EvidenceRecord[]): EvidenceCard[] {
         href: httpsLink(data.target),
         details: [
           { label: 'Check', value: record.source === 'independent-probe-failure'
-            ? 'Last failed HTTP check; see service health for the current result'
-            : 'Independent HTTP probe; this check contributes to component availability' },
+            ? 'Archived failed HTTP check; see monitoring health for the current result'
+            : 'Archived status-owned HTTP observation; no longer contributes to current availability' },
           { label: 'Target', value: text(data.target) },
           { label: 'Observer', value: text(data.observer) },
           { label: 'HTTP status', value: display(data.httpStatus) || 'No HTTP response' },
