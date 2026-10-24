@@ -230,7 +230,10 @@ public GitHub repository, regardless of rendering.
 Closing resolves the mapped incident; reopening restores its active state.
 Removing the publish label withdraws it without deleting its audit history.
 Source-owned incidents have stable IDs and are edited in GitHub, not in the
-local incident editor. Label, closure and reopening transitions remain in the durable
+local incident editor. Previously published incident links remain valid through
+aliases when the selected brands change. Restoring a brand retains the source's
+latest approved history without copying private drafts.
+Label, closure and reopening transitions remain in the durable
 timeline; unrelated edits and untrusted comments do not rewrite those transitions.
 Observed description edits, reversions and impact changes are retained rather
 than replacing older public updates. Historic impact is not inferred from the

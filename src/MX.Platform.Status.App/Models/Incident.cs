@@ -6,6 +6,7 @@ public sealed record Incident
     public string Title { get; init; } = string.Empty;
     public string Url { get; init; } = string.Empty;
     public string? SourceUrl { get; init; }
+    public IReadOnlyList<int> Aliases { get; init; } = [];
     public IReadOnlyList<string> Components { get; init; } = [];
     public Severity Severity { get; init; }
     public IncidentState State { get; init; }

@@ -350,11 +350,17 @@ test('incident workspaces refresh automatically without replacing an unsaved edi
   assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New incident')!.disabled === false);
 });
 
-test('automatic workspace refresh preserves keyboard focus before and during a pending read', async () => {
+for (const section of ['incidents', 'evidence-drafts']) test(`automatic workspace refresh preserves ${section} keyboard focus before and during a pending read`, async () => {
   history.replaceState(null, '', '/ops/incidents');
+  sessionStorage.setItem('status-evidence-draft:test-account:mx:focus-draft', JSON.stringify({
+    title: 'Evidence draft', message: 'Review this update', context: 'Private context',
+    components: ['mx.sitewatch.molyneux-me'], severity: 'degraded', state: 'investigating',
+    evidence: { source: 'azure-alert', id: 'alert-1', observedAt: timestamp },
+  }));
   await renderOperations();
   const root = document.querySelector('#app')!;
-  const management = document.querySelector<HTMLAnchorElement>('#operator-incidents a[href*="/issues/1"]')!;
+  const selector = section === 'incidents' ? '#operator-incidents a[href*="/issues/1"]' : '#operator-evidence-drafts a';
+  const management = document.querySelector<HTMLAnchorElement>(selector)!;
   const refreshButton = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh workspace')!;
   management.focus();
   const initialReads = incidentReads;

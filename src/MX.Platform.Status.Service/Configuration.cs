@@ -136,7 +136,9 @@ public sealed class StatusCatalog
                 return incident with
                 {
                     Components = group.Where(record => record.Published == incident.Published)
-                        .SelectMany(record => record.Components).Distinct().ToArray()
+                        .SelectMany(record => record.Components).Distinct().ToArray(),
+                    PublicAliases = group.SelectMany(record => record.PublicAliases.Append(record.Id))
+                        .Where(id => id > 0 && id != incident.Id).Distinct().ToArray()
                 };
             }).ToArray();
 

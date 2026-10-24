@@ -46,6 +46,7 @@ export interface HistoryDayDto {
 
 export interface IncidentDto {
   id: number;
+  aliases?: number[];
   title: string;
   url: string;
   sourceUrl?: string;

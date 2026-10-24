@@ -61,7 +61,12 @@ public sealed class StatusExperienceTests
         Assert.Null(projected.Evidence);
         Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(projected, StatusJson.Options));
         var local = first with { Id = 31, SiteId = "xi", Components = ["xi.sitewatch.geo-location-web"] };
-        Assert.Equal(31, Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [first, local])).Id);
+        var preferred = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [first, local]));
+        Assert.Equal(31, preferred.Id);
+        Assert.Contains(30, preferred.PublicAliases);
+        var publication = new StatusMerger().Merge(catalog.Get("xi").Snapshot, new Dictionary<string, ComponentLiveTelemetry>(),
+            null, [preferred.ToPublicIncident()], []);
+        Assert.Contains(30, Assert.Single(publication.Incidents).Aliases!);
         Assert.True(Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [first, local with { Published = false }])).Published);
         var apiOnly = first with { Components = ["mx.sitewatch.geo-location-api"] };
         var combined = Assert.Single(catalog.ProjectIncidents(catalog.Get("mx"), [apiOnly, local]));
@@ -151,6 +156,32 @@ public sealed class StatusExperienceTests
         Assert.Equal(edited.PublicUpdates, xi.PublicUpdates);
         Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(xi, StatusJson.Options));
         Assert.Equal(xi.PublicUpdates, Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), both)).PublicUpdates);
+    }
+
+    [Fact]
+    public void RestoringAGitHubSiteKeepsIntermediateApprovedUpdatesAndPreviouslyPublishedLinks()
+    {
+        var catalog = Catalogue();
+        string[] bothLabels = ["status:incident", "status:published", "site:mx", "site:xi", "workload:geo-location", "severity:outage"];
+        var initial = GitHubIssueParser.Parse(Issue(bothLabels, body: "Original"), [], catalog, new());
+        var mx = Assert.Single(initial, record => record.SiteId == "mx") with { Id = 30 };
+        var withdrawn = Assert.Single(initial, record => record.SiteId == "xi") with { Id = 31, Published = false };
+        var mxLabels = bothLabels.Where(label => label != "site:xi").ToArray();
+        mx = Assert.Single(GitHubIssueParser.Parse(Issue(mxLabels, body: "Intermediate correction", updatedMinutes: 10),
+            [], catalog, new(), [mx, withdrawn])) with
+        { Id = 30 };
+        mx = Assert.Single(GitHubIssueParser.Parse(Issue(mxLabels, body: "Latest correction", updatedMinutes: 15),
+            [], catalog, new(), [mx, withdrawn])) with
+        { Id = 30 };
+        var restored = GitHubIssueParser.Parse(Issue(bothLabels, body: "Latest correction", updatedMinutes: 20),
+            [], catalog, new(), [mx, withdrawn]);
+        var xi = Assert.Single(restored, record => record.SiteId == "xi") with { Id = 31 };
+        Assert.Equal(mx.PublicUpdates, xi.PublicUpdates);
+        Assert.Contains(xi.PublicUpdates, update => update.Body == "Intermediate correction" && update.At == Created.AddMinutes(10));
+        Assert.Contains(xi.PublicUpdates, update => update.Body == "Latest correction" && update.At == Created.AddMinutes(15));
+        Assert.Contains(30, xi.PublicAliases);
+        var projected = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [mx with { Published = false }, xi]));
+        Assert.Contains(30, projected.ToPublicIncident().Aliases);
     }
 
     [Fact]

@@ -37,11 +37,15 @@ public static class GitHubIssueParser
         var sourceUpdates = new List<SourceUpdateSnapshot>();
         var sourceTimeline = ReadUpdates(issue, comments, options, snapshots: sourceUpdates);
         var state = ReadState(labels, closedAt, sourceTimeline[^1].State);
+        var approved = ApprovedHistory(previous?.OrderByDescending(record => record.PublicUpdates.Count)
+            .ThenByDescending(record => record.PublicUpdates.LastOrDefault()?.At).FirstOrDefault());
+        var aliases = previous?.SelectMany(record => record.PublicAliases.Append(record.Id))
+            .Where(id => id > 0).Distinct().ToArray() ?? [];
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)
         {
-            var previousIncident = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id)
-                ?? ApprovedHistory(previous?.OrderByDescending(record => record.PublicUpdates.Count).FirstOrDefault());
+            var own = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id);
+            var previousIncident = own ?? approved;
             var resolvedAt = ResolutionTime(state, closedAt, updatedAt, previousIncident);
             var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
             updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, updatedAt);
@@ -49,7 +53,6 @@ public static class GitHubIssueParser
             var publicStateUpdates = previousIncident?.PublicSourceStateUpdates ?? [];
             if (published)
             {
-                var approved = ApprovedHistory(previousIncident);
                 var (current, transitions) = ReconcileUpdates(issue, comments, options, state, closedAt, approved);
                 publicUpdates = PreserveHistory(current, sourceUpdates, approved, severity, updatedAt);
                 publicStateUpdates = transitions;
@@ -73,6 +76,7 @@ public static class GitHubIssueParser
                 PublicSourceUpdates = published ? sourceUpdates : previousIncident?.PublicSourceUpdates ?? [],
                 PublicSourceStateUpdates = publicStateUpdates,
                 PublicSourceSeverity = published ? severity : previousIncident?.PublicSourceSeverity,
+                PublicAliases = aliases.Where(id => id != own?.Id).ToArray(),
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
             });
         }

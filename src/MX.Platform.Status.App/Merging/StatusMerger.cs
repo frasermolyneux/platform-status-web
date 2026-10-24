@@ -193,6 +193,7 @@ public sealed class StatusMerger
         Title = incident.Title,
         Url = incident.Url,
         SourceUrl = incident.SourceUrl,
+        Aliases = incident.Aliases.Count > 0 ? incident.Aliases : null,
         Components = incident.Components,
         Severity = incident.Severity.ToApiString(),
         State = incident.State.ToApiString(),

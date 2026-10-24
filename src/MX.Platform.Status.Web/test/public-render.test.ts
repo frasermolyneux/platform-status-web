@@ -36,6 +36,9 @@ test('incidents identify affected services on cards and component pages, and lin
   const entries = document.querySelectorAll('.timeline-entry');
   assert.match(entries[0].textContent || '', /identified.*outage/s);
   assert.match(entries[1].textContent || '', /investigating.*degraded/s);
+  data.incidents[0].aliases = [20];
+  renderIncident(data, '20');
+  assert.match(document.querySelector('#app h2')?.textContent || '', /Email delays/);
   data.incidents[0].sourceUrl = 'javascript:alert(1)';
   renderIncident(data, '2');
   assert.equal(document.querySelector('a[href^="javascript:"]'), null);

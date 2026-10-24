@@ -191,7 +191,8 @@ export function renderComponent(data: StatusResponse, componentId: string): void
 export function renderIncident(data: StatusResponse, incidentId: string): void {
   const app = document.getElementById('app');
   if (!app) return;
-  const incident = data.incidents.find(i => i.id === parseInt(incidentId));
+  const id = Number(incidentId);
+  const incident = data.incidents.find(incident => incident.id === id || incident.aliases?.includes(id));
   if (!incident) {
     app.innerHTML = safeHtml('<p>Incident not found.</p>');
     return;

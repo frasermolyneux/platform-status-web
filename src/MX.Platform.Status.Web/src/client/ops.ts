@@ -621,7 +621,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     }
 
     function interactingWithWorkspace(): boolean {
-      return !editor.hidden || incidentSection.contains(document.activeElement) || bannerSection.contains(document.activeElement);
+      return !editor.hidden || [incidentSection, bannerSection, draftsSection].some(section => section.contains(document.activeElement));
     }
 
     async function refreshData(automatic = false): Promise<void> {
