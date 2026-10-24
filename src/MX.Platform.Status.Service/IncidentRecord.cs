@@ -62,6 +62,8 @@ public sealed record IncidentRecord
     public IncidentRecord ObserveImpact(IncidentRecord? previous, DateTimeOffset now)
     {
         var history = previous?.ImpactHistory ?? ImpactHistory;
+        if (history.Count == 0 && previous is { Published: true, State: IncidentState.Resolved })
+            history = previous.RecordedLegacyImpact();
         if (!Published || State == IncidentState.Resolved && history.Count == 0
             || history.LastOrDefault() is { } last
             && last.State == State && last.Severity == Severity
@@ -74,6 +76,29 @@ public sealed record IncidentRecord
         {
             ImpactHistory = [.. history, new(at, State, Severity, Components, ScheduledStart, ScheduledEnd)]
         };
+    }
+
+    private IReadOnlyList<IncidentImpactObservation> RecordedLegacyImpact()
+    {
+        if (ResolvedAt is not { } resolved) return [];
+        if (Severity == Severity.Maintenance && ScheduledStart is { } start && ScheduledEnd is { } end
+            && start < end && start < resolved)
+            return
+            [
+                new(start, IncidentState.Investigating, Severity.Maintenance, Components, ScheduledStart, ScheduledEnd),
+                new(resolved, IncidentState.Resolved, Severity.Maintenance, Components, ScheduledStart, ScheduledEnd)
+            ];
+        var observations = new List<IncidentImpactObservation>();
+        Severity? severity = null;
+        foreach (var update in PublicUpdates.Where(update => update.At < resolved).OrderBy(update => update.At))
+        {
+            severity = update.Severity ?? severity;
+            if (severity.HasValue)
+                observations.Add(new(update.At, update.State, severity.Value, Components, ScheduledStart, ScheduledEnd));
+        }
+        if (observations.Count > 0)
+            observations.Add(new(resolved, IncidentState.Resolved, observations[^1].Severity, Components, ScheduledStart, ScheduledEnd));
+        return observations;
     }
 
     public MaintenanceWindow ToMaintenance(DateTimeOffset now)

@@ -149,8 +149,10 @@ public sealed class StatusExperienceTests
         Assert.Equal(closedAgain.ImpactHistory.OrderBy(observation => observation.At), closedAgain.ImpactHistory);
     }
 
-    [Fact]
-    public void ResolvedLegacyImpactRemainsAvailableAfterSynchronizationAndLaterEdits()
+    [Theory]
+    [InlineData(Severity.Outage)]
+    [InlineData(Severity.Maintenance)]
+    public void ResolvedLegacyImpactRemainsOnItsOriginalComponentsAfterSyncEditsAndReopening(Severity severity)
     {
         var site = Catalogue().Get("mx");
         var started = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-1).AddHours(10), TimeSpan.Zero);
@@ -161,34 +163,46 @@ public sealed class StatusExperienceTests
             Published = true,
             Title = "Resolved legacy incident",
             Components = ["mx.sitewatch.geo-location-web"],
-            Severity = Severity.Outage,
+            Severity = severity,
             State = IncidentState.Resolved,
             StartedAt = started,
             ResolvedAt = started.AddHours(1),
+            ScheduledStart = severity == Severity.Maintenance ? started : null,
+            ScheduledEnd = severity == Severity.Maintenance ? started.AddHours(2) : null,
             PublicUpdates =
             [
-                new() { At = started, State = IncidentState.Investigating, Severity = Severity.Outage, Body = "Outage declared" },
-                new() { At = started.AddHours(1), State = IncidentState.Resolved, Severity = Severity.Outage, Body = "Recovered" }
+                new() { At = started, State = IncidentState.Investigating, Severity = severity, Body = "Impact declared" },
+                new() { At = started.AddHours(1), State = IncidentState.Resolved, Severity = severity, Body = "Recovered" }
             ]
         };
         var synchronized = legacy.ObserveImpact(legacy, DateTimeOffset.UtcNow);
         var edited = new IncidentCommand(legacy.Title, legacy.Components, Severity.Degraded,
             IncidentState.Resolved, "Resolution clarified", true)
             .Apply(legacy.Id, legacy.SiteId, synchronized, DateTimeOffset.UtcNow);
+        var scopeChange = new IncidentCommand(legacy.Title, ["mx.sitewatch.molyneux-me"], Severity.Degraded,
+            IncidentState.Resolved, "Scope corrected", true);
+        var moved = scopeChange.Apply(legacy.Id, legacy.SiteId, legacy, DateTimeOffset.UtcNow);
+        var reopened = (scopeChange with { State = IncidentState.Investigating, Message = "New disruption" })
+            .Apply(legacy.Id, legacy.SiteId, legacy, DateTimeOffset.UtcNow);
+        var unrecorded = legacy with { PublicUpdates = legacy.PublicUpdates.Select(update => update with { Severity = null }).ToArray() };
+        if (severity != Severity.Maintenance)
+            Assert.Empty(unrecorded.ObserveImpact(unrecorded, DateTimeOffset.UtcNow).ImpactHistory);
         var live = site.EffectiveChecks.ToDictionary(check => check.Component,
             _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
-        foreach (var record in new[] { synchronized, edited })
+        foreach (var record in new[] { synchronized, edited, moved, reopened })
         {
-            Assert.Empty(record.ImpactHistory);
             var publication = new StatusMerger().Merge(site.Snapshot, live, null, [record.ToPublicIncident()], []);
             foreach (var component in Flatten(publication.Components).Where(component =>
                 component.Id is "mx.sitewatch.geo-location-web" or "mx.service.geo-location"))
             {
                 Assert.Equal("operational", component.Status);
                 var day = component.History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime));
-                Assert.Equal("outage", day.Status);
+                Assert.Equal(severity.ToApiString(), day.Status);
                 Assert.Contains(legacy.Id, day.IncidentIds!);
             }
+            var unrelated = Flatten(publication.Components).Single(component => component.Id == "mx.sitewatch.molyneux-me")
+                .History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime));
+            Assert.DoesNotContain(legacy.Id, unrelated.IncidentIds!);
         }
     }
 
