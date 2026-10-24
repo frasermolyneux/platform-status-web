@@ -153,7 +153,10 @@ liveness with database readiness. These existing App Service liveness checks,
 including GeoLocation API, run every two minutes to offset the additional Azure
 HTTP request budget. Shared GeoLocation checks execute once, not once per brand.
 The publisher reads durable observations before scheduling, retains results for
-checks not yet due, and limits simultaneous requests to five. Restarting does not
+checks not yet due, and collects at most five overdue checks per round, oldest
+deadline first. Collection and its history sample commit in one transaction.
+Each round leaves time for incident and banner publication rather than awaiting
+the entire due backlog. Restarting does not
 reset a check's schedule. HTTP-only history records components when they are
 actually observed, not on skipped collection rounds.
 Intervals are minimums; due checks run on the next publisher collection round.

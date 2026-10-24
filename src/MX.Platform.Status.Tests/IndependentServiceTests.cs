@@ -499,25 +499,70 @@ public sealed partial class IndependentServiceTests : IDisposable
                     app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
                 await normal.PublishAsync(lease, default);
                 Assert.Equal(2, http.Requests);
-                await using var expire = new Npgsql.NpgsqlCommand(
-                    "DELETE FROM status_evidence WHERE source='independent-probe' AND event_id IN ($1,$2)", lease.Connection);
-                expire.Parameters.AddWithValue($"mx/{fixture}.fast");
-                expire.Parameters.AddWithValue($"xi/{fixture}.fast");
-                await expire.ExecuteNonQueryAsync();
-                foreach (var site in catalog.Sites)
-                    await lease.SaveProbeEvidenceAsync(new(site.Site.Id, $"{site.Site.Id}.{fixture}", "Fast",
-                        "https://fast.example.test/", "publisher", DateTimeOffset.UtcNow.AddSeconds(-31),
-                        true, 200, 5000, null, $"{fixture}.fast"), default);
+                await AgeFixtureFastProbesAsync(lease, catalog, fixture);
                 await normal.PublishAsync(lease, default);
                 Assert.Equal(3, http.Requests);
+
+                var beforeFailure = await AgeFixtureFastProbesAsync(lease, catalog, fixture);
+                var constraint = "history_" + Guid.NewGuid().ToString("N");
+                await using (var rejectHistory = new Npgsql.NpgsqlCommand(
+                    $"ALTER TABLE status_probe_days ADD CONSTRAINT {constraint} CHECK (component_id <> 'mx.{fixture}') NOT VALID", lease.Connection))
+                    await rejectHistory.ExecuteNonQueryAsync();
+                try
+                {
+                    var failure = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => normal.RefreshProbesAsync(lease, default));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation, failure.SqlState);
+                    foreach (var site in catalog.Sites)
+                    {
+                        var persisted = Assert.Single(await database.ReadProbesAsync(site.Site.Id, default),
+                            probe => probe.CheckId == $"{fixture}.fast");
+                        Assert.Equal(beforeFailure, persisted.ObservedAt);
+                        var day = Assert.Single((await database.ReadHistoryAsync(site, default)).ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
+                        Assert.Equal(2, day.Total);
+                        Assert.Equal(2, day.Failed);
+                    }
+                }
+                finally
+                {
+                    await using var restore = new Npgsql.NpgsqlCommand(
+                        $"ALTER TABLE status_probe_days DROP CONSTRAINT {constraint}", lease.Connection);
+                    await restore.ExecuteNonQueryAsync();
+                }
+
+                var queuedPath = Path.Combine(_directory, "queued-catalog.json");
+                await File.WriteAllTextAsync(queuedPath, JsonSerializer.Serialize(catalog.Sites.Select(site => site with
+                {
+                    Checks = [.. site.Checks, .. (site.Site.Id == "mx"
+                        ? Enumerable.Range(0, 20).Select(index => new CheckDefinition
+                        {
+                            Id = $"{fixture}.queued-{index}", Component = $"mx.{fixture}.one-sided", Name = "Queued",
+                            Target = $"https://fast.example.test/check-{index}/", ExpectedIntervalSeconds = 300
+                        }) : [])]
+                }), StatusJson.Options));
+                using var queued = new PublicationWorker(new StatusCatalog(queuedPath), app.Services.GetRequiredService<RuntimeOptions>(),
+                    app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
+                var requestsBeforeQueue = http.Requests;
+                http.DelayMilliseconds = 4000;
+                using var publicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                await queued.PublishAsync(lease, publicationDeadline.Token);
+                Assert.Equal(requestsBeforeQueue + 5, http.Requests);
+                var queuedPublication = Assert.IsType<StatusApiResponse>(await database.ReadPublicationAsync("mx", default));
+                Assert.Equal(15, queuedPublication.Components.Single(component => component.Id == $"mx.{fixture}.one-sided")
+                    .Checks!.Count(check => check.Name == "Queued" && check.Status == "unknown"));
+                using var nextPublicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                await queued.PublishAsync(lease, nextPublicationDeadline.Token);
+                Assert.Equal(requestsBeforeQueue + 10, http.Requests);
+                var nextPublication = Assert.IsType<StatusApiResponse>(await database.ReadPublicationAsync("mx", default));
+                Assert.Equal(10, nextPublication.Components.Single(component => component.Id == $"mx.{fixture}.one-sided")
+                    .Checks!.Count(check => check.Name == "Queued" && check.Status == "unknown"));
             }
         }
         finally
         {
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
-            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id IN ($1,$2,$3,$4,$5)");
-            foreach (var key in new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow", $"mx/{fixture}.one-sided" })
-                cleanup.Parameters.AddWithValue(key);
+            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id=ANY($1)");
+            cleanup.Parameters.AddWithValue(new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow", $"mx/{fixture}.one-sided" }
+                .Concat(Enumerable.Range(0, 20).Select(index => $"mx/{fixture}.queued-{index}")).ToArray());
             await cleanup.ExecuteNonQueryAsync();
             await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4)");
             counters.Parameters.AddWithValue($"mx.{fixture}");
@@ -528,16 +573,32 @@ public sealed partial class IndependentServiceTests : IDisposable
         }
     }
 
+    private static async Task<DateTimeOffset> AgeFixtureFastProbesAsync(PublisherLease lease, StatusCatalog catalog, string fixture)
+    {
+        await using var expire = new Npgsql.NpgsqlCommand(
+            "DELETE FROM status_evidence WHERE source='independent-probe' AND event_id IN ($1,$2)", lease.Connection);
+        expire.Parameters.AddWithValue($"mx/{fixture}.fast");
+        expire.Parameters.AddWithValue($"xi/{fixture}.fast");
+        await expire.ExecuteNonQueryAsync();
+        var at = DateTimeOffset.UtcNow.AddSeconds(-31);
+        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
+            await lease.SaveProbeEvidenceAsync(new(siteId, $"{siteId}.{fixture}", "Fast",
+                "https://fast.example.test/", "publisher", at, true, 200, 5000, null, $"{fixture}.fast"), default);
+        return at;
+    }
+
     private sealed class SchedulingProbeFixture : HttpMessageHandler, IHttpClientFactory
     {
         private int _requests;
         public int Requests => Volatile.Read(ref _requests);
+        public int DelayMilliseconds { get; set; }
         public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Assert.Equal("fast.example.test", request.RequestUri!.Host);
             Interlocked.Increment(ref _requests);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            if (DelayMilliseconds > 0) await Task.Delay(DelayMilliseconds, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 

@@ -127,32 +127,30 @@ public sealed class PublicationWorker(
         foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
             previous[siteId] = await database.ReadProbesAsync(siteId, ct);
         var now = DateTimeOffset.UtcNow;
-        using var concurrency = new SemaphoreSlim(5);
         var collected = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http")
             .Select(check => (Site: site, Check: check))).GroupBy(entry =>
                 (entry.Check.SharedId, Local: entry.Check.SharedId is null ? $"{entry.Site.Site.Id}/{entry.Check.Id}" : null))
             .Where(group => group.Any(entry => entry.Check.IsDue(entry.Site.Site.Id, previous[entry.Site.Site.Id], now)))
+            .OrderBy(group => group.Min(entry => entry.Check.LatestProbe(entry.Site.Site.Id, previous[entry.Site.Site.Id])
+                ?.ObservedAt.AddSeconds(entry.Check.ExpectedIntervalSeconds) ?? DateTimeOffset.MinValue))
+            .Take(5)
             .Select(async group =>
         {
-            await concurrency.WaitAsync(ct);
-            try
+            var first = group.First();
+            var name = StatusCatalog.Flatten(first.Site.Components.Components).Single(component => component.Id == first.Check.Component).Name;
+            var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
+                first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct, first.Check.Method);
+            return group.Select(entry => observation with
             {
-                var first = group.First();
-                var name = StatusCatalog.Flatten(first.Site.Components.Components).Single(component => component.Id == first.Check.Component).Name;
-                var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
-                    first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct, first.Check.Method);
-                return group.Select(entry => observation with
-                {
-                    Site = entry.Site.Site.Id,
-                    Component = entry.Check.Component,
-                    CheckId = entry.Check.Id,
-                    Name = StatusCatalog.Flatten(entry.Site.Components.Components).Single(component => component.Id == entry.Check.Component).Name
-                }).ToArray();
-            }
-            finally { concurrency.Release(); }
+                Site = entry.Site.Site.Id,
+                Component = entry.Check.Component,
+                CheckId = entry.Check.Id,
+                Name = StatusCatalog.Flatten(entry.Site.Components.Components).Single(component => component.Id == entry.Check.Component).Name
+            }).ToArray();
         }));
         var observations = collected.SelectMany(group => group).ToArray();
         if (observations.Length == 0 && !sampleTelemetry) return;
+        await using var transaction = await lease.Connection.BeginTransactionAsync(ct);
         var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
         foreach (var site in catalog.Sites)
         {
@@ -167,6 +165,7 @@ public sealed class PublicationWorker(
                 await database.ReadChecksAsync(site.Site.Id, ct));
         }
         await RecordHistoryAsync(lease, telemetry, observations, sampleTelemetry, ct);
+        await transaction.CommitAsync(ct);
     }
 
     private async Task RecordHistoryAsync(PublisherLease lease, Dictionary<string, Dictionary<string, ComponentLiveTelemetry>> telemetry,
