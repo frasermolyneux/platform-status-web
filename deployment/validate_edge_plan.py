@@ -187,7 +187,7 @@ def validate_maps_tls(plan):
         raise ValueError("Maps TLS must preserve the existing ruleset identity.")
     unknowns = without_computed_metadata(change.get("after_unknown", {}))
     rules = unknowns.get("rules")
-    if isinstance(rules, list) and len(rules) == 2 and isinstance(rules[1], dict):
+    if len(before["rules"]) == 1 and isinstance(rules, list) and len(rules) == 2 and isinstance(rules[1], dict):
         if rules[1].get("logging") is True:
             rules[1].pop("logging")
     if contains_unknown(unknowns):

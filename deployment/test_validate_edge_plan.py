@@ -143,6 +143,10 @@ class EdgePlanTests(unittest.TestCase):
         change["after_unknown"] = {"rules": [{}, {"logging": True}]}
         change["after"]["rules"][1]["logging"] = None
         self.assertEqual(validate_maps_tls(plan), 1)
+        existing = copy.deepcopy(plan)
+        existing["resource_changes"][-1]["change"]["before"] = copy.deepcopy(change["after"])
+        with self.assertRaises(ValueError):
+            validate_maps_tls(existing)
         change["after_unknown"]["rules"][0]["logging"] = True
         with self.assertRaises(ValueError):
             validate_maps_tls(plan)
