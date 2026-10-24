@@ -91,6 +91,27 @@ public sealed class MonitoringAvailabilityTests
     }
 
     [Fact]
+    public void QueryWindowEvictionRetainsObservationIdentityWithoutHidingRegionalExpiryOrNewMeasurements()
+    {
+        var first = MonitoringAvailability.Project("mx", Check,
+            [Row("uksouth", true), Row("eastus", true), Row("westeurope", false, Now.AddMinutes(-29))], Now)!;
+        MonitoringObservation[] remaining = [Row("uksouth", true), Row("eastus", true)];
+        var repolled = MonitoringAvailability.Project("mx", Check, remaining, Now.AddMinutes(2), first)!;
+        Assert.Equal(first.ObservationKey, repolled.ObservationKey);
+        Assert.Equal(first.ObservedAt, repolled.ObservedAt);
+        Assert.Equal(ComponentStatus.Degraded, repolled.Status);
+        Assert.Equal(3, repolled.Regions.Count);
+        Assert.Equal(ComponentStatus.Unknown,
+            MonitoringAvailability.Project("mx", Check, [], Now.AddMinutes(16), repolled)!.Status);
+        var updated = MonitoringAvailability.Project("mx", Check,
+            [.. remaining, Row("westeurope", true, Now.AddMinutes(2))], Now.AddMinutes(2), repolled)!;
+        Assert.NotEqual(first.ObservationKey, updated.ObservationKey);
+        Assert.Equal(ComponentStatus.Operational, updated.Status);
+        Assert.Equal(Now.AddMinutes(2), updated.ObservedAt);
+        Assert.Equal(2, MonitoringAvailability.Project("mx", Check, remaining, Now.AddMinutes(2))!.Regions.Count);
+    }
+
+    [Fact]
     public void PublicationReclassifiesIndividualRegionalExpiryWithoutRestampingTheMeasurement()
     {
         var now = DateTimeOffset.UtcNow;

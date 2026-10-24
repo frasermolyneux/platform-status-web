@@ -97,10 +97,11 @@ internal static class MonitoringAvailability
                 cached.RegionMessages.GetValueOrDefault(region.Region)));
 
     internal static CheckResult? Project(string site, CheckDefinition check,
-        IEnumerable<MonitoringObservation> observations, DateTimeOffset now)
+        IEnumerable<MonitoringObservation> observations, DateTimeOffset now, CheckResult? cached = null)
     {
         var source = check.Monitoring ?? throw new InvalidOperationException("A monitoring reference is required.");
-        var latest = observations.Where(observation => observation.SiteId == source.SiteId
+        var latest = observations.Concat(RecoverCached(source, cached))
+            .Where(observation => observation.SiteId == source.SiteId
                 && observation.ComponentId == source.ComponentId && observation.CheckId == source.CheckId
                 && source.Regions.Contains(observation.Region, StringComparer.OrdinalIgnoreCase))
             .GroupBy(observation => observation.Region, StringComparer.OrdinalIgnoreCase)

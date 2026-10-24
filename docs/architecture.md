@@ -41,7 +41,10 @@ Fresh regional failures are projected immediately: all reporting regions failing
 is outage; partial failures or missing expected regions are degraded; no fresh
 regions is unknown. Freshness is at least 180 seconds for ingestion/poll latency,
 or three producer intervals for slow checks. Cached observation times are never
-restamped. An unavailable resource retains its prior cache without preventing
+restamped. Every refresh merges prior regional observations, including rows that
+have left Azure's query window, so eviction cannot fabricate a new history sample.
+Retained regions still age stale; only a new measurement replaces them.
+An unavailable resource retains its prior cache without preventing
 unrelated resources from refreshing. Public requests and publication never await
 Azure queries, GitHub or target HTTP requests.
 
@@ -56,7 +59,8 @@ a live input.
 
 Deploy/verify the producer before the consumer. The new image's
 `--refresh-monitoring` preflight seeds the writable cache and refuses incomplete
-fresh regional coverage before cutover. Startup rejects legacy workload probes,
+fresh regional coverage from the current successful queries, not recovered cache,
+before cutover. Startup rejects legacy workload probes,
 HTTP targets and unsupported collection fields; generic ingestion cannot overwrite
 monitoring-owned inputs. The US$15/month incremental normal-operation allowance is
 planning guidance, not a hard cap or permission to silently remove coverage.
