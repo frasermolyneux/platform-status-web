@@ -137,6 +137,27 @@ class EdgePlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_maps_tls(plan)
 
+    def test_maps_tls_accepts_only_the_new_rules_computed_logging_default(self):
+        plan = maps_tls_plan()
+        change = plan["resource_changes"][-1]["change"]
+        change["after_unknown"] = {"rules": [{}, {"logging": True}]}
+        change["after"]["rules"][1]["logging"] = None
+        self.assertEqual(validate_maps_tls(plan), 1)
+        existing = copy.deepcopy(plan)
+        existing["resource_changes"][-1]["change"]["before"] = copy.deepcopy(change["after"])
+        with self.assertRaises(ValueError):
+            validate_maps_tls(existing)
+        change["after_unknown"]["rules"][0]["logging"] = True
+        with self.assertRaises(ValueError):
+            validate_maps_tls(plan)
+        change["after_unknown"]["rules"][0].clear()
+        change["after"]["rules"][1]["logging"] = {"enabled": True}
+        with self.assertRaises(ValueError):
+            validate_maps_tls(plan)
+        change["after"]["rules"][1]["logging"] = {"enabled": False}
+        change["after_unknown"] = {}
+        self.assertEqual(validate_maps_tls(plan), 1)
+
     def test_refresh_only_preflight_validates_actual_staged_values_without_resource_changes(self):
         plan = staged_plan()
         plan["planned_values"]["root_module"] = {"resources": [

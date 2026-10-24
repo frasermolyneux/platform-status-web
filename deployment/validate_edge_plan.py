@@ -149,9 +149,10 @@ def validate_plan(plan, *, activate=False):
                     or maps["enabled"] is not True or maps["expression"] != 'http.host eq "maps.xtremeidiots.com"'
                     or maps["action_parameters"]["ssl"] != "strict"
                     or any(value is not None for key, value in maps["action_parameters"].items() if key != "ssl")
+                    or maps.get("logging") not in (None, {"enabled": False})
                     or any(value is not None for key, value in maps.items() if key not in {
                         "ref", "description", "action", "enabled", "expression", "action_parameters",
-                        "id", "version", "last_updated"})):
+                        "id", "version", "last_updated", "logging"})):
                 raise ValueError("The additional TLS rule must be strict and limited to the maps manager.")
     return sum(resource["change"]["actions"] == ["create"] for resource in managed)
 
@@ -184,8 +185,13 @@ def validate_maps_tls(plan):
         raise ValueError("Maps TLS may only append its exact rule to the existing status entrypoint.")
     if before.get("id") != after.get("id"):
         raise ValueError("Maps TLS must preserve the existing ruleset identity.")
-    if contains_unknown(without_computed_metadata(change.get("after_unknown", {}))):
-        raise ValueError("Maps TLS requires known scope and settings; only generated rule metadata may be unknown.")
+    unknowns = without_computed_metadata(change.get("after_unknown", {}))
+    rules = unknowns.get("rules")
+    if len(before["rules"]) == 1 and isinstance(rules, list) and len(rules) == 2 and isinstance(rules[1], dict):
+        if rules[1].get("logging") is True:
+            rules[1].pop("logging")
+    if contains_unknown(unknowns):
+        raise ValueError("Maps TLS requires known scope and settings except generated metadata and new-rule logging defaults.")
     old, new = without_computed_metadata(before), without_computed_metadata(after)
     expected_description = "Strict origin TLS for status sites and the maps manager."
     if new.get("description") != expected_description or old.get("description") not in (
