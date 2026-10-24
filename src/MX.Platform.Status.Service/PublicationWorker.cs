@@ -154,8 +154,6 @@ public sealed class PublicationWorker(
         var observations = collected.SelectMany(group => group).ToArray();
         if (observations.Length == 0 && !sampleTelemetry) return;
         var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
-        var observedShared = observations.Select(observation =>
-            catalog.Get(observation.Site).SharedComponents.GetValueOrDefault(observation.Component)).OfType<string>().ToHashSet();
         foreach (var site in catalog.Sites)
         {
             foreach (var observation in observations.Where(observation => observation.Site == site.Site.Id))
@@ -168,6 +166,14 @@ public sealed class PublicationWorker(
             telemetry[site.Site.Id] = ComponentChecks.Build(site, [.. previous[site.Site.Id], .. observations],
                 await database.ReadChecksAsync(site.Site.Id, ct));
         }
+        await RecordHistoryAsync(lease, telemetry, observations, sampleTelemetry, ct);
+    }
+
+    private async Task RecordHistoryAsync(PublisherLease lease, Dictionary<string, Dictionary<string, ComponentLiveTelemetry>> telemetry,
+        IReadOnlyList<ProbeObservation> observations, bool sampleTelemetry, CancellationToken ct)
+    {
+        var observedShared = observations.Select(observation =>
+            catalog.Get(observation.Site).SharedComponents.GetValueOrDefault(observation.Component)).OfType<string>().ToHashSet();
         foreach (var site in catalog.Sites)
         {
             var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);
