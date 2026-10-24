@@ -70,6 +70,10 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             CREATE TABLE IF NOT EXISTS status_evidence (
                 source text NOT NULL, event_id text NOT NULL, observed_at timestamptz NOT NULL,
                 document jsonb NOT NULL, PRIMARY KEY (source, event_id));
+            CREATE TABLE IF NOT EXISTS status_sample_cursors (
+                site_id text NOT NULL, component_id text NOT NULL,
+                fingerprint text NOT NULL, observed_at timestamptz NOT NULL,
+                PRIMARY KEY(site_id,component_id));
             CREATE TABLE IF NOT EXISTS status_banners (
                 id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 site_id text NOT NULL, revision integer NOT NULL, document jsonb NOT NULL);
@@ -505,6 +509,24 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         return result;
     }
 
+    internal async Task SaveMonitoringChecksAsync(IReadOnlyList<CheckResult> observations, CancellationToken ct)
+    {
+        await using var connection = await Writer.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        foreach (var observation in observations)
+        {
+            var validation = observation.Validate();
+            if (validation is not null) throw new InvalidDataException(validation);
+            await using var command = new NpgsqlCommand(EvidenceUpsert, connection, transaction);
+            command.Parameters.AddWithValue("check-result");
+            command.Parameters.AddWithValue($"{observation.Site}/{observation.CheckId}");
+            command.Parameters.AddWithValue(observation.ObservedAt);
+            command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(observation, StatusJson.Options));
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        await transaction.CommitAsync(ct);
+    }
+
     public async Task PruneAsync(CancellationToken ct)
     {
         await using var command = Source.CreateCommand("""
@@ -525,6 +547,30 @@ public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233
 {
     internal NpgsqlConnection Connection => connection;
 
+    internal async Task RecordMonitoringSampleAsync(string site, string component, string fingerprint,
+        DateTimeOffset observedAt, bool? success, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand("""
+            WITH advanced AS (
+                INSERT INTO status_sample_cursors VALUES($1,$2,$3,$4)
+                ON CONFLICT(site_id,component_id) DO UPDATE
+                SET fingerprint=excluded.fingerprint,observed_at=excluded.observed_at
+                WHERE status_sample_cursors.fingerprint<>excluded.fingerprint
+                    AND status_sample_cursors.observed_at<=excluded.observed_at
+                RETURNING 1)
+            INSERT INTO status_probe_days
+            SELECT $1,$2,$5,1,$6 FROM advanced WHERE $6 IS NOT NULL
+            ON CONFLICT(site_id,component_id,day) DO UPDATE
+            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures
+            """, connection);
+        command.Parameters.AddWithValue(site);
+        command.Parameters.AddWithValue(component);
+        command.Parameters.AddWithValue(fingerprint);
+        command.Parameters.AddWithValue(observedAt);
+        command.Parameters.AddWithValue(DateOnly.FromDateTime(observedAt.UtcDateTime));
+        command.Parameters.AddWithValue(NpgsqlDbType.Integer, success is null ? DBNull.Value : success.Value ? 0 : 1);
+        await command.ExecuteNonQueryAsync(ct);
+    }
     public async Task SaveProbeEvidenceAsync(ProbeObservation observation, CancellationToken ct)
     {
         await using var command = new NpgsqlCommand(PostgresStore.EvidenceUpsert, connection);

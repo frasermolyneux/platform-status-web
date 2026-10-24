@@ -12,7 +12,7 @@ namespace MX.Platform.Status.Tests;
 /// </summary>
 public sealed class TelemetryContractFixtureTests
 {
-    private static readonly string[] ConsumedDimensionNames = ["componentId", "siteId", "region"];
+    private static readonly string[] ConsumedDimensionNames = ["componentId", "siteId", "region", "checkId"];
 
     [Fact]
     public void ConsumedDimensionNames_MatchContractFixture()

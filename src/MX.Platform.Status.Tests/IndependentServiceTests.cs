@@ -377,9 +377,9 @@ public sealed partial class IndependentServiceTests : IDisposable
                 await lease.SaveProbeEvidenceAsync(probe, default);
                 var catalog = app.Services.GetRequiredService<StatusCatalog>();
                 using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
-                    app.Services.GetRequiredService<PublicationStore>(), database, app.Services.GetRequiredService<IHttpClientFactory>(),
+                    app.Services.GetRequiredService<PublicationStore>(), database,
                     NullLogger<PublicationWorker>.Instance);
-                await publisher.RefreshProbesAsync(lease, default);
+                await publisher.PublishAsync(lease, default);
                 foreach (var site in catalog.Sites)
                 {
                     var history = await database.ReadHistoryAsync(site, default);
@@ -414,11 +414,11 @@ public sealed partial class IndependentServiceTests : IDisposable
     }
 
     [PostgresFact]
-    public async Task ProbeSchedulingSurvivesRestartRetainsSlowFailuresAndCollectsSharedChecksOnce()
+    public async Task MonitoringSamplesDeduplicateAcrossRestartRollbackHistoryAndDoNotProbeWorkloads()
     {
         var connection = Path.Combine(_directory, "connection");
         File.WriteAllText(connection, Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION"));
-        var fixture = "schedule-" + Guid.NewGuid().ToString("N");
+        var fixture = "monitoring-" + Guid.NewGuid().ToString("N");
         var catalogPath = Path.Combine(_directory, "scheduling-catalog.json");
         await File.WriteAllTextAsync(catalogPath, JsonSerializer.Serialize(Catalogue().Sites.Select(site => site with
         {
@@ -426,13 +426,13 @@ public sealed partial class IndependentServiceTests : IDisposable
             Checks =
             [
                 new() { Id = $"{fixture}.fast", SharedId = $"{fixture}.fast", Component = $"{site.Site.Id}.{fixture}",
-                    Name = "Fast", Target = "https://fast.example.test/", ExpectedIntervalSeconds = 30 },
+                    Name = "Fast", ExpectedIntervalSeconds = 30 },
                 new() { Id = $"{fixture}.slow", SharedId = $"{fixture}.slow", Component = $"{site.Site.Id}.{fixture}",
-                    Name = "Slow", Target = "https://slow.example.test/", ExpectedIntervalSeconds = 300 },
+                    Name = "Slow", ExpectedIntervalSeconds = 300 },
                 .. (site.Site.Id == "mx" ? new List<CheckDefinition>
                 {
                     new() { Id = $"{fixture}.one-sided", SharedId = $"{fixture}.one-sided", Component = $"mx.{fixture}.one-sided",
-                        Name = "One-sided", Target = "https://fast.example.test/", ExpectedIntervalSeconds = 300 }
+                        Name = "One-sided", ExpectedIntervalSeconds = 300 }
                 } : [])
             ],
             Components = site.Components with
@@ -453,7 +453,8 @@ public sealed partial class IndependentServiceTests : IDisposable
         var database = app.Services.GetRequiredService<PostgresStore>();
         await database.InitializeAsync(default);
         var catalog = app.Services.GetRequiredService<StatusCatalog>();
-        using var http = new SchedulingProbeFixture();
+        Assert.DoesNotContain(typeof(PublicationWorker).GetConstructors().SelectMany(constructor => constructor.GetParameters()),
+            parameter => parameter.ParameterType == typeof(HttpClient) || parameter.ParameterType == typeof(IHttpClientFactory));
         try
         {
             PublisherLease? lease = null;
@@ -465,19 +466,25 @@ public sealed partial class IndependentServiceTests : IDisposable
             await using (lease)
             {
                 Assert.NotNull(lease);
-                foreach (var site in catalog.Sites)
-                    await lease.SaveProbeEvidenceAsync(new(site.Site.Id, $"{site.Site.Id}.{fixture}", "Slow",
-                        "https://slow.example.test/", "publisher", DateTimeOffset.UtcNow.AddSeconds(-250),
-                        false, 503, 10, "HTTP 503", $"{fixture}.slow"), default);
+                var observedAt = DateTimeOffset.UtcNow;
+                CheckResult[] initial =
+                [
+                    .. catalog.Sites.SelectMany(site => new[]
+                    {
+                        new CheckResult(site.Site.Id, $"{fixture}.fast", ComponentStatus.Operational, observedAt) { ObservationKey = "fast-1" },
+                        new CheckResult(site.Site.Id, $"{fixture}.slow", ComponentStatus.Outage, observedAt.AddSeconds(-250)) { ObservationKey = "slow-1" }
+                    }),
+                    new("mx", $"{fixture}.one-sided", ComponentStatus.Operational, observedAt) { ObservationKey = "one-sided-1" }
+                ];
+                await database.SaveMonitoringChecksAsync(initial, default);
                 for (var restart = 0; restart < 2; restart++)
                 {
                     using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
-                        app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
-                    await publisher.RefreshProbesAsync(lease, default);
-                    Assert.Equal(2, http.Requests);
+                        app.Services.GetRequiredService<PublicationStore>(), database, NullLogger<PublicationWorker>.Instance);
+                    await publisher.PublishAsync(lease, default);
                     var all = new Dictionary<string, Dictionary<string, MX.Platform.Status.App.Telemetry.ComponentLiveTelemetry>>();
                     foreach (var site in catalog.Sites)
-                        all[site.Site.Id] = ComponentChecks.Build(site, await database.ReadProbesAsync(site.Site.Id, default), []);
+                        all[site.Site.Id] = ComponentChecks.Build(site, [], await database.ReadChecksAsync(site.Site.Id, default));
                     foreach (var site in catalog.Sites)
                     {
                         var live = catalog.ProjectTelemetry(site, all);
@@ -496,27 +503,29 @@ public sealed partial class IndependentServiceTests : IDisposable
                     }
                 }
                 using var normal = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
-                    app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
+                    app.Services.GetRequiredService<PublicationStore>(), database, NullLogger<PublicationWorker>.Instance);
+                var refreshed = initial.Where(result => result.CheckId == $"{fixture}.fast")
+                    .Select(result => result with { ObservedAt = observedAt.AddMilliseconds(100), ObservationKey = "fast-2" }).ToArray();
+                await database.SaveMonitoringChecksAsync(refreshed, default);
                 await normal.PublishAsync(lease, default);
-                Assert.Equal(2, http.Requests);
-                await AgeFixtureFastProbesAsync(lease, catalog, fixture);
-                await normal.PublishAsync(lease, default);
-                Assert.Equal(3, http.Requests);
 
-                var beforeFailure = await AgeFixtureFastProbesAsync(lease, catalog, fixture);
+                var next = refreshed.Select(result => result with { ObservedAt = observedAt.AddMilliseconds(200), ObservationKey = "fast-3" }).ToArray();
+                await Assert.ThrowsAsync<InvalidDataException>(() => database.SaveMonitoringChecksAsync(
+                    [next[0], next[1] with { Detail = new string('x', 2001) }], default));
+                foreach (var result in refreshed)
+                    Assert.Equal(result.ObservationKey, Assert.Single(await database.ReadChecksAsync(result.Site, default),
+                        persisted => persisted.CheckId == result.CheckId).ObservationKey);
+                await database.SaveMonitoringChecksAsync(next, default);
                 var constraint = "history_" + Guid.NewGuid().ToString("N");
                 await using (var rejectHistory = new Npgsql.NpgsqlCommand(
                     $"ALTER TABLE status_probe_days ADD CONSTRAINT {constraint} CHECK (component_id <> 'mx.{fixture}') NOT VALID", lease.Connection))
                     await rejectHistory.ExecuteNonQueryAsync();
                 try
                 {
-                    var failure = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => normal.RefreshProbesAsync(lease, default));
+                    var failure = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => normal.PublishAsync(lease, default));
                     Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation, failure.SqlState);
                     foreach (var site in catalog.Sites)
                     {
-                        var persisted = Assert.Single(await database.ReadProbesAsync(site.Site.Id, default),
-                            probe => probe.CheckId == $"{fixture}.fast");
-                        Assert.Equal(beforeFailure, persisted.ObservedAt);
                         var day = Assert.Single((await database.ReadHistoryAsync(site, default)).ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
                         Assert.Equal(2, day.Total);
                         Assert.Equal(2, day.Failed);
@@ -528,6 +537,11 @@ public sealed partial class IndependentServiceTests : IDisposable
                         $"ALTER TABLE status_probe_days DROP CONSTRAINT {constraint}", lease.Connection);
                     await restore.ExecuteNonQueryAsync();
                 }
+                await normal.PublishAsync(lease, default);
+                await normal.PublishAsync(lease, default);
+                foreach (var site in catalog.Sites)
+                    Assert.Equal(3, Assert.Single((await database.ReadHistoryAsync(site, default))
+                        .ComponentsById[$"{site.Site.Id}.{fixture}"].Days).Total);
 
                 var queuedPath = Path.Combine(_directory, "queued-catalog.json");
                 await File.WriteAllTextAsync(queuedPath, JsonSerializer.Serialize(catalog.Sites.Select(site => site with
@@ -536,31 +550,22 @@ public sealed partial class IndependentServiceTests : IDisposable
                         ? Enumerable.Range(0, 20).Select(index => new CheckDefinition
                         {
                             Id = $"{fixture}.queued-{index}", Component = $"mx.{fixture}.one-sided", Name = "Queued",
-                            Target = $"https://fast.example.test/check-{index}/", ExpectedIntervalSeconds = 300
+                            ExpectedIntervalSeconds = 300
                         }) : [])]
                 }), StatusJson.Options));
                 using var queued = new PublicationWorker(new StatusCatalog(queuedPath), app.Services.GetRequiredService<RuntimeOptions>(),
-                    app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
-                var requestsBeforeQueue = http.Requests;
-                http.DelayMilliseconds = 4000;
-                using var publicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                    app.Services.GetRequiredService<PublicationStore>(), database, NullLogger<PublicationWorker>.Instance);
+                using var publicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 await queued.PublishAsync(lease, publicationDeadline.Token);
-                Assert.Equal(requestsBeforeQueue + 5, http.Requests);
                 var queuedPublication = Assert.IsType<StatusApiResponse>(await database.ReadPublicationAsync("mx", default));
-                Assert.Equal(15, queuedPublication.Components.Single(component => component.Id == $"mx.{fixture}.one-sided")
-                    .Checks!.Count(check => check.Name == "Queued" && check.Status == "unknown"));
-                using var nextPublicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-                await queued.PublishAsync(lease, nextPublicationDeadline.Token);
-                Assert.Equal(requestsBeforeQueue + 10, http.Requests);
-                var nextPublication = Assert.IsType<StatusApiResponse>(await database.ReadPublicationAsync("mx", default));
-                Assert.Equal(10, nextPublication.Components.Single(component => component.Id == $"mx.{fixture}.one-sided")
+                Assert.Equal(20, queuedPublication.Components.Single(component => component.Id == $"mx.{fixture}.one-sided")
                     .Checks!.Count(check => check.Name == "Queued" && check.Status == "unknown"));
             }
         }
         finally
         {
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
-            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id=ANY($1)");
+            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source='check-result' AND event_id=ANY($1)");
             cleanup.Parameters.AddWithValue(new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow", $"mx/{fixture}.one-sided" }
                 .Concat(Enumerable.Range(0, 20).Select(index => $"mx/{fixture}.queued-{index}")).ToArray());
             await cleanup.ExecuteNonQueryAsync();
@@ -570,35 +575,9 @@ public sealed partial class IndependentServiceTests : IDisposable
             counters.Parameters.AddWithValue($"mx.{fixture}.one-sided");
             counters.Parameters.AddWithValue($"xi.{fixture}.one-sided");
             await counters.ExecuteNonQueryAsync();
-        }
-    }
-
-    private static async Task<DateTimeOffset> AgeFixtureFastProbesAsync(PublisherLease lease, StatusCatalog catalog, string fixture)
-    {
-        await using var expire = new Npgsql.NpgsqlCommand(
-            "DELETE FROM status_evidence WHERE source='independent-probe' AND event_id IN ($1,$2)", lease.Connection);
-        expire.Parameters.AddWithValue($"mx/{fixture}.fast");
-        expire.Parameters.AddWithValue($"xi/{fixture}.fast");
-        await expire.ExecuteNonQueryAsync();
-        var at = DateTimeOffset.UtcNow.AddSeconds(-31);
-        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
-            await lease.SaveProbeEvidenceAsync(new(siteId, $"{siteId}.{fixture}", "Fast",
-                "https://fast.example.test/", "publisher", at, true, 200, 5000, null, $"{fixture}.fast"), default);
-        return at;
-    }
-
-    private sealed class SchedulingProbeFixture : HttpMessageHandler, IHttpClientFactory
-    {
-        private int _requests;
-        public int Requests => Volatile.Read(ref _requests);
-        public int DelayMilliseconds { get; set; }
-        public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Assert.Equal("fast.example.test", request.RequestUri!.Host);
-            Interlocked.Increment(ref _requests);
-            if (DelayMilliseconds > 0) await Task.Delay(DelayMilliseconds, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            await using var cursors = source.CreateCommand("DELETE FROM status_sample_cursors WHERE component_id=ANY($1)");
+            cursors.Parameters.AddWithValue(new[] { $"mx.{fixture}", $"xi.{fixture}", $"mx.{fixture}.one-sided", $"xi.{fixture}.one-sided" });
+            await cursors.ExecuteNonQueryAsync();
         }
     }
 

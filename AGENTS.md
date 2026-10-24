@@ -32,6 +32,22 @@ terraform -chdir=terraform validate
 
 ## Boundaries and ownership
 
+- `platform-monitoring` is the strategic monitoring owner; `platform-sitewatch-func`
+  owns endpoint targets, active measurement, cadence/retries and availability alerts.
+  This service consumes monitoring observations and owns presentation, public history,
+  incidents, notices and maintenance controls. Never add workload probes, a probe
+  scheduler or a monitoring sidecar here, including to meet a cost constraint.
+- The publication worker and public requests read cached/durable data only.
+  `MonitoringWorker` independently queries latest native App Insights observations;
+  it must not query workload endpoints or refresh old observation timestamps.
+- Keep both repositories' telemetry and monitoring-binding fixtures synchronized.
+  Producer production input validation and consumer catalogue tests must preserve
+  identities, resource aliases, regions and cadence. Deploy/verify the producer first;
+  require `--refresh-monitoring` fresh regional coverage before consumer cutover.
+- Reject legacy probe/target definitions at startup, including HTTP definitions
+  mislabelled as telemetry. Monitoring-owned checks cannot be overwritten through
+  generic check ingestion. Preserve unknown/stale semantics and atomic, deduplicated
+  sampling cursors/history across repolls, failures and restarts.
 - Backend KQL/telemetry conventions are documented in `docs/architecture.md` — read it
   before touching `src/MX.Platform.Status.App/`.
 - `staticwebapp.config.json` and `src/MX.Platform.Status.Web/dist/` are frontend build
@@ -47,8 +63,10 @@ terraform -chdir=terraform validate
 - Change application/dependency/framework versions, public contracts (API responses,
   KQL query shape, `status-pages` content schema), or generated output unless that is
   the explicit task.
-- Introduce secrets, connection strings, or hard-coded subscription IDs — auth is OIDC
-  + managed identity + Key Vault only.
+- Introduce secrets, connection strings, or hard-coded subscription IDs. Azure/CI auth
+  remains OIDC/managed identity; the on-premises monitoring consumer uses a dedicated
+  resource-scoped Entra certificate reader with its private key materialized from
+  Key Vault into the service only. Never use deployment credentials or client secrets.
 
 ## Validation
 

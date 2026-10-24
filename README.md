@@ -11,8 +11,8 @@ The target topology is two independently serving origins on `ns346663` and
 ## Availability boundary
 
 Public requests read atomic, durable publications from the origin's local disk.
-They do not query Azure, GitHub, PostgreSQL, or Entra. A publisher performs direct
-HTTPS probes, maintains observation-based history, and publishes approved incident
+They do not query Azure, GitHub, PostgreSQL, or Entra. A publisher consumes cached
+monitoring observations, maintains deduplicated history, and publishes approved incident
 and maintenance updates. The other origin copies publications from its local
 PostgreSQL standby. Missing or stale observations are **unknown**, never healthy.
 
@@ -21,10 +21,19 @@ writer, but the latest unreplicated updates may be lost. There is deliberately n
 automatic two-node write failover. Fence the former writer before any promotion.
 Both origins remain in OVH, so this does not cover an OVH-wide failure.
 
-Azure public RSS and optional certificate-authenticated Sitewatch queries run in
-a separate private evidence worker. The public Azure feed covers broad incidents,
+Sitewatch/platform-monitoring own endpoint measurement, scheduling, operational
+thresholds and alerts. A separate monitoring worker reads their latest regional
+native Application Insights results through a dedicated resource-scoped Entra
+certificate reader. Status does not probe workloads or define their targets.
+Azure public RSS runs in a separate private evidence worker. The public feed covers broad incidents,
 not complete Azure or subscription health. Secure Azure common-schema alert
 ingestion stores private evidence; it does not create public incidents.
+
+The producer and consumer share versioned telemetry/binding contracts. Production
+producer validation and status catalogue tests enforce the 31 canonical inputs
+(33 brand projections). Legacy endpoint/HTTP-check configuration is rejected at
+startup. Existing identifiers containing `.probe.` remain stable identifiers,
+not permission for status-owned collection.
 
 ## Runtime
 
@@ -70,6 +79,17 @@ Platform-owned ingress must preserve the actual HTTP `Host`. Arbitrary
 host-independent. Readiness checks local publication readability, not monitored
 service health or Azure/database reachability. An initial origin can serve an
 explicit unknown bootstrap publication before its first observation.
+
+Monitoring configuration adds `AzureCollectorClientId`, `AzureCertificatePath` and
+`AzureMonitoringResources` (logical aliases to exact Application Insights resource
+IDs). Materialize the reader's PEM certificate/private key from Key Vault as a
+read-only service-only secret; never mount deployment credentials or grant
+workspace-wide read access. Azure/credential failures retain cached observations
+without changing their measurement timestamps, then age them to unknown.
+Deploy the producer first and run the new image's `--refresh-monitoring` command
+against the writable database before cutover. It fails unless every configured
+check has fresh observations from every expected region; real measured failures
+remain valid coverage rather than being replaced by healthy defaults.
 
 ## Operations and identity
 

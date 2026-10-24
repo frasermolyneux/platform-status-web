@@ -4,35 +4,32 @@ using MX.Platform.Status.App.Telemetry;
 
 namespace MX.Platform.Status.Service;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CheckDefinition
 {
     public string Id { get; init; } = "";
     public string? SharedId { get; init; }
     public string Component { get; init; } = "";
     public string Name { get; init; } = "";
-    public string Kind { get; init; } = "http";
+    public string Kind { get; init; } = "telemetry";
     public string Method { get; init; } = "GET";
     public string? Target { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 60;
+    public MonitoringReference? Monitoring { get; init; }
 
     public string PublicId(SiteDefinition site) => SharedId
         ?? (site.SharedComponents.ContainsKey(Component) ? $"{site.Site.Id}/{Id}" : Id);
 
-    internal ProbeObservation? LatestProbe(string site, IReadOnlyList<ProbeObservation> probes) =>
-        probes.Where(probe => probe.Site == site && probe.Component == Component && probe.Target == Target && probe.Method == Method
-            && (probe.CheckId == Id || probe.CheckId is null)).MaxBy(probe => probe.ObservedAt);
-
-    internal bool IsDue(string site, IReadOnlyList<ProbeObservation> probes, DateTimeOffset now)
-    {
-        var latest = LatestProbe(site, probes);
-        return latest is null || now - latest.ObservedAt >= TimeSpan.FromSeconds(ExpectedIntervalSeconds);
-    }
 }
 
 public sealed record CheckResult(string Site, string CheckId, [property: JsonRequired] ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
 {
+    public string? ObservationKey { get; init; }
+    public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
+
     public string? Validate() => !Enum.IsDefined(Status) || Status == ComponentStatus.Maintenance
         || ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5) || ObservedAt == default || Detail?.Length > 2000
+        || ObservationKey?.Length > 128
         ? "A check requires a valid observation time and an operational, degraded, outage or unknown status." : null;
 }
 
@@ -57,15 +54,10 @@ public static class ComponentChecks
         IReadOnlyList<CheckResult> signals, DateTimeOffset now)
     {
         var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
-        var probe = check.LatestProbe(site.Site.Id, probes);
-        var at = check.Kind == "http" ? probe?.ObservedAt : signal?.ObservedAt;
-        var status = signal?.Status ?? ComponentStatus.Unknown;
-        if (check.Kind == "http")
-        {
-            status = ComponentStatus.Unknown;
-            if (probe is not null) status = probe.Success ? ComponentStatus.Operational : ComponentStatus.Outage;
-        }
-        if (at is null || now - at > TimeSpan.FromSeconds(check.ExpectedIntervalSeconds * 3) || at > now.AddMinutes(5))
+        var at = signal?.ObservedAt;
+        var status = check.Kind == "telemetry" ? signal?.Status ?? ComponentStatus.Unknown : ComponentStatus.Unknown;
+        if (at is null || now - at > TimeSpan.FromSeconds(check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3)
+            || at > now.AddMinutes(5))
             status = ComponentStatus.Unknown;
         return new(check.PublicId(site), check.Name, check.Kind, status, at);
     }
