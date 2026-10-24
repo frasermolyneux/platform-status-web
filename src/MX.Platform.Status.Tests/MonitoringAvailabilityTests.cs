@@ -91,6 +91,74 @@ public sealed class MonitoringAvailabilityTests
     }
 
     [Fact]
+    public void PublicationReclassifiesIndividualRegionalExpiryWithoutRestampingTheMeasurement()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var measuredAt = now.AddSeconds(-20);
+        var check = Check with { Component = "xi.shared", Monitoring = Check.Monitoring! with { IntervalSeconds = 30 } };
+        var cached = MonitoringAvailability.Project("xi", check,
+            [Row("uksouth", true, measuredAt), Row("eastus", true, measuredAt.AddSeconds(-170)),
+             Row("westeurope", true, measuredAt.AddSeconds(-170))], measuredAt)!;
+        Assert.Equal(ComponentStatus.Operational, cached.Status);
+        var site = new SiteDefinition { Site = new() { Id = "xi" }, Checks = [check] };
+        var published = ComponentChecks.Build(site, [], [cached])["xi.shared"].Checks.Single();
+        Assert.Equal(ComponentStatus.Degraded, published.Status);
+        Assert.Equal(measuredAt, published.ObservedAt);
+        Assert.Equal(ComponentStatus.Operational, cached.Status);
+    }
+
+    [Fact]
+    public void CachedUnavailableRegionsDoNotHideNewFailuresFromSuccessfulResources()
+    {
+        var cached = MonitoringAvailability.Project("xi", Check,
+            [Row("uksouth", true, Now.AddSeconds(-30)), Row("eastus", true, Now.AddSeconds(-30)),
+             Row("westeurope", true, Now.AddSeconds(-30))], Now)!;
+        var combined = MonitoringAvailability.Project("xi", Check,
+            MonitoringAvailability.RecoverCached(Check.Monitoring!, cached).Append(Row("eastus", false)), Now)!;
+        Assert.Equal(ComponentStatus.Degraded, combined.Status);
+        Assert.Equal(Now.AddSeconds(-30), combined.Regions.Single(region => region.Region == "uksouth").LastSeen);
+        Assert.Equal(Now, combined.Regions.Single(region => region.Region == "eastus").LastSeen);
+        Assert.Contains("eastus (HTTP 503", combined.Detail);
+        Assert.Equal(ComponentStatus.Unknown, MonitoringAvailability.CurrentStatus(Check.Monitoring!,
+            combined.Regions, Now.AddMinutes(16)));
+        Assert.Empty(MonitoringAvailability.RecoverCached(
+            Check.Monitoring! with { CheckId = "different-source" }, cached));
+    }
+
+    [Fact]
+    public void DelayedSamplesUseHistoricalMaintenanceScopeAndResolutionBoundaries()
+    {
+        var site = new SiteDefinition
+        {
+            Components = new() { Components =
+            [
+                new() { Id = "mx.group", Kind = "group", Children =
+                [
+                    new() { Id = "mx.old" }, new() { Id = "mx.new" }
+                ]}
+            ]}
+        };
+        var incident = new IncidentRecord
+        {
+            Published = true, State = IncidentState.Resolved, Severity = Severity.Maintenance, ResolvedAt = Now,
+            ImpactHistory =
+            [
+                new(Now.AddMinutes(-3), IncidentState.Monitoring, Severity.Maintenance, ["mx.group"],
+                    Now.AddMinutes(-5), Now.AddMinutes(5)),
+                new(Now.AddMinutes(-1), IncidentState.Monitoring, Severity.Maintenance, ["mx.new"],
+                    Now.AddMinutes(-5), Now.AddMinutes(5)),
+                new(Now, IncidentState.Resolved, Severity.Maintenance, ["mx.new"],
+                    Now.AddMinutes(-5), Now.AddMinutes(5))
+            ]
+        };
+        Assert.True(PublicationWorker.IsMaintained(site, "mx.old", Now.AddMinutes(-2), [incident]));
+        Assert.False(PublicationWorker.IsMaintained(site, "mx.old", Now.AddSeconds(-30), [incident]));
+        Assert.True(PublicationWorker.IsMaintained(site, "mx.new", Now.AddSeconds(-30), [incident]));
+        Assert.False(PublicationWorker.IsMaintained(site, "mx.new", Now, [incident]));
+        Assert.False(PublicationWorker.IsMaintained(site, "mx.new", Now.AddMinutes(-4), [incident]));
+    }
+
+    [Fact]
     public void QueriesAreExplicitlyScopedAndChooseLatestMeasurementsRatherThanWindowRatios()
     {
         var query = MonitoringAvailability.BuildQuery([Check.Monitoring!]);

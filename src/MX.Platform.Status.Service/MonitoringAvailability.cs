@@ -77,6 +77,25 @@ internal static class MonitoringAvailability
     private static string RequiredString(LogsTableRow row, int index) => row[index] is string { Length: > 0 } value
         ? value : throw new InvalidDataException("Monitoring observation identity is missing.");
 
+    internal static ComponentStatus CurrentStatus(MonitoringReference source,
+        IReadOnlyList<RegionAvailabilityTelemetry> regions, DateTimeOffset now)
+    {
+        var fresh = regions.Where(region => source.Regions.Contains(region.Region, StringComparer.OrdinalIgnoreCase)
+            && region.LastSeen is { } at && at <= now.AddMinutes(5)
+            && now - at <= TimeSpan.FromSeconds(source.FreshnessSeconds)).ToArray();
+        return fresh.Length == 0 ? ComponentStatus.Unknown
+            : fresh.All(region => region.Failures > 0) ? ComponentStatus.Outage
+            : fresh.Any(region => region.Failures > 0) || fresh.Length < source.Regions.Length
+                ? ComponentStatus.Degraded : ComponentStatus.Operational;
+    }
+
+    internal static IEnumerable<MonitoringObservation> RecoverCached(MonitoringReference source, CheckResult? cached) =>
+        cached?.Monitoring?.Identity != source.Identity ? [] : cached.Regions
+            .Where(region => region.LastSeen.HasValue)
+            .Select(region => new MonitoringObservation(source.SiteId, source.ComponentId, source.CheckId,
+                region.Region, region.LastSeen!.Value, region.Failures == 0,
+                cached.RegionMessages.GetValueOrDefault(region.Region)));
+
     internal static CheckResult? Project(string site, CheckDefinition check,
         IEnumerable<MonitoringObservation> observations, DateTimeOffset now)
     {
@@ -95,9 +114,9 @@ internal static class MonitoringAvailability
         var failed = fresh.Where(observation => !observation.Success).ToArray();
         var missing = source.Regions.Where(region => !fresh.Any(observation =>
             observation.Region.Equals(region, StringComparison.OrdinalIgnoreCase))).ToArray();
-        var status = fresh.Length == 0 ? ComponentStatus.Unknown
-            : failed.Length == fresh.Length ? ComponentStatus.Outage
-            : failed.Length > 0 || missing.Length > 0 ? ComponentStatus.Degraded : ComponentStatus.Operational;
+        var regions = latest.Select(observation => new RegionAvailabilityTelemetry(
+            observation.Region, 1, observation.Success ? 0 : 1, observation.ObservedAt)).ToArray();
+        var status = CurrentStatus(source, regions, now);
         var detail = $"Sitewatch via Application Insights: {fresh.Length}/{source.Regions.Length} regions reporting."
             + (failed.Length == 0 ? "" : $" Failing: {string.Join(", ", failed.Select(observation => observation.Region
                 + (string.IsNullOrWhiteSpace(observation.Message) ? "" : $" ({observation.Message[..Math.Min(180, observation.Message.Length)]})")))}.")
@@ -109,8 +128,10 @@ internal static class MonitoringAvailability
             Monitoring = source,
             ObservationKey = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(latest.Select(
                 observation => new { observation.Region, observation.ObservedAt, observation.Success })))),
-            Regions = latest.Select(observation => new RegionAvailabilityTelemetry(
-                observation.Region, 1, observation.Success ? 0 : 1, observation.ObservedAt)).ToArray()
+            Regions = regions,
+            RegionMessages = latest.Where(observation => observation.Message is not null)
+                .ToDictionary(observation => observation.Region,
+                    observation => observation.Message![..Math.Min(180, observation.Message!.Length)])
         };
     }
 }

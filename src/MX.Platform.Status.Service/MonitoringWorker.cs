@@ -68,13 +68,23 @@ public sealed class MonitoringWorker(
         }));
         var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
         var observations = batches.SelectMany(batch => batch.Rows).ToArray();
+        var cached = new Dictionary<string, CheckResult>();
+        if (unavailable.Count > 0)
+            foreach (var site in catalog.Sites)
+                foreach (var result in await database.ReadChecksAsync(site.Site.Id, ct))
+                    cached[$"{site.Site.Id}/{result.CheckId}"] = result;
         var now = DateTimeOffset.UtcNow;
-        var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null
-                && !check.Monitoring.Resources.Any(unavailable.Contains))
-            .Select(check => MonitoringAvailability.Project(site.Site.Id, check, observations, now)))
+        var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null)
+            .Select(check => MonitoringAvailability.Project(site.Site.Id, check,
+                observations.Concat(check.Monitoring!.Resources.Any(unavailable.Contains)
+                    ? MonitoringAvailability.RecoverCached(check.Monitoring, cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))
+                    : []), now)))
             .OfType<CheckResult>().ToArray();
         await database.SaveMonitoringChecksAsync(results, ct);
         if (requireCompleteRegionalCoverage)
+        {
+            if (unavailable.Count > 0)
+                throw new InvalidOperationException("Monitoring preflight could not query every required Application Insights resource.");
             foreach (var site in catalog.Sites)
                 foreach (var check in site.Checks.Where(check => check.Monitoring is not null))
                 {
@@ -85,6 +95,7 @@ public sealed class MonitoringWorker(
                         && observation.LastSeen is { } at && now - at <= TimeSpan.FromSeconds(source.FreshnessSeconds))))
                         throw new InvalidOperationException($"Fresh regional monitoring coverage is incomplete for {site.Site.Id}/{check.Id}.");
                 }
+        }
         return results.Length;
     }
 }

@@ -455,6 +455,7 @@ public sealed partial class IndependentServiceTests : IDisposable
         var catalog = app.Services.GetRequiredService<StatusCatalog>();
         Assert.DoesNotContain(typeof(PublicationWorker).GetConstructors().SelectMany(constructor => constructor.GetParameters()),
             parameter => parameter.ParameterType == typeof(HttpClient) || parameter.ParameterType == typeof(IHttpClientFactory));
+        int? maintenanceId = null;
         try
         {
             PublisherLease? lease = null;
@@ -543,6 +544,24 @@ public sealed partial class IndependentServiceTests : IDisposable
                     Assert.Equal(3, Assert.Single((await database.ReadHistoryAsync(site, default))
                         .ComponentsById[$"{site.Site.Id}.{fixture}"].Days).Total);
 
+                var maintenanceCommand = new IncidentCommand("Fixture maintenance", [$"mx.{fixture}.one-sided"],
+                    Severity.Maintenance, IncidentState.Monitoring, "Exclude the measured maintenance window", true,
+                    ScheduledStart: DateTimeOffset.UtcNow.AddMinutes(-1), ScheduledEnd: DateTimeOffset.UtcNow.AddMinutes(30));
+                var maintenance = await database.SaveIncidentAsync("mx", null, maintenanceCommand, fixture, default);
+                Assert.NotNull(maintenance);
+                maintenanceId = maintenance.Id;
+                await database.SaveMonitoringChecksAsync(
+                    [new("mx", $"{fixture}.one-sided", ComponentStatus.Operational, DateTimeOffset.UtcNow)
+                        { ObservationKey = "one-sided-maintenance" }], default);
+                Assert.NotNull(await database.SaveIncidentAsync("mx", maintenance.Id,
+                    maintenanceCommand with { Revision = maintenance.Revision, State = IncidentState.Resolved },
+                    fixture, default));
+                await normal.PublishAsync(lease, default);
+                await normal.PublishAsync(lease, default);
+                foreach (var site in catalog.Sites)
+                    Assert.Equal(1, Assert.Single((await database.ReadHistoryAsync(site, default))
+                        .ComponentsById[$"{site.Site.Id}.{fixture}.one-sided"].Days).Total);
+
                 var queuedPath = Path.Combine(_directory, "queued-catalog.json");
                 await File.WriteAllTextAsync(queuedPath, JsonSerializer.Serialize(catalog.Sites.Select(site => site with
                 {
@@ -565,6 +584,15 @@ public sealed partial class IndependentServiceTests : IDisposable
         finally
         {
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
+            if (maintenanceId is { } id)
+            {
+                await using var incidentCleanup = source.CreateCommand("""
+                    WITH removed AS (DELETE FROM status_audit WHERE incident_id=$1)
+                    DELETE FROM status_incidents WHERE id=$1;
+                    """);
+                incidentCleanup.Parameters.AddWithValue(id);
+                await incidentCleanup.ExecuteNonQueryAsync();
+            }
             await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source='check-result' AND event_id=ANY($1)");
             cleanup.Parameters.AddWithValue(new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow", $"mx/{fixture}.one-sided" }
                 .Concat(Enumerable.Range(0, 20).Select(index => $"mx/{fixture}.queued-{index}")).ToArray());

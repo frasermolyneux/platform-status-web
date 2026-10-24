@@ -29,6 +29,7 @@ public sealed record CheckResult(string Site, string CheckId, [property: JsonReq
     public MonitoringReference? Monitoring { get; init; }
     public string? ObservationKey { get; init; }
     public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
+    public IReadOnlyDictionary<string, string> RegionMessages { get; init; } = new Dictionary<string, string>();
 
     public string? Validate() => !Enum.IsDefined(Status) || Status == ComponentStatus.Maintenance
         || ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5) || ObservedAt == default || Detail?.Length > 2000
@@ -59,6 +60,8 @@ public static class ComponentChecks
         var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
         var at = signal?.ObservedAt;
         var status = check.Kind == "telemetry" ? signal?.Status ?? ComponentStatus.Unknown : ComponentStatus.Unknown;
+        if (check.Monitoring is { } source && signal is { Regions.Count: > 0 })
+            status = MonitoringAvailability.CurrentStatus(source, signal.Regions, now);
         if (at is null || now - at > TimeSpan.FromSeconds(check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3)
             || at > now.AddMinutes(5))
             status = ComponentStatus.Unknown;

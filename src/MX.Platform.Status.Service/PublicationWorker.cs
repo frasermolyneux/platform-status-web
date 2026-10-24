@@ -134,9 +134,9 @@ public sealed class PublicationWorker(
                 var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(inputs.Select(input =>
                     new { input.Identity, Key = input.Signal.ObservationKey
                         ?? $"{input.Signal.ObservedAt:O}/{input.Signal.Status}" }), StatusJson.Options)));
-                await lease.RecordMonitoringSampleAsync(site.Site.Id, component, fingerprint,
-                    inputs.Max(input => input.Signal.ObservedAt),
-                    IsMaintained(site, component, DateTimeOffset.UtcNow, incidents) ? null : sample.Failures == 0, ct);
+                var observedAt = inputs.Max(input => input.Signal.ObservedAt);
+                await lease.RecordMonitoringSampleAsync(site.Site.Id, component, fingerprint, observedAt,
+                    IsMaintained(site, component, observedAt, incidents) ? null : sample.Failures == 0, ct);
             }
         }
         await transaction.CommitAsync(ct);
@@ -145,13 +145,26 @@ public sealed class PublicationWorker(
     private static string InputIdentity(SiteDefinition site, CheckDefinition check) =>
         check.Monitoring?.Identity ?? check.SharedId ?? $"{site.Site.Id}/{check.Id}";
 
-    private static bool IsMaintained(SiteDefinition site, string componentId, DateTimeOffset at, IReadOnlyList<IncidentRecord> incidents) =>
-        incidents.Any(incident => incident.Published && incident.Severity == Severity.Maintenance
-            && incident.State != IncidentState.Resolved && incident.ScheduledStart <= at
-            && incident.ScheduledEnd > at
-            && incident.Components.Any(id => StatusCatalog.PublicComponents(site.Components.Components)
-                .Where(component => component.Id == id).SelectMany(component => StatusCatalog.PublicComponents([component]))
-                .Any(component => component.Id == componentId)));
+    internal static bool IsMaintained(SiteDefinition site, string componentId, DateTimeOffset at,
+        IReadOnlyList<IncidentRecord> incidents)
+    {
+        var scopes = StatusCatalog.PublicComponents(site.Components.Components)
+            .Where(component => StatusCatalog.PublicComponents([component]).Any(child => child.Id == componentId))
+            .Select(component => component.Id).ToHashSet();
+        return incidents.Where(incident => incident.Published && !(incident.ResolvedAt <= at)).Any(incident =>
+        {
+            if (incident.ImpactHistory.Count == 0)
+                return incident.Severity == Severity.Maintenance && incident.StartedAt <= at
+                    && incident.ScheduledStart <= at && incident.ScheduledEnd > at
+                    && incident.Components.Any(scopes.Contains);
+            return incident.ImpactHistory.Where(observation => observation.At <= at)
+                .GroupBy(observation => observation.SourceSite)
+                .Select(source => source.MaxBy(observation => observation.At)!)
+                .Any(observation => observation.State != IncidentState.Resolved && observation.Severity == Severity.Maintenance
+                    && observation.ScheduledStart <= at && observation.ScheduledEnd > at
+                    && observation.Components.Any(scopes.Contains));
+        });
+    }
 
     internal static StatusApiResponse CorrectTodayHistory(StatusApiResponse publication, HistoryDocument history) =>
         publication with { Components = publication.Components.Select(c => CorrectComponent(c, history)).ToArray() };
