@@ -70,7 +70,7 @@ export interface MaintenanceDto {
 }
 
 export async function fetchStatus(): Promise<StatusResponse> {
-  const res = await fetch('/api/status', { cache: 'no-store' });
+  const res = await fetch('/api/status', { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Status API returned ${res.status}`);
   return res.json();
 }

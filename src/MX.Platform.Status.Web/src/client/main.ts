@@ -5,6 +5,7 @@ import { renderOverview, renderComponent, renderIncident, renderHistory } from '
 
 let generation = 0;
 let loading = false;
+let renderedPath: string | undefined;
 
 async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<void> {
   const requestGeneration = ++generation;
@@ -17,7 +18,15 @@ async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<
     const tagline = document.getElementById('site-tagline');
     if (title) title.textContent = data.site.displayName;
     if (tagline) tagline.textContent = data.site.tagline || '';
+    const app = document.getElementById('app');
+    const active = renderedPath === location.pathname ? document.activeElement : null;
+    const href = app?.contains(active) && active?.tagName === 'A' ? active.getAttribute('href') : null;
+    const links = app ? Array.from(app.querySelectorAll('a')) : [];
+    const position = links.filter(link => link.getAttribute('href') === href).findIndex(link => link === active);
     renderer(data);
+    renderedPath = location.pathname;
+    if (app && href && position >= 0)
+      Array.from(app.querySelectorAll('a')).filter(link => link.getAttribute('href') === href)[position]?.focus({ preventScroll: true });
   } catch (err) {
     if (requestGeneration !== generation) return;
     const app = document.getElementById('app');

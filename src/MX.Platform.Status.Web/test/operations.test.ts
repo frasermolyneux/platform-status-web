@@ -13,6 +13,8 @@ let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
 let trafficReadStarted = 0;
 let rejectTrafficRead = false;
+let incidentReadGate: Promise<void> | undefined;
+let incidentReads = 0;
 function trafficRow(mode = 'normal', revision = 0,
   lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
@@ -64,6 +66,8 @@ beforeEach(() => {
   trafficReadGate = undefined;
   trafficReadStarted = 0;
   rejectTrafficRead = false;
+  incidentReadGate = undefined;
+  incidentReads = 0;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
@@ -86,6 +90,10 @@ beforeEach(() => {
       if (reject) throw new Error('Stale refresh failure');
       return Response.json({ enabled: true, hosts,
         quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null } });
+    }
+    if (path === '/api/ops/incidents') {
+      incidentReads++;
+      await incidentReadGate;
     }
     const fixtures: Record<string, unknown> = {
       '/api/auth/config': { enabled: true, clientId: 'client', tenantId: 'tenant', scope: 'Status.Access' },
@@ -340,6 +348,34 @@ test('incident workspaces refresh automatically without replacing an unsaved edi
   assert.equal(document.querySelector('form'), editor);
   assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Keep this unsaved title');
   assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New incident')!.disabled === false);
+});
+
+test('automatic workspace refresh preserves keyboard focus before and during a pending read', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  await renderOperations();
+  const root = document.querySelector('#app')!;
+  const management = document.querySelector<HTMLAnchorElement>('#operator-incidents a[href*="/issues/1"]')!;
+  const refreshButton = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh workspace')!;
+  management.focus();
+  const initialReads = incidentReads;
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(incidentReads, initialReads);
+  assert.equal(document.activeElement, management);
+  management.blur();
+  let finish!: () => void;
+  incidentReadGate = new Promise(resolve => { finish = resolve; });
+  writerWritable = false;
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await until(() => incidentReads > initialReads);
+  management.focus();
+  finish();
+  await until(() => !refreshButton.disabled);
+  assert.equal(document.activeElement, management);
+  assert.ok(management.isConnected);
+  management.blur();
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await until(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New incident')!.disabled);
 });
 
 test('conflicts and expired sessions preserve the unsaved form and its tab-scoped draft', async () => {

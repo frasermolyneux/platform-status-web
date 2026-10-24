@@ -81,7 +81,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     notice.className = `operator-notice${error ? ' error' : ''}`;
   };
   try {
-    const configuration = await fetch('/api/auth/config', { cache: 'no-store' });
+    const configuration = await fetch('/api/auth/config', { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
     if (!configuration.ok) throw new Error('Authentication configuration is unavailable. Public status is unaffected.');
     const config: { enabled: boolean; clientId: string; tenantId: string; scope: string } = await configuration.json();
     if (!config.enabled) {
@@ -137,7 +137,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       const headers = new Headers(init?.headers);
       headers.set('Authorization', `Bearer ${token}`);
       headers.set('Content-Type', 'application/json');
-      const response = await fetch(path, { ...init, headers, cache: 'no-store' });
+      const response = await fetch(path, { ...init, headers, cache: 'no-store',
+        signal: init?.signal ?? (init?.method && init.method !== 'GET' ? undefined : AbortSignal.timeout(10_000)) });
       if (!response.ok) {
         if (response.status === 401) reauthenticate();
         if (response.status === 403) throw new Error('Your account does not have the required status role. Contact an administrator.');
@@ -593,7 +594,11 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       const archivedFilter = element('input');
       archivedFilter.type = 'checkbox';
       archivedFilter.checked = showArchived;
-      archivedFilter.addEventListener('change', () => { showArchived = archivedFilter.checked; renderLists(); });
+      archivedFilter.addEventListener('change', () => {
+        showArchived = archivedFilter.checked;
+        renderLists();
+        bannerSection.querySelector<HTMLInputElement>('[name="showArchived"]')?.focus();
+      });
       field(bannerSection, 'Show archived notices', archivedFilter, 'showArchived');
       if (!banners.length) bannerSection.append(element('p', 'No announcements. Create a banner for important notices that do not need an incident.', 'empty-state'));
       for (const banner of banners.filter(banner => showArchived || !banner.archived)) {
@@ -615,13 +620,19 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       if (page === 'incidents') renderEvidenceDrafts();
     }
 
-    async function refreshData(): Promise<void> {
+    function interactingWithWorkspace(): boolean {
+      return !editor.hidden || incidentSection.contains(document.activeElement) || bannerSection.contains(document.activeElement);
+    }
+
+    async function refreshData(automatic = false): Promise<void> {
       refresh.disabled = true;
       try {
         const responses = await Promise.all([
           request('/api/ops/incidents'), request('/api/ops/banners'), request('/api/ops/runtime'), request('/api/ops/evidence'), request('/api/ops/health'),
         ]);
-        [incidents, banners, runtime, evidence, health] = await Promise.all(responses.map(response => response.json()));
+        const latest = await Promise.all(responses.map(response => response.json()));
+        if (automatic && interactingWithWorkspace()) return;
+        [incidents, banners, runtime, evidence, health] = latest;
         if (current()) {
           renderLists();
           await refreshTraffic?.();
@@ -633,8 +644,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     }
     renderLists();
     const autoRefresh = (): void => {
-      if (current() && editor.hidden && !refresh.disabled && (page === 'incidents' || page === 'banners'))
-        void refreshData().catch(error => message(error instanceof Error ? error.message : 'Automatic refresh failed.', true));
+      if (current() && !interactingWithWorkspace() && !refresh.disabled && (page === 'incidents' || page === 'banners'))
+        void refreshData(true).catch(error => message(error instanceof Error ? error.message : 'Automatic refresh failed.', true));
     };
     root.addEventListener('status:refresh-workspace', autoRefresh);
     removeWorkspaceRefresh = () => root.removeEventListener('status:refresh-workspace', autoRefresh);
