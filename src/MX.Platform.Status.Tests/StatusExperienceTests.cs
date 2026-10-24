@@ -164,6 +164,37 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void SharedHistoricalScopesDoNotReactivateComponentsAfterBothBrandsMoveTheIncidentElsewhere()
+    {
+        var catalog = Catalogue();
+        var started = DateTimeOffset.UtcNow.AddDays(-1);
+        var command = new IncidentCommand("Shared incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Shared impact", true);
+        var mx = command.Apply(70, "mx", null, started);
+        mx = (command with { Components = ["mx.sitewatch.molyneux-me"] }).Apply(70, "mx", mx, started.AddHours(1));
+        command = command with { Components = ["xi.sitewatch.geo-location-web"] };
+        var xi = command.Apply(71, "xi", null, started);
+        xi = (command with { Components = ["xi.sitewatch.server-events"] }).Apply(71, "xi", xi, started.AddHours(1));
+        const string source = "https://github.com/frasermolyneux/status-pages/issues/45";
+        foreach (var siteId in new[] { "mx", "xi" })
+        {
+            var site = catalog.Get(siteId);
+            var geoId = $"{siteId}.sitewatch.geo-location-web";
+            var currentId = siteId == "mx" ? "mx.sitewatch.molyneux-me" : "xi.sitewatch.server-events";
+            var projected = Assert.Single(catalog.ProjectIncidents(site, [mx with { SourceUrl = source }, xi with { SourceUrl = source }]));
+            Assert.Equal([currentId], projected.Components);
+            var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+                _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+            var publication = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()], []);
+            var components = Flatten(publication.Components).ToDictionary(component => component.Id);
+            Assert.Equal("outage", components[currentId].Status);
+            Assert.Equal("operational", components[geoId].Status);
+            Assert.Empty(components[geoId].OpenIncidentIds!);
+            Assert.Equal("outage", components[geoId].History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime)).Status);
+        }
+    }
+
+    [Fact]
     public void MultipleChecksAggregateWithoutHidingMissingSignalsAndShareGeoLocationAcrossBrandHierarchy()
     {
         var catalog = Catalogue();

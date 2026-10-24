@@ -182,16 +182,18 @@ public sealed class StatusCatalog
     }
 
     public IReadOnlyList<IncidentRecord> ProjectIncidents(SiteDefinition target, IEnumerable<IncidentRecord> records) =>
-        records.OrderByDescending(record => record.Published).ThenByDescending(record => record.SiteId == target.Site.Id)
-            .Select(record => ProjectIncident(target, record)).Where(record => record is not null)
+        records.Select(record => ProjectIncident(target, record)).Where(record => record is not null)
             .Select(record => record!)
+            .OrderByDescending(record => record.Published).ThenBy(record => record.State == IncidentState.Resolved)
+            .ThenByDescending(record => record.SiteId == target.Site.Id)
             .GroupBy(record => record.SourceUrl ?? $"incident:{record.Id}")
             .Select(group =>
             {
                 var incident = group.First();
                 return incident with
                 {
-                    Components = group.Where(record => record.Published == incident.Published)
+                    Components = group.Where(record => record.Published == incident.Published
+                        && (incident.State == IncidentState.Resolved || record.State != IncidentState.Resolved))
                         .SelectMany(record => record.Components).Distinct().ToArray(),
                     ImpactHistory = group.Where(record => record.Published == incident.Published)
                         .SelectMany(record => record.ImpactHistory.Select(observation => observation with { SourceSite = record.SiteId })).ToArray(),
