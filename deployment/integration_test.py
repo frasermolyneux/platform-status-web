@@ -29,6 +29,12 @@ def wait_for(check, description, seconds=180):
     raise AssertionError(f"Timed out waiting for {description}")
 
 
+def flatten_components(components):
+    for component in components:
+        yield component
+        yield from flatten_components(component.get("children", []))
+
+
 def database_sql(container, sql):
     return docker("exec", "--interactive", container, "sh", "-ec",
                   'PGCONNECT_TIMEOUT=5 PGPASSWORD="$(cat /run/secrets/app-password)" psql '
@@ -165,7 +171,7 @@ def verify_historic_thresholds(container, urls):
     for label, url in urls.items():
         def correct_history():
             publication = request(url, "/api/status")[1]
-            components = {component["id"]: component for component in publication.get("components", [])}
+            components = {component["id"]: component for component in flatten_components(publication.get("components", []))}
             for component, status in expected.items():
                 days = components.get(component, {}).get("history", [])
                 sample = next((sample for sample in days if sample["date"] == day), None)
@@ -213,8 +219,10 @@ def main():
                 (root / "secrets" / filename).chmod(0o640)
             catalog_path = Path(__file__).resolve().parents[1] / "src" / "MX.Platform.Status.Service" / "catalog.json"
             catalog = json.loads(catalog_path.read_text())
-            for component, degraded in zip(catalog[0]["components"]["components"][:2], (0.95, 0.8)):
-                component["sla"] = {"outageBelow": 0.5, "degradedBelow": degraded}
+            thresholds = {"mx.sitewatch.molyneux-me": 0.95, "mx.sitewatch.geo-location-web": 0.8}
+            for component in flatten_components(catalog[0]["components"]["components"]):
+                if component["id"] in thresholds:
+                    component["sla"] = {"outageBelow": 0.5, "degradedBelow": thresholds[component["id"]]}
             for directory, role, peer in (
                 ("writer-node", "primary", "100.120.200.11"),
                 ("reader-node", "standby", "100.120.200.10"),
@@ -280,7 +288,7 @@ def main():
                 f"Host=127.0.0.1;Port={connection_port};Database=status;Username=status_app;"
                 f"Password={credentials['app-password']}"
             )
-            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "ProbeDiagnosticsPersist",
+            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "GitHubOutboxPublishes", "GitHubOutboxReviews", "ProbeDiagnosticsPersist",
                             "TrafficControlsPersist", "TrafficFailuresRemain", "TrafficConcurrencyRejects")
             native_results = root / "native-results"
             subprocess.run([
@@ -314,7 +322,7 @@ def main():
                              for item in request(url, "/api/status", host)[1].get("incidents", [])),
                              f"{label}/{site} shared incident replication", seconds=30)
                     publication = request(url, "/api/status", host)[1]
-                    component = next(item for item in publication["components"]
+                    component = next(item for item in flatten_components(publication["components"])
                                      if item["id"] == f"{site}.sitewatch.geo-location-web")
                     assert component["status"] == "outage"
                     assert record["id"] in component["openIncidentIds"]
@@ -322,8 +330,8 @@ def main():
             assert time.monotonic() - started < 30, "Shared incident publication must not wait for the probe interval."
             command.update(revision=record["revision"], severity="degraded", state="identified",
                            message="Identified the cause; service remains degraded")
-            docker("exec", "--interactive", f"{name}-public", "dotnet", "MX.Platform.Status.Service.dll",
-                   "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command))
+            record = json.loads(docker("exec", "--interactive", f"{name}-public", "dotnet", "MX.Platform.Status.Service.dll",
+                   "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command)))
             for label, url in urls.items():
                 for host in ("mxstatus.io", "status.xtremeidiots.com"):
                     def updated():
@@ -335,6 +343,32 @@ def main():
                                     if item["id"] == record["id"])
                     assert [update["severity"] for update in incident["updates"]] == ["outage", "degraded"]
                     assert [update["state"] for update in incident["updates"]] == ["investigating", "identified"]
+            command.update(revision=record["revision"], state="resolved", message="Declared incident resolved")
+            record = json.loads(docker("exec", "--interactive", f"{name}-replica", "dotnet", "MX.Platform.Status.Service.dll",
+                                       "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command)))
+            today = datetime.now(timezone.utc).date().isoformat()
+            for label, url in urls.items():
+                for host, site in (("mxstatus.io", "mx"), ("status.xtremeidiots.com", "xi")):
+                    def resolved_history():
+                        publication = request(url, "/api/status", host)[1]
+                        incident = next(item for item in publication["incidents"] if item["id"] == record["id"])
+                        if incident["state"] != "resolved":
+                            return False
+                        components = list(flatten_components(publication["components"]))
+                        component = next(item for item in components if item["id"] == f"{site}.sitewatch.geo-location-web")
+                        assert record["id"] not in component["openIncidentIds"]
+                        expected_status = next(status for status in ("outage", "degraded", "unknown", "operational")
+                                               if any(check["status"] == status for check in component["checks"]))
+                        assert component["status"] == expected_status
+                        for affected in (component, next(item for item in components
+                            if item["id"] == ("mx.service.geo-location" if site == "mx" else "xi.service.portal"))):
+                            day = next(day for day in affected["history"] if day["date"] == today)
+                            assert day["status"] == "outage" and record["id"] in day["incidentIds"]
+                        return True
+                    wait_for(resolved_history, f"{label}/{site} resolved impact retained historically", seconds=30)
+            command.update(revision=record["revision"], state="identified", message="Continuing degradation investigation")
+            record = json.loads(docker("exec", "--interactive", f"{name}-public", "dotnet", "MX.Platform.Status.Service.dll",
+                                       "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command)))
             now = datetime.now(timezone.utc)
             maintenance = {
                 "title": "Integration maintenance", "components": ["mx.sitewatch.molyneux-me"],
@@ -394,9 +428,10 @@ def main():
                 WHERE original.id={int(record['id'])};
                 """)
             for label, url in urls.items():
-                wait_for(lambda: len(request(url, "/api/status")[1].get("incidents", [])) == 1002,
-                         f"{label} active records preserved beyond historical and draft limits")
+                wait_for(lambda: len(request(url, "/api/status")[1].get("incidents", [])) == 1003,
+                         f"{label} active records and all recent history preserved beyond draft limits")
                 publication = request(url, "/api/status")[1]
+                assert sum(item["title"] == "Historic integration incident" for item in publication["incidents"]) == 1001
                 assert {record["id"], maintenance_record["id"]}.issubset(
                     {item["id"] for item in publication["incidents"]})
                 assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(publication)

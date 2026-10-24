@@ -8,6 +8,7 @@ let rejectSave = false;
 let loginCount = 0;
 let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
+let existingIncidents: unknown[] = [];
 let saveGate: Promise<void> | undefined;
 let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
@@ -15,6 +16,7 @@ let trafficReadStarted = 0;
 let rejectTrafficRead = false;
 let incidentReadGate: Promise<void> | undefined;
 let incidentReads = 0;
+let reviewSourceUnavailable = false;
 function trafficRow(mode = 'normal', revision = 0,
   lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
@@ -60,6 +62,11 @@ beforeEach(() => {
   writes.length = loginCount = 0;
   existingBanners = [];
   existingHealth = [];
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
+    title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
+  }];
   saveGate = undefined;
   writerWritable = true;
   trafficRows = [trafficRow()];
@@ -68,6 +75,7 @@ beforeEach(() => {
   rejectTrafficRead = false;
   incidentReadGate = undefined;
   incidentReads = 0;
+  reviewSourceUnavailable = false;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
@@ -95,6 +103,14 @@ beforeEach(() => {
       incidentReads++;
       await incidentReadGate;
     }
+    if (path === '/api/ops/incidents/1/github') return Response.json({
+      operationId: 'queued-operation', revision: 3, remoteVersion: 'reviewed-version',
+      sourceUnavailable: reviewSourceUnavailable,
+      sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
+      sourceError: 'The GitHub issue is missing or inaccessible. Restore issue or App access before retrying. Local status updates remain available.',
+      localMessage: 'Approved local update', remote: { number: 1, title: 'Remote correction',
+        body: '<script>REMOTE_TEXT_ONLY</script>', labels: ['status:incident'], updatedAt: timestamp, comments: [] },
+    });
     const fixtures: Record<string, unknown> = {
       '/api/auth/config': { enabled: true, clientId: 'client', tenantId: 'tenant', scope: 'Status.Access' },
       '/api/status': {
@@ -102,11 +118,7 @@ beforeEach(() => {
         components: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website', kind: 'leaf', children: [] }],
       },
       '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
-      '/api/ops/incidents': [{
-        id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
-        title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
-        sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
-      }],
+      '/api/ops/incidents': existingIncidents,
       '/api/ops/banners': existingBanners,
       '/api/ops/health': existingHealth,
       '/api/ops/evidence': [{
@@ -281,6 +293,134 @@ test('operator dashboard renders useful private evidence, filters signals and li
   await renderOperations();
   assert.equal(document.querySelector<HTMLAnchorElement>('.management-row a')?.href, 'https://github.com/frasermolyneux/status-pages/issues/1');
   assert.equal(document.querySelector('#operator-evidence'), null);
+});
+
+test('new incidents default to GitHub and retain one operation across draft restoration and failed submissions', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  await renderOperations();
+  click('New incident');
+  setValue('title', 'Approved incident');
+  setValue('message', 'Approved public update');
+  setValue('components', 'mx.sitewatch.molyneux-me');
+  const operation = document.querySelector<HTMLInputElement>('[name="operationId"]')!.value;
+  assert.equal(document.querySelector<HTMLSelectElement>('[name="delivery"]')!.value, 'github');
+  await renderOperations();
+  click('New incident');
+  assert.equal(document.querySelector<HTMLInputElement>('[name="operationId"]')!.value, operation);
+  rejectSave = true;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLButtonElement>('form button[type="submit"]')?.disabled === false);
+  rejectSave = false;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 2);
+  assert.equal(writes[0].body.delivery, 'github');
+  assert.equal(writes[0].body.operationId, operation);
+  assert.equal(writes[1].body.operationId, operation);
+});
+
+test('local emergency publication does not send a GitHub operation', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  await renderOperations();
+  click('New incident');
+  setValue('title', 'Local incident');
+  setValue('message', 'Approved public update');
+  setValue('components', 'mx.sitewatch.molyneux-me');
+  setValue('delivery', 'local');
+  document.querySelector<HTMLInputElement>('[name="published"]')!.checked = true;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.equal(writes[0].body.delivery, 'local');
+  assert.equal(writes[0].body.published, true);
+  assert.equal(writes[0].body.operationId, undefined);
+});
+
+for (const deferred of [false, true]) test(`queued incidents retain GitHub delivery after ${deferred ? 'deferred' : 'immediate'} draft restoration`, async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'], title: 'Queued incident',
+    state: 'investigating', severity: 'outage', published: true, gitHub: { state: 'pending', error: 'GitHub is unavailable' },
+  }];
+  await renderOperations();
+  assert.match(document.body.textContent || '', /GitHub delivery: pending.*GitHub is unavailable/);
+  const savedOperation = crypto.randomUUID();
+  sessionStorage.setItem('status-draft:test-account:mx:incident:1', JSON.stringify({
+    revision: deferred ? 0 : 1, values: { delivery: 'local', message: 'Next public update', operationId: savedOperation },
+  }));
+  click('Edit incident');
+  if (deferred) click('Restore older draft');
+  const delivery = document.querySelector<HTMLSelectElement>('[name="delivery"]')!;
+  assert.equal(delivery.value, 'github');
+  assert.equal(delivery.disabled, true);
+  const operation = document.querySelector<HTMLInputElement>('[name="operationId"]')!.value;
+  if (deferred) assert.notEqual(operation, savedOperation);
+  else assert.equal(operation, savedOperation);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.equal(writes[0].body.delivery, 'github');
+});
+
+test('shared delivery conflicts route to the owning brand instead of a peer review endpoint', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Shared incident',
+    state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
+    gitHub: { state: 'conflict', siteId: 'xi', incidentId: 4 },
+  }];
+  await renderOperations();
+  assert.equal(Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Review GitHub delivery'), false);
+  assert.equal(document.querySelector<HTMLAnchorElement>('a[href*="status.xtremeidiots.com/ops/incidents"]')?.href,
+    'https://status.xtremeidiots.com/ops/incidents#incident-4');
+});
+
+test('GitHub conflict review renders remote content safely and requires operation- and version-pinned confirmation', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Conflicting incident',
+    state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1', gitHub: { state: 'conflict' },
+  }];
+  await renderOperations();
+  click('Review GitHub delivery');
+  await until(() => document.querySelector('[name="confirmed"]') !== null);
+  assert.equal(document.querySelector('pre script'), null);
+  assert.match(document.body.textContent || '', /REMOTE_TEXT_ONLY/);
+  const confirmed = document.querySelector<HTMLInputElement>('[name="confirmed"]')!;
+  assert.equal(confirmed.checked, false);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.body.textContent?.includes('explicitly confirm') === true);
+  assert.equal(writes.length, 0);
+  confirmed.checked = true;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.equal(writes[0].path, '/api/ops/incidents/1/github/retry');
+  assert.deepEqual(writes[0].body, {
+    revision: 3, remoteVersion: 'reviewed-version', operationId: 'queued-operation', confirmed: true,
+  });
+});
+
+test('missing GitHub sources expose recovery guidance without offering duplicate creation or retry', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Missing source',
+    state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1', gitHub: { state: 'review' },
+  }];
+  reviewSourceUnavailable = true;
+  await renderOperations();
+  click('Review GitHub delivery');
+  await until(() => document.body.textContent?.includes('source unavailable') === true);
+  assert.match(document.body.textContent || '', /missing or inaccessible/);
+  assert.equal(document.querySelector('[name="confirmed"]'), null);
+  assert.equal(document.querySelector('form'), null);
+  assert.equal(document.querySelector<HTMLAnchorElement>('a[href="https://github.com/frasermolyneux/status-pages/issues/1"]')?.href,
+    'https://github.com/frasermolyneux/status-pages/issues/1');
+  assert.equal(writes.length, 0);
+  reviewSourceUnavailable = false;
+  click('Recheck GitHub access');
+  await until(() => document.querySelector('[name="confirmed"]') !== null);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="confirmed"]')!.checked, false);
+  assert.equal(writes.length, 0);
 });
 
 test('banner editor previews untrusted text safely and sends explicit brand-scoped publication', async () => {

@@ -20,6 +20,7 @@
         {"id": "configuration", "target": "/node", "readOnly": true}
       ],
       "secrets": [
+        {"id": "github-incidents-private-key", "target": "github-incidents-private-key"},
         {"id": "app-password", "target": "app-password"},
         {"id": "traffic-configuration", "target": "traffic-configuration"},
         {"id": "traffic-api-token", "target": "traffic-api-token"}

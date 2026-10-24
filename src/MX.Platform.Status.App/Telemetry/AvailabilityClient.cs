@@ -122,6 +122,8 @@ public sealed class AvailabilityClient
 
 public sealed record ComponentLiveTelemetry(int Samples, int Failures, DateTimeOffset? LastSeen, double? P95)
 {
+    public IReadOnlyList<MX.Platform.Status.App.Models.CheckTelemetry> Checks { get; init; } = [];
+
     /// <summary>
     /// Per-region breakdown backing regional status classification (see
     /// <see cref="ComponentStatusCalculator.ClassifyLiveStatusRegional"/>). Empty when the component

@@ -14,6 +14,393 @@ public sealed class StatusExperienceTests
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
     private static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
 
+    [Fact]
+    public void ExplicitChecksReplaceLegacyProbesForTheirComponentWhileOtherLegacyProbesRemainAvailable()
+    {
+        var site = Catalogue().Get("mx") with
+        {
+            Checks = [new() { Id = "queue", Name = "Queue delay", Component = "mx.sitewatch.geo-location-web", Kind = "telemetry" }]
+        };
+        var queue = Assert.Single(site.EffectiveChecks, check => check.Component == "mx.sitewatch.geo-location-web");
+        Assert.Equal("telemetry", queue.Kind);
+        Assert.Equal("queue", queue.Id);
+        Assert.Contains(site.EffectiveChecks, check => check.Component == "mx.sitewatch.molyneux-me" && check.Kind == "http");
+    }
+
+    [Theory]
+    [InlineData("operational")]
+    [InlineData("unknown")]
+    public void ConfiguredChecksOverrideStaticSourceFallbackAndBubbleUpToTheirService(string staticStatus)
+    {
+        var site = Catalogue().Get("mx") with
+        {
+            Probes = [],
+            Checks = [new() { Id = "queue", Name = "Queue delay", Component = "component", Kind = "telemetry" }],
+            Components = new()
+            {
+                Components = [new()
+                {
+                    Id = "service", Name = "Service", Kind = "group",
+                    Children = [new()
+                    {
+                        Id = "component", Name = "Component", Kind = "leaf",
+                        Source = new() { Kind = "static", Status = staticStatus }
+                    }]
+                }]
+            }
+        };
+        var live = ComponentChecks.Build(site, [], [new("mx", "queue", ComponentStatus.Outage, DateTimeOffset.UtcNow)]);
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [], []);
+        Assert.All(Flatten(publication.Components), component => Assert.Equal("outage", component.Status));
+    }
+
+    [Theory]
+    [InlineData("xi.sitewatch.portal-web")]
+    [InlineData("xi.service.portal")]
+    public void DeclaredImpactOverridesChecksAndSurvivesResolutionInComponentAndServiceHistory(string target)
+    {
+        var catalog = Catalogue();
+        var site = catalog.Get("xi");
+        var started = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-2).AddHours(10), TimeSpan.Zero);
+        var command = new IncidentCommand("Portal disruption", [target], Severity.Degraded,
+            IncidentState.Investigating, "Investigating", true);
+        var record = command.Apply(41, "xi", null, started);
+        record = (command with { Severity = Severity.Outage, Message = "Outage confirmed" })
+            .Apply(41, "xi", record, started.AddDays(1));
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        var open = new StatusMerger().Merge(site.Snapshot, live, null, [record.ToPublicIncident()], []);
+        var service = Assert.Single(open.Components, component => component.Id == "xi.service.portal");
+        Assert.Equal("outage", service.Status);
+        Assert.Contains(41, service.OpenIncidentIds!);
+        record = (command with { State = IncidentState.Resolved, Message = "Recovered" })
+            .Apply(41, "xi", record, started.AddDays(1).AddHours(1));
+        var history = new HistoryDocument();
+        foreach (var component in StatusCatalog.Flatten(site.Components.Components).Where(component => component.Kind == "leaf"))
+            history.ComponentsById[component.Id] = new ComponentHistoryRecord
+            {
+                Days = Enumerable.Range(0, 3).Select(day => new HistoryDay
+                {
+                    Date = DateOnly.FromDateTime(started.UtcDateTime).AddDays(day),
+                    Status = ComponentStatus.Operational,
+                    Total = 100,
+                    Failed = 0,
+                    Uptime = 1
+                }).ToList()
+            };
+        var closed = new StatusMerger().Merge(site.Snapshot, live, history, [record.ToPublicIncident()], []);
+        closed = IncidentImpact.Apply(PublicationWorker.CorrectTodayHistory(closed, history), [record.ToPublicIncident()]);
+        foreach (var component in Flatten(closed.Components).Where(component => component.Id == target || component.Id == "xi.service.portal"))
+        {
+            Assert.Equal("operational", component.Status);
+            Assert.Empty(component.OpenIncidentIds!);
+            Assert.Equal("degraded", component.History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime)).Status);
+            Assert.Equal("outage", component.History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime).AddDays(1)).Status);
+            Assert.Equal("operational", component.History[^1].Status);
+            Assert.Equal(1, component.UptimeRatio);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GitHubResolutionBeforeMidnightDoesNotExtendImpactIntoThePollingDay(bool lateBaseline)
+    {
+        var site = Catalogue().Get("mx");
+        var midnight = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero);
+        var poll = midnight.AddMinutes(5);
+        var target = "mx.sitewatch.geo-location-web";
+        var command = new IncidentCommand("Resolved GitHub incident", [target], Severity.Outage,
+            IncidentState.Investigating, "Approved update", true);
+        var opened = command.Apply(73, "mx", null, midnight.AddMinutes(-10));
+        if (lateBaseline)
+        {
+            opened = opened with { ImpactHistory = [] };
+            opened = opened.ObserveImpact(opened, poll);
+        }
+        var resolvedAt = midnight.AddMinutes(-5);
+        var closed = (opened with { State = IncidentState.Resolved, ResolvedAt = resolvedAt }).ObserveImpact(opened, poll);
+        Assert.Equal(lateBaseline ? poll : resolvedAt, closed.ImpactHistory[^1].At);
+        var history = new HistoryDocument();
+        foreach (var component in StatusCatalog.Flatten(site.Components.Components).Where(component => component.Kind == "leaf"))
+            history.ComponentsById[component.Id] = new ComponentHistoryRecord
+            {
+                Days = Enumerable.Range(-1, 2).Select(day => new HistoryDay
+                {
+                    Date = DateOnly.FromDateTime(midnight.UtcDateTime).AddDays(day),
+                    Status = ComponentStatus.Operational,
+                    Total = 100,
+                    Failed = 0,
+                    Uptime = 1
+                }).ToList()
+            };
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        var publication = new StatusMerger().Merge(site.Snapshot, live, history, [closed.ToPublicIncident()], []);
+        publication = IncidentImpact.Apply(PublicationWorker.CorrectTodayHistory(publication, history), [closed.ToPublicIncident()]);
+        var geo = Flatten(publication.Components).Single(component => component.Id == target);
+        Assert.Equal(lateBaseline ? "operational" : "outage",
+            geo.History.Single(day => day.Date == DateOnly.FromDateTime(midnight.UtcDateTime).AddDays(-1)).Status);
+        Assert.Equal("operational", geo.History.Single(day => day.Date == DateOnly.FromDateTime(midnight.UtcDateTime)).Status);
+        var reopened = command.Apply(73, "mx", closed, poll.AddMinutes(1));
+        var closedAgain = (reopened with { State = IncidentState.Resolved, ResolvedAt = poll.AddMinutes(2) })
+            .ObserveImpact(reopened, poll.AddMinutes(3));
+        Assert.Equal(poll.AddMinutes(2), closedAgain.ImpactHistory[^1].At);
+        Assert.Equal(closedAgain.ImpactHistory.OrderBy(observation => observation.At), closedAgain.ImpactHistory);
+    }
+
+    [Theory]
+    [InlineData(Severity.Outage)]
+    [InlineData(Severity.Maintenance)]
+    public void ResolvedLegacyImpactRemainsOnItsOriginalComponentsAfterSyncEditsAndReopening(Severity severity)
+    {
+        var site = Catalogue().Get("mx");
+        var started = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-1).AddHours(10), TimeSpan.Zero);
+        var legacy = new IncidentRecord
+        {
+            Id = 74,
+            SiteId = "mx",
+            Published = true,
+            Title = "Resolved legacy incident",
+            Components = ["mx.sitewatch.geo-location-web"],
+            Severity = severity,
+            State = IncidentState.Resolved,
+            StartedAt = started,
+            ResolvedAt = started.AddHours(1),
+            ScheduledStart = severity == Severity.Maintenance ? started : null,
+            ScheduledEnd = severity == Severity.Maintenance ? started.AddHours(2) : null,
+            PublicUpdates =
+            [
+                new() { At = started, State = IncidentState.Investigating, Severity = severity, Body = "Impact declared" },
+                new() { At = started.AddHours(1), State = IncidentState.Resolved, Severity = severity, Body = "Recovered" }
+            ]
+        };
+        var synchronized = legacy.ObserveImpact(legacy, DateTimeOffset.UtcNow);
+        var edited = new IncidentCommand(legacy.Title, legacy.Components, Severity.Degraded,
+            IncidentState.Resolved, "Resolution clarified", true)
+            .Apply(legacy.Id, legacy.SiteId, synchronized, DateTimeOffset.UtcNow);
+        var scopeChange = new IncidentCommand(legacy.Title, ["mx.sitewatch.molyneux-me"], Severity.Degraded,
+            IncidentState.Resolved, "Scope corrected", true);
+        var moved = scopeChange.Apply(legacy.Id, legacy.SiteId, legacy, DateTimeOffset.UtcNow);
+        var reopened = (scopeChange with { State = IncidentState.Investigating, Message = "New disruption" })
+            .Apply(legacy.Id, legacy.SiteId, legacy, DateTimeOffset.UtcNow);
+        var unrecorded = legacy with { PublicUpdates = legacy.PublicUpdates.Select(update => update with { Severity = null }).ToArray() };
+        if (severity != Severity.Maintenance)
+            Assert.Empty(unrecorded.ObserveImpact(unrecorded, DateTimeOffset.UtcNow).ImpactHistory);
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        foreach (var record in new[] { synchronized, edited, moved, reopened })
+        {
+            var publication = new StatusMerger().Merge(site.Snapshot, live, null, [record.ToPublicIncident()], []);
+            foreach (var component in Flatten(publication.Components).Where(component =>
+                component.Id is "mx.sitewatch.geo-location-web" or "mx.service.geo-location"))
+            {
+                Assert.Equal("operational", component.Status);
+                var day = component.History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime));
+                Assert.Equal(severity.ToApiString(), day.Status);
+                Assert.Contains(legacy.Id, day.IncidentIds!);
+            }
+            var unrelated = Flatten(publication.Components).Single(component => component.Id == "mx.sitewatch.molyneux-me")
+                .History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime));
+            Assert.DoesNotContain(legacy.Id, unrelated.IncidentIds!);
+        }
+    }
+
+    [Fact]
+    public void ObservedLegacyImpactIsNotBackdatedAndRemainsAfterResolutionAndScopeChanges()
+    {
+        var catalog = Catalogue();
+        var observed = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-1).AddHours(10), TimeSpan.Zero);
+        var old = new IncidentRecord
+        {
+            Id = 72,
+            SiteId = "mx",
+            Published = true,
+            Title = "Legacy incident",
+            Components = ["mx.sitewatch.geo-location-web"],
+            Severity = Severity.Outage,
+            State = IncidentState.Identified,
+            StartedAt = observed.AddDays(-5),
+            PublicUpdates = [new() { At = observed.AddDays(-5), State = IncidentState.Identified, Body = "Old approved message" }]
+        };
+        var known = old.ObserveImpact(old, observed);
+        Assert.Equal(observed, Assert.Single(known.ImpactHistory).At);
+        Assert.Single(known.PublicUpdates);
+        var changed = new IncidentCommand("Another service", ["mx.sitewatch.molyneux-me"], Severity.Degraded,
+            IncidentState.Monitoring, "Shared dependency has recovered", true).Apply(72, "mx", known, observed.AddHours(1));
+        var projected = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [changed]));
+        Assert.Equal(IncidentState.Resolved, projected.State);
+        var site = catalog.Get("xi");
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()], []);
+        var geo = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.geo-location-web");
+        Assert.Equal("operational", geo.Status);
+        Assert.Equal("outage", geo.History.Single(day => day.Date == DateOnly.FromDateTime(observed.UtcDateTime)).Status);
+        Assert.Equal("unknown", geo.History.Single(day => day.Date == DateOnly.FromDateTime(observed.UtcDateTime.AddDays(-1))).Status);
+    }
+
+    [Fact]
+    public void SharedIssueProjectionRetainsEachBrandsIndependentlyScopedHistoricalImpact()
+    {
+        var catalog = Catalogue();
+        var started = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-2).AddHours(10), TimeSpan.Zero);
+        var command = new IncidentCommand("Shared source", ["mx.sitewatch.geo-location-api"], Severity.Outage,
+            IncidentState.Investigating, "Impact declared", true);
+        var mx = command.Apply(62, "mx", null, started);
+        mx = (command with { State = IncidentState.Resolved }).Apply(62, "mx", mx, started.AddHours(2));
+        command = command with { Components = ["xi.sitewatch.geo-location-web"] };
+        var xi = command.Apply(63, "xi", null, started.AddDays(1));
+        xi = (command with { State = IncidentState.Resolved }).Apply(63, "xi", xi, started.AddDays(1).AddHours(2));
+        const string url = "https://github.com/frasermolyneux/status-pages/issues/28";
+        var site = catalog.Get("mx");
+        var projected = Assert.Single(catalog.ProjectIncidents(site, [mx with { SourceUrl = url }, xi with { SourceUrl = url }]));
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()], []);
+        var components = Flatten(publication.Components).ToDictionary(component => component.Id);
+        var first = DateOnly.FromDateTime(started.UtcDateTime);
+        Assert.Equal("outage", components["mx.sitewatch.geo-location-api"].History.Single(day => day.Date == first).Status);
+        Assert.Equal("unknown", components["mx.sitewatch.geo-location-api"].History.Single(day => day.Date == first.AddDays(1)).Status);
+        Assert.Equal("unknown", components["mx.sitewatch.geo-location-web"].History.Single(day => day.Date == first).Status);
+        Assert.Equal("outage", components["mx.sitewatch.geo-location-web"].History.Single(day => day.Date == first.AddDays(1)).Status);
+        foreach (var date in new[] { first, first.AddDays(1) })
+            Assert.Equal("outage", components["mx.service.geo-location"].History.Single(day => day.Date == date).Status);
+    }
+
+    [Fact]
+    public void SharedHistoricalScopesDoNotReactivateComponentsAfterBothBrandsMoveTheIncidentElsewhere()
+    {
+        var catalog = Catalogue();
+        var started = DateTimeOffset.UtcNow.AddDays(-1);
+        var command = new IncidentCommand("Shared incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Shared impact", true);
+        var mx = command.Apply(70, "mx", null, started);
+        mx = (command with { Components = ["mx.sitewatch.molyneux-me"] }).Apply(70, "mx", mx, started.AddHours(1));
+        command = command with { Components = ["xi.sitewatch.geo-location-web"] };
+        var xi = command.Apply(71, "xi", null, started);
+        xi = (command with { Components = ["xi.sitewatch.server-events"] }).Apply(71, "xi", xi, started.AddHours(1));
+        const string source = "https://github.com/frasermolyneux/status-pages/issues/45";
+        foreach (var siteId in new[] { "mx", "xi" })
+        {
+            var site = catalog.Get(siteId);
+            var geoId = $"{siteId}.sitewatch.geo-location-web";
+            var currentId = siteId == "mx" ? "mx.sitewatch.molyneux-me" : "xi.sitewatch.server-events";
+            var projected = Assert.Single(catalog.ProjectIncidents(site, [mx with { SourceUrl = source }, xi with { SourceUrl = source }]));
+            Assert.Equal([currentId], projected.Components);
+            var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+                _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+            var publication = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()], []);
+            var components = Flatten(publication.Components).ToDictionary(component => component.Id);
+            Assert.Equal("outage", components[currentId].Status);
+            Assert.Equal("operational", components[geoId].Status);
+            Assert.Empty(components[geoId].OpenIncidentIds!);
+            Assert.Equal("outage", components[geoId].History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime)).Status);
+        }
+    }
+
+    [Fact]
+    public void MultipleChecksAggregateWithoutHidingMissingSignalsAndShareGeoLocationAcrossBrandHierarchy()
+    {
+        var catalog = Catalogue();
+        var mx = catalog.Get("mx") with
+        {
+            Probes = [],
+            Checks =
+            [
+                new() { Id = "http", Name = "HTTP", Component = "mx.sitewatch.geo-location-web", Target = "https://example.com/" },
+                new() { Id = "queue", Name = "Notification delay", Component = "mx.sitewatch.geo-location-web", Kind = "telemetry" }
+            ]
+        };
+        var now = DateTimeOffset.UtcNow;
+        var observation = new ProbeObservation("mx", "mx.sitewatch.geo-location-web", "GeoLocation Website",
+            "https://example.com/", "publisher", now, true, 200, 10, null, "http");
+        var missing = ComponentChecks.Build(mx, [observation], []);
+        Assert.Contains(missing.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
+        Assert.Equal(0, missing.Values.Single().Samples);
+        var failing = ComponentChecks.Build(mx, [observation with { Success = false }], []);
+        Assert.Equal(1, failing.Values.Single().Samples);
+        Assert.Equal(1, failing.Values.Single().Failures);
+        var signal = new CheckResult("mx", "queue", ComponentStatus.Degraded, now.AddSeconds(-15));
+        var telemetry = ComponentChecks.Build(mx, [observation], [signal]);
+        var localPublication = new StatusMerger().Merge(mx.Snapshot, telemetry, null, [], []);
+        Assert.Equal(signal.ObservedAt, Flatten(localPublication.Components)
+            .Single(component => component.Id == observation.Component).LastSampleAt);
+        Assert.True(HealthDiagnostics.Build(mx, localPublication, [observation], [signal])
+            .Single(component => component.Id == observation.Component).MatchesPublication);
+        Assert.False(HealthDiagnostics.Build(mx, localPublication, [observation with { ObservedAt = now.AddSeconds(1) }], [signal])
+            .Single(component => component.Id == observation.Component).MatchesPublication);
+        Assert.False(HealthDiagnostics.Build(mx, localPublication, [observation], [signal with { ObservedAt = now }])
+            .Single(component => component.Id == observation.Component).MatchesPublication);
+        var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
+        {
+            ["mx"] = telemetry,
+            ["xi"] = []
+        };
+        var xi = catalog.Get("xi");
+        var projected = catalog.ProjectTelemetry(xi, all);
+        var publication = new StatusMerger().Merge(xi.Snapshot, projected, null, [], []);
+        Assert.Equal("degraded", publication.Components.Single(component => component.Id == "xi.service.portal").Status);
+        var geo = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.geo-location-web");
+        Assert.Equal(2, geo.Checks!.Count);
+        Assert.Contains(geo.Checks, check => check.Id == "mx/queue" && check.Status == "degraded");
+        var xiChecks = xi with
+        {
+            Checks = [new() { Id = "queue", Name = "Another queue", Component = "xi.sitewatch.geo-location-web", Kind = "telemetry" }]
+        };
+        all["xi"] = ComponentChecks.Build(xiChecks, [], [new("xi", "queue", ComponentStatus.Operational, now.AddSeconds(1))]);
+        var independentChecks = catalog.ProjectTelemetry(xi, all)["xi.sitewatch.geo-location-web"].Checks;
+        Assert.Contains(independentChecks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Degraded);
+        Assert.Contains(independentChecks, check => check.Id == "xi/queue" && check.Status == ComponentStatus.Operational);
+        var stale = ComponentChecks.Build(mx, [observation],
+            [new("mx", "queue", ComponentStatus.Operational, now.AddMinutes(-10))]);
+        Assert.Contains(stale.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
+    }
+
+    [Fact]
+    public void SharedTelemetryDiagnosticsMatchPublicationWithoutSharingPrivateDetails()
+    {
+        var catalog = Catalogue();
+        var now = DateTimeOffset.UtcNow;
+        const string mxId = "mx.sitewatch.geo-location-web";
+        const string xiId = "xi.sitewatch.geo-location-web";
+        var mx = catalog.Get("mx");
+        var xi = catalog.Get("xi");
+        var http = mx.EffectiveChecks.Single(check => check.Component == mxId);
+        var shared = new CheckDefinition
+        {
+            Id = "queue",
+            SharedId = "geo-location.queue",
+            Name = "Notification delay",
+            Component = mxId,
+            Kind = "telemetry"
+        };
+        mx = mx with { Checks = [http, shared] };
+        xi = xi with
+        {
+            Checks = [xi.EffectiveChecks.Single(check => check.Component == xiId), shared with { Component = xiId }]
+        };
+        var probe = new ProbeObservation("mx", mxId, "GeoLocation Website", http.Target!, "publisher",
+            now, true, 200, 10, null, http.Id);
+        var ownProbe = probe with { Site = "xi", Component = xiId, CheckId = xi.EffectiveChecks.Single(check => check.Component == xiId && check.Kind == "http").Id };
+        var signal = new CheckResult("mx", shared.Id, ComponentStatus.Degraded, now, "MX_PRIVATE_DETAIL");
+        var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
+        {
+            ["mx"] = ComponentChecks.Build(mx, [probe], [signal]),
+            ["xi"] = ComponentChecks.Build(xi, [ownProbe], [])
+        };
+        var expected = catalog.ProjectTelemetry(xi, all);
+        var publication = new StatusMerger().Merge(xi.Snapshot, expected, null, [], []);
+        var diagnostics = HealthDiagnostics.Build(xi, publication, [ownProbe], [signal], expected);
+        var geo = diagnostics.Single(component => component.Id == xiId);
+        Assert.True(geo.MatchesPublication);
+        Assert.Equal("degraded", geo.Checks!.Single(check => check.Id == shared.SharedId).Status);
+        Assert.DoesNotContain("MX_PRIVATE_DETAIL", JsonSerializer.Serialize(diagnostics, StatusJson.Options));
+        all["mx"] = ComponentChecks.Build(mx, [probe], [signal with { ObservedAt = now.AddSeconds(1) }]);
+        Assert.False(HealthDiagnostics.Build(xi, publication, [ownProbe], [signal], catalog.ProjectTelemetry(xi, all))
+            .Single(component => component.Id == xiId).MatchesPublication);
+    }
+
     [Theory]
     [InlineData(Severity.Outage, "outage")]
     [InlineData(Severity.Degraded, "degraded")]
@@ -31,10 +418,10 @@ public sealed class StatusExperienceTests
         {
             var projected = Assert.Single(catalog.ProjectIncidents(site, [source]));
             Assert.Equal([$"{site.Site.Id}.sitewatch.geo-location-web"], projected.Components);
-            var live = site.Probes.ToDictionary(probe => probe.Key, _ => new ComponentLiveTelemetry(1, 0, now, null));
+            var live = site.EffectiveChecks.ToDictionary(check => check.Component, _ => new ComponentLiveTelemetry(1, 0, now, null));
             var result = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()],
                 severity == Severity.Maintenance ? [projected.ToMaintenance(now)] : []);
-            var component = Assert.Single(result.Components, component => component.Id == projected.Components[0]);
+            var component = Assert.Single(Flatten(result.Components), component => component.Id == projected.Components[0]);
             Assert.Equal(expected, component.Status);
             Assert.Contains(27, component.OpenIncidentIds!);
             Assert.Contains("GeoLocation Website", result.Summary.Message);
@@ -85,6 +472,106 @@ public sealed class StatusExperienceTests
         Assert.Equal([Severity.Degraded, Severity.Outage], second.PublicUpdates.Select(update => update.Severity));
         Assert.Equal([IncidentState.Investigating, IncidentState.Identified], second.PublicUpdates.Select(update => update.State));
         Assert.Equal(["Investigating", "Impact confirmed"], second.PublicUpdates.Select(update => update.Body));
+    }
+
+    [Fact]
+    public void UnknownGitHubSiteLabelsRequireReviewInsteadOfBlockingTheDeliveryWorker()
+    {
+        var command = new IncidentCommand("Incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Approved update", true);
+        Assert.Throws<GitHubIncidentConflictException>(() =>
+            GitHubIncidentDocument.Labels(Catalogue(), "mx", command, ["site:typo"]));
+    }
+
+    [Fact]
+    public void MixedCaseGitHubPublicationLabelsDoNotAcknowledgeAnUndeliveredWithdrawal()
+    {
+        var command = new IncidentCommand("Withdrawal", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Private withdrawal", false, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        using var api = new GitHubWriteFixture();
+        var client = new GitHubIncidentClient(new(), Catalogue(), api);
+        var snapshot = new GitHubIssueSnapshot(Issue(["Status:Incident", "Status:Published", "Site:MX", "Severity:Outage"]), []);
+        Assert.False(client.Matches(new(command.OperationId!.Value, local, command, null, false, "pending"), snapshot));
+    }
+
+    [Theory]
+    [InlineData("State: database unavailable")]
+    [InlineData("State: resolved\nThis is descriptive text, not a state change")]
+    [InlineData("### Public update\n## Keep the approved formatting")]
+    public void GeneratedGitHubUpdatesPreserveApprovedTextWithoutLegacyHeaderParsing(string message)
+    {
+        var catalog = Catalogue();
+        var command = new IncidentCommand("Generated incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Identified, message, true, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, local, command, null, false, "pending"));
+        var imported = Assert.Single(GitHubIssueParser.Parse(Issue(body: body), [], catalog, new(), [local]));
+        Assert.Equal(IncidentState.Identified, imported.State);
+        Assert.Equal(local.PublicUpdates, imported.PublicUpdates);
+    }
+
+    [Fact]
+    public void ResolvingThroughTheWorkspaceDoesNotPreventSubsequentGitHubReopening()
+    {
+        var catalog = Catalogue();
+        var command = new IncidentCommand("Generated incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Resolved, "Service recovered", true, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        var labels = GitHubIncidentDocument.Labels(catalog, "mx", command, ["state:monitoring"]);
+        Assert.DoesNotContain(labels, label => label.StartsWith("state:", StringComparison.Ordinal));
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, local, command, null, false, "pending"));
+        var reopened = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: body, updatedMinutes: 10), [], catalog, new(), [local]));
+        Assert.Equal(IncidentState.Investigating, reopened.State);
+        Assert.Null(reopened.ResolvedAt);
+        Assert.Equal(IncidentState.Investigating, reopened.PublicUpdates[^1].State);
+    }
+
+    [Fact]
+    public void GeneratedGitHubUpdatesRoundTripOnceAndRetainEditsAndExplicitRestoration()
+    {
+        var catalog = Catalogue();
+        var command = new IncidentCommand("Generated incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Approved update", true, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        var job = new GitHubJob(command.OperationId!.Value, local, command, null, false, "pending");
+        var body = GitHubIncidentDocument.Body(job);
+        var issue = Issue(body: body);
+        var imported = Assert.Single(GitHubIssueParser.Parse(issue, [], catalog, new(), [local]));
+        Assert.Single(imported.PublicUpdates);
+        var editedBody = body.Replace("Approved update", "Edited in GitHub", StringComparison.Ordinal);
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(body: editedBody, updatedMinutes: 10),
+            [], catalog, new(), [imported]));
+        Assert.Equal("Edited in GitHub", edited.PublicUpdates[^1].Body);
+        Assert.Equal(Created.AddMinutes(10), edited.PublicUpdates[^1].At);
+        var repeated = Assert.Single(GitHubIssueParser.Parse(Issue(body: editedBody, updatedMinutes: 15),
+            [], catalog, new(), [edited]));
+        Assert.Equal(edited.PublicUpdates, repeated.PublicUpdates);
+        var restoredComment = JsonSerializer.SerializeToElement(new
+        {
+            body,
+            created_at = Created.AddMinutes(20),
+            user = new { login = "frasermolyneux" }
+        });
+        var restored = Assert.Single(GitHubIssueParser.Parse(Issue(body: editedBody, updatedMinutes: 20),
+            [restoredComment], catalog, new(), [repeated]));
+        Assert.Equal("Approved update", restored.PublicUpdates[^1].Body);
+        Assert.Equal(Created.AddMinutes(20), restored.PublicUpdates[^1].At);
+        var stable = Assert.Single(GitHubIssueParser.Parse(Issue(body: editedBody, updatedMinutes: 25),
+            [restoredComment], catalog, new(), [restored]));
+        Assert.Equal(restored.PublicUpdates, stable.PublicUpdates);
+        using var api = new GitHubWriteFixture();
+        var client = new GitHubIncidentClient(new(), catalog, api);
+        Assert.False(client.ContainsUpdate(new(Issue(body: editedBody), []), job));
+        Assert.True(client.ContainsUpdate(new(issue, []), job));
+        Assert.True(client.ContainsUpdate(new(Issue(body: editedBody), [restoredComment]), job));
+        var editedComment = JsonSerializer.SerializeToElement(new
+        {
+            body = editedBody,
+            created_at = Created.AddMinutes(25),
+            user = new { login = "frasermolyneux" }
+        });
+        Assert.False(client.ContainsUpdate(new(issue, [editedComment]), job));
     }
 
     [Fact]
@@ -252,7 +739,7 @@ public sealed class StatusExperienceTests
     {
         var site = Catalogue().Get("mx");
         const string id = "mx.sitewatch.geo-location-web";
-        var first = new ProbeObservation("mx", id, "GeoLocation Website", site.Probes[id], "publisher",
+        var first = new ProbeObservation("mx", id, "GeoLocation Website", site.EffectiveChecks.Single(check => check.Component == id).Target!, "publisher",
             Created, false, 503, 10, "HTTP 503");
         var latest = first with { ObservedAt = Created.AddMinutes(1), Success = true, HttpStatus = 200, Error = null };
         var result = PublicationWorker.LatestTelemetry(site, [latest, first,
@@ -261,6 +748,9 @@ public sealed class StatusExperienceTests
         Assert.Equal(latest.ObservedAt, observation.LastSeen);
         Assert.Equal(0, observation.Failures);
     }
+
+    private static IEnumerable<ComponentDto> Flatten(IEnumerable<ComponentDto> components) =>
+        components.SelectMany(component => new[] { component }.Concat(Flatten(component.Children ?? [])));
 
     [Fact]
     public void EvidencePromotionKeepsItsSourcePrivatelyAcrossEditsAndNeverAddsItToPublicUpdates()
@@ -413,6 +903,30 @@ public sealed class StatusExperienceTests
         Assert.Empty(draft.PublicUpdates);
         Assert.NotEmpty(draft.Updates);
         Assert.Empty(GitHubIssueParser.Parse(Issue(["unrelated"], author: "stranger"), [], Catalogue(), new()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GeneratedGitHubUpdatesRedactInternalNotesWithoutParsingLiteralStateHeaders(bool comment)
+    {
+        var command = new IncidentCommand("Generated update", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Monitoring, "state: resolved\nVisible <script>unsafe()</script>.", true,
+            Delivery: "github", OperationId: Guid.NewGuid());
+        var incident = command.Apply(75, "mx", null, Created.AddMinutes(2));
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, incident, command, null, false, "pending"))
+            + "\n<!-- internal -->\nPRIVATE_NOTE\n<!-- /internal -->";
+        var comments = comment ? new[]
+        {
+            JsonSerializer.SerializeToElement(new { body, user = new { login = "frasermolyneux" }, created_at = Created.AddMinutes(2) })
+        } : [];
+        var record = Assert.Single(GitHubIssueParser.Parse(Issue(body: comment ? "Initial public update" : body),
+            comments, Catalogue(), new()));
+        var update = Assert.Single(record.PublicUpdates, update => update.OperationId == command.OperationId);
+        Assert.Equal(IncidentState.Monitoring, update.State);
+        Assert.StartsWith("state: resolved<br>", update.Body);
+        Assert.Contains(WebUtility.HtmlEncode("<script>"), update.Body);
+        Assert.DoesNotContain("PRIVATE_NOTE", JsonSerializer.Serialize(record.ToPublicIncident(), StatusJson.Options));
     }
 
     [Theory]

@@ -10,7 +10,7 @@ public static class TrafficAcceptance
         var configuration = TrafficConfiguration.Read(options, catalog)
             ?? throw new InvalidOperationException("Traffic controls are not configured.");
         var canary = configuration.Hosts.Single(host => host.Canary);
-        if (catalog.Sites.SelectMany(site => site.Probes.Values).Any(target => new Uri(target).Host == canary.Hostname))
+        if (catalog.Sites.SelectMany(site => site.EffectiveChecks).Any(check => check.Target is not null && new Uri(check.Target).Host == canary.Hostname))
             throw new InvalidOperationException("Acceptance cannot intercept a monitored production application.");
         var workspace = await controller.ReadAsync(canary.Site, ct);
         if (!restoreOnly && workspace.Quota?.Requests is null)

@@ -79,9 +79,11 @@ public static class ServiceProgram
         builder.Services.AddSingleton<PostgresStore>();
         builder.Services.AddSingleton<CloudflareTraffic>();
         builder.Services.AddSingleton<TrafficController>();
+        builder.Services.AddSingleton<GitHubIncidentClient>();
         builder.Services.AddHostedService<PublicationWorker>();
         builder.Services.AddHostedService<EvidenceWorker>();
         builder.Services.AddHostedService<GitHubIssueWorker>();
+        builder.Services.AddHostedService<GitHubOutboxWorker>();
         builder.Services.AddHostedService<TrafficUsageWorker>();
         builder.Services.AddHttpClient("probe", client => client.DefaultRequestHeaders.UserAgent.ParseAdd("MXStatus/1.0"))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -142,13 +144,19 @@ public static class ServiceProgram
             Results.Ok(await database.ReadEvidenceAsync(ct))).RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/health", async (HttpContext context, PublicationStore files, PostgresStore database, CancellationToken ct) =>
             Results.Ok(await HealthDiagnostics.ReadAsync(
-                catalog.FindHost(context.Request.Host.Host)!, files, database, ct))).RequireAuthorization(ReaderPolicy);
+                catalog, catalog.FindHost(context.Request.Host.Host)!, files, database, ct))).RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/runtime", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
             Results.Ok(new
             {
                 publisher = options.Publisher,
                 writable = await database.IsWritableAsync(ct),
-                github = new { enabled = options.GitHubEnabled, repository = options.GitHubRepository, pollSeconds = options.GitHubRefreshSeconds },
+                github = new
+                {
+                    enabled = options.GitHubEnabled,
+                    repository = options.GitHubRepository,
+                    pollSeconds = options.GitHubRefreshSeconds,
+                    writeConfigured = options.GitHubWriteConfigured
+                },
                 workloads = catalog.FindHost(context.Request.Host.Host)!.Workloads
             }))
             .RequireAuthorization(ReaderPolicy);
@@ -169,6 +177,8 @@ public static class ServiceProgram
             SaveIncidentAsync(context, command, null, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPut("/api/ops/incidents/{id:int}", (int id, HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
             SaveIncidentAsync(context, command, id, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
+        MapGitHubOperations(app, catalog, options);
+        MapCheckIngest(app, catalog);
         app.MapPost("/api/integrations/azure", async (JsonElement payload, PostgresStore database, CancellationToken ct) =>
         {
             if (!AzureAlert.TryParse(payload, out var alert)) return Results.BadRequest(new { error = "Unsupported Azure common alert payload." });
@@ -184,6 +194,52 @@ public static class ServiceProgram
         app.MapFallbackToFile("/component/{id}", "index.html");
         app.MapFallbackToFile("index.html");
         return app;
+    }
+
+    private static void MapGitHubOperations(WebApplication app, StatusCatalog catalog, RuntimeOptions options)
+    {
+        app.MapGet("/api/ops/incidents/{id:int}/github", (int id, HttpContext context, PostgresStore database,
+            GitHubIncidentClient github, CancellationToken ct) =>
+            GitHubReconciliation.ReviewAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, id, database, github, options, ct))
+            .RequireAuthorization(OperatorPolicy);
+        app.MapPost("/api/ops/incidents/{id:int}/github/retry", async (int id, GitHubRetryCommand command,
+            HttpContext context, PostgresStore database, GitHubIncidentClient github, CancellationToken ct) =>
+        {
+            var job = await database.ReadGitHubReviewAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, id, ct);
+            if (job is null) return Results.Conflict(new { error = "No pending GitHub change exists. Refresh the workspace." });
+            var (remote, unavailable) = await GitHubReconciliation.ReadRemoteAsync(job, options, github, ct);
+            if (unavailable) return Results.Conflict(new { error = GitHubReconciliation.SourceUnavailableMessage });
+            return await database.RetryGitHubAsync(job, command, remote,
+                options.GitHubRepository, context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct)
+                ? Results.Accepted() : Results.Conflict(new { error = "The incident or GitHub issue changed. Review both versions again before retrying." });
+        }).RequireAuthorization(OperatorPolicy);
+    }
+
+    private static void MapCheckIngest(WebApplication app, StatusCatalog catalog)
+    {
+        app.MapPost("/api/integrations/checks/{siteId}/{checkId}", async (string siteId, string checkId, CheckResult result,
+            PostgresStore database, CancellationToken ct) =>
+        {
+            var definition = catalog.Sites.SingleOrDefault(site => site.Site.Id == siteId);
+            var check = definition?.EffectiveChecks.SingleOrDefault(check => check.Id == checkId && check.Kind == "telemetry");
+            if (check is null)
+                return Results.BadRequest(new { error = "Unknown telemetry check." });
+            if (result.Site != siteId || result.CheckId != checkId || result.Validate() is not null)
+                return Results.BadRequest(new { error = "Invalid telemetry check scope or observation." });
+            if (!await database.IsWritableAsync(ct)) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            await database.SaveEvidenceAsync("check-result", $"{siteId}/{checkId}", result.ObservedAt,
+                JsonSerializer.SerializeToElement(new
+                {
+                    result.Site,
+                    result.CheckId,
+                    result.Status,
+                    result.ObservedAt,
+                    result.Detail,
+                    Component = check.Component,
+                    Name = check.Name
+                }, StatusJson.Options), ct);
+            return Results.Accepted();
+        }).RequireAuthorization("ingest");
     }
 
     private static void UseRequestBoundary(WebApplication app, StatusCatalog catalog)
@@ -277,7 +333,7 @@ public static class ServiceProgram
         var record = await database.SaveIncidentAsync(site.Site.Id, id, command,
             context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct);
         var statusCode = id is null ? StatusCodes.Status201Created : StatusCodes.Status200OK;
-        return record is null ? Results.Conflict(new { error = "Incident changed, is managed in GitHub, or does not exist. Reload before editing." })
+        return record is null ? Results.Conflict(new { error = "Incident changed, the operation ID was reused with different content, or the incident does not exist. Reload before editing." })
             : Results.Json(record, StatusJson.Options, statusCode: statusCode);
     }
 

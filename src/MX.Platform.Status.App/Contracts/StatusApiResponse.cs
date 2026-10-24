@@ -71,6 +71,10 @@ public sealed record LinkDto
 
 public sealed record ComponentDto
 {
+    [JsonPropertyName("checks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<CheckDto>? Checks { get; init; }
+
     [JsonPropertyName("id")]
     public string Id { get; init; } = string.Empty;
 
@@ -112,6 +116,8 @@ public sealed record ComponentDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<ComponentDto>? Children { get; init; }
 }
+
+public sealed record CheckDto(string Id, string Name, string Kind, string Status, DateTimeOffset? ObservedAt);
 
 public sealed record HistoryDayDto
 {

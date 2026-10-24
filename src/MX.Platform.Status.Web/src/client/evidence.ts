@@ -47,6 +47,7 @@ export interface ComponentHealth {
   matchesPublication: boolean;
   incidents: { id: number; title: string; severity: string; state: string }[];
   maintenance: { id: number; title: string }[];
+  checks?: { id: string; name: string; kind: string; status: string; observedAt?: string; target?: string; probe?: ProbeObservation; detail?: string }[];
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -87,6 +88,13 @@ export function evidenceCards(records: EvidenceRecord[]): EvidenceCard[] {
       source: record.source, observedAt: record.observedAt, record, site: text(data.site) || undefined,
       components: text(data.component) ? [text(data.component)] : [], details: [] as EvidenceCard['details'],
     };
+    if (record.source === 'check-result') return [{
+      ...base, title: text(data.name, text(data.checkId, 'Telemetry check')),
+      summary: text(data.detail, 'Authenticated telemetry check observation.'),
+      severity: data.status === 'outage' ? 'critical' : data.status === 'operational' ? 'info' : 'warning',
+      state: text(data.status, 'unknown'),
+      details: [{ label: 'Check', value: text(data.checkId) }, { label: 'Status', value: text(data.status, 'unknown') }],
+    }];
     if (record.source === 'independent-probe' || record.source === 'independent-probe-failure') {
       return [{
         ...base, title: text(data.name, text(data.component, 'HTTP availability check')),
@@ -96,7 +104,7 @@ export function evidenceCards(records: EvidenceRecord[]): EvidenceCard[] {
         details: [
           { label: 'Check', value: record.source === 'independent-probe-failure'
             ? 'Last failed HTTP check; see service health for the current result'
-            : 'Independent HTTP probe; this check determines live public availability' },
+            : 'Independent HTTP probe; this check contributes to component availability' },
           { label: 'Target', value: text(data.target) },
           { label: 'Observer', value: text(data.observer) },
           { label: 'HTTP status', value: display(data.httpStatus) || 'No HTTP response' },
@@ -211,11 +219,11 @@ export function incidentSeed(card: EvidenceCard, components: string[], names: st
   title: string; components: string[]; severity: string; state: string; message: string; context: string;
   evidence: { source: string; id: string; observedAt: string };
 } {
-  const recovering = ['resolved', 'passed', 'clear'].includes(card.state.toLowerCase());
+  const recovering = ['resolved', 'passed', 'clear', 'operational'].includes(card.state.toLowerCase());
   const services = names.length ? names.join(', ') : 'the affected services';
   return {
     title: card.title.slice(0, 200), components,
-    severity: card.state === 'failed' || /^sev[01]$/i.test(card.severity) ? 'outage' : 'degraded',
+    severity: ['failed', 'outage'].includes(card.state) || card.severity === 'critical' || /^sev[01]$/i.test(card.severity) ? 'outage' : 'degraded',
     state: recovering ? 'monitoring' : 'investigating',
     message: recovering ? `We are monitoring recovery of ${services}.` : `We are investigating reports affecting ${services}. We will provide an update when more information is available.`,
     context: `${card.source} / ${card.observedAt}\n${card.title}\n${card.summary}`.slice(0, 20000),

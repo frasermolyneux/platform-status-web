@@ -65,6 +65,7 @@ public sealed class PublicationStore(StatusCatalog catalog, RuntimeOptions optio
     private static ComponentDto MarkStale(ComponentDto component) => component with
     {
         Status = component.Status == "operational" ? "unknown" : component.Status,
+        Checks = component.Checks?.Select(check => check with { Status = check.Status == "operational" ? "unknown" : check.Status }).ToArray(),
         Children = component.Children?.Select(MarkStale).ToArray()
     };
 }

@@ -5,6 +5,7 @@ namespace MX.Platform.Status.Service;
 
 public sealed record IncidentEvidence(string Source, string Id, DateTimeOffset ObservedAt, string Context);
 public sealed record SourceUpdateSnapshot(DateTimeOffset At, string Body, IncidentState? ExplicitState);
+public sealed record GitHubDelivery(string State, string? Error = null, string? SiteId = null, int? IncidentId = null);
 
 public sealed record IncidentRecord
 {
@@ -22,14 +23,25 @@ public sealed record IncidentRecord
     public DateTimeOffset? ScheduledEnd { get; init; }
     public IReadOnlyList<IncidentUpdate> Updates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicUpdates { get; init; } = [];
+    public IReadOnlyList<IncidentImpactObservation> ImpactHistory { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> SourceStateUpdates { get; init; } = [];
     public IReadOnlyList<SourceUpdateSnapshot> SourceUpdates { get; init; } = [];
     public IReadOnlyList<SourceUpdateSnapshot> PublicSourceUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicSourceStateUpdates { get; init; } = [];
     public Severity? PublicSourceSeverity { get; init; }
+    public DateTimeOffset? PublicSourceObservedAt { get; init; }
     public IReadOnlyList<int> PublicAliases { get; init; } = [];
     public string? SourceUrl { get; init; }
     public IncidentEvidence? Evidence { get; init; }
+    public GitHubDelivery? GitHub { get; init; }
+    public string? GitHubVersion { get; init; }
+    public bool GitHubSiteWithdrawn { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? GitHubBaseVersion { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? GitHubBaseSiteId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Guid? GitHubSourceOperationId { get; init; }
 
     public Incident ToPublicIncident() => new()
     {
@@ -44,8 +56,51 @@ public sealed record IncidentRecord
         CreatedAt = StartedAt,
         StartedAt = StartedAt,
         ResolvedAt = ResolvedAt,
+        ImpactHistory = ImpactHistory,
         Updates = PublicUpdates.Select(update => update with { Author = null }).ToArray()
     };
+
+    public IncidentRecord ObserveImpact(IncidentRecord? previous, DateTimeOffset now)
+    {
+        var history = previous?.ImpactHistory ?? ImpactHistory;
+        if (history.Count == 0 && previous is { Published: true, State: IncidentState.Resolved })
+            history = previous.RecordedLegacyImpact();
+        if (!Published || State == IncidentState.Resolved && history.Count == 0
+            || history.LastOrDefault() is { } last
+            && last.State == State && last.Severity == Severity
+            && last.Components.ToHashSet().SetEquals(Components)
+            && last.ScheduledStart == ScheduledStart && last.ScheduledEnd == ScheduledEnd)
+            return this with { ImpactHistory = history };
+        var at = State == IncidentState.Resolved ? ResolvedAt ?? now : now;
+        if (history.LastOrDefault() is { } latest && at < latest.At) at = latest.At;
+        return this with
+        {
+            ImpactHistory = [.. history, new(at, State, Severity, Components, ScheduledStart, ScheduledEnd)]
+        };
+    }
+
+    private IReadOnlyList<IncidentImpactObservation> RecordedLegacyImpact()
+    {
+        if (ResolvedAt is not { } resolved) return [];
+        if (Severity == Severity.Maintenance && ScheduledStart is { } start && ScheduledEnd is { } end
+            && start < end && start < resolved)
+            return
+            [
+                new(start, IncidentState.Investigating, Severity.Maintenance, Components, ScheduledStart, ScheduledEnd),
+                new(resolved, IncidentState.Resolved, Severity.Maintenance, Components, ScheduledStart, ScheduledEnd)
+            ];
+        var observations = new List<IncidentImpactObservation>();
+        Severity? severity = null;
+        foreach (var update in PublicUpdates.Where(update => update.At < resolved).OrderBy(update => update.At))
+        {
+            severity = update.Severity ?? severity;
+            if (severity.HasValue)
+                observations.Add(new(update.At, update.State, severity.Value, Components, ScheduledStart, ScheduledEnd));
+        }
+        if (observations.Count > 0)
+            observations.Add(new(resolved, IncidentState.Resolved, observations[^1].Severity, Components, ScheduledStart, ScheduledEnd));
+        return observations;
+    }
 
     public MaintenanceWindow ToMaintenance(DateTimeOffset now)
     {
@@ -68,11 +123,14 @@ public sealed record IncidentRecord
 public sealed record IncidentCommand(
     string Title, string[] Components, Severity Severity, IncidentState State,
     string Message, bool Published, int Revision = 0,
-    DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null, IncidentEvidence? Evidence = null)
+    DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null, IncidentEvidence? Evidence = null,
+    string Delivery = "local", Guid? OperationId = null)
 {
     public string? Validate(SiteDefinition site)
     {
         var known = StatusCatalog.Flatten(site.Components.Components).Select(c => c.Id).ToHashSet();
+        if (Delivery is not ("local" or "github") || Delivery == "github" && (!OperationId.HasValue || OperationId == Guid.Empty))
+            return "Choose GitHub or local delivery; GitHub changes require a stable operation ID.";
         if (string.IsNullOrWhiteSpace(Title) || Title.Length > 200 || string.IsNullOrWhiteSpace(Message) || Message.Length > 20000)
             return "A title (up to 200 characters) and update (up to 20000 characters) are required.";
         if (Components is null || Components.Length == 0 || Components.Any(id => !known.Contains(id))
@@ -80,13 +138,9 @@ public sealed record IncidentCommand(
             return "Select one or more distinct components from this site.";
         if (!Enum.IsDefined(Severity) || !Enum.IsDefined(State))
             return "Invalid incident severity or state.";
-        if (Evidence is not null && (string.IsNullOrWhiteSpace(Evidence.Source) || Evidence.Source.Length > 100
-            || string.IsNullOrWhiteSpace(Evidence.Id) || Evidence.Id.Length > 2000
-            || string.IsNullOrWhiteSpace(Evidence.Context) || Evidence.Context.Length > 20000
-            || Evidence.ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5)))
+        if (HasInvalidEvidence())
             return "Invalid source evidence reference.";
-        if (ScheduledStart.HasValue != ScheduledEnd.HasValue || ScheduledEnd <= ScheduledStart
-            || (Severity == Severity.Maintenance) != ScheduledStart.HasValue)
+        if (HasInvalidSchedule())
             return "Maintenance requires a valid start/end window; incidents must not specify one.";
         var publicComponents = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
         if (Published && Components.Any(id => !publicComponents.Contains(id)))
@@ -94,21 +148,35 @@ public sealed record IncidentCommand(
         return null;
     }
 
+    private bool HasInvalidEvidence() => Evidence is not null
+        && (string.IsNullOrWhiteSpace(Evidence.Source) || Evidence.Source.Length > 100
+            || string.IsNullOrWhiteSpace(Evidence.Id) || Evidence.Id.Length > 2000
+            || string.IsNullOrWhiteSpace(Evidence.Context) || Evidence.Context.Length > 20000
+            || Evidence.ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5));
+
+    private bool HasInvalidSchedule() => ScheduledStart.HasValue != ScheduledEnd.HasValue || ScheduledEnd <= ScheduledStart
+        || (Severity == Severity.Maintenance) != ScheduledStart.HasValue;
+
     public IncidentRecord Apply(int id, string site, IncidentRecord? previous, DateTimeOffset now)
     {
+        GitHubDelivery? delivery = null;
+        if (Delivery == "github")
+            delivery = new(Published || previous?.SourceUrl is not null ? "pending" : "draft", SiteId: site, IncidentId: id);
         var update = new IncidentUpdate
         {
             At = now,
+            OperationId = OperationId,
             State = State,
             Severity = Severity,
-            Body = WebUtility.HtmlEncode(Message.Trim()).Replace("\n", "<br>", StringComparison.Ordinal)
+            Body = WebUtility.HtmlEncode(Message.Trim().Replace("\r\n", "\n", StringComparison.Ordinal)).Replace("\n", "<br>", StringComparison.Ordinal)
         };
-        return new()
+        return ((previous ?? new IncidentRecord()) with
         {
             Id = id,
             SiteId = site,
             Revision = (previous?.Revision ?? 0) + 1,
             Published = Published,
+            GitHubSiteWithdrawn = !Published && previous?.GitHubSiteWithdrawn == true,
             Title = Title.Trim(),
             Components = Components,
             Severity = Severity,
@@ -119,7 +187,8 @@ public sealed record IncidentCommand(
             ScheduledEnd = ScheduledEnd,
             Updates = [.. previous?.Updates ?? [], update],
             PublicUpdates = Published ? [.. previous?.PublicUpdates ?? [], update] : previous?.PublicUpdates ?? [],
-            Evidence = Evidence ?? previous?.Evidence
-        };
+            Evidence = Evidence ?? previous?.Evidence,
+            GitHub = delivery
+        }).ObserveImpact(previous, now);
     }
 }

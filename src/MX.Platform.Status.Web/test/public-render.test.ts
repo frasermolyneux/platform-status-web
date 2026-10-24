@@ -45,6 +45,51 @@ test('incidents identify affected services on cards and component pages, and lin
   assert.doesNotMatch(document.querySelector('#app')?.textContent || '', /View GitHub issue/);
 });
 
+test('services drill down to components and checks without flattening the overview', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderOverview, renderComponent } = await import('../src/client/render');
+  const historyDays = [{ date: '2026-10-23', status: 'outage', uptime: 1, incidentIds: [2] }];
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'xi', displayName: 'XI status' }, generatedAt: new Date().toISOString(),
+    summary: { status: 'outage' }, incidents: [], maintenance: [],
+    components: [{
+      id: 'portal', name: 'XtremeIdiots Portal', kind: 'group', status: 'outage', uptimeWindowDays: 90,
+      uptimeRatio: 1, history: historyDays, children: [{
+        id: 'geo', name: 'GeoLocation Website', kind: 'leaf', status: 'outage', uptimeWindowDays: 90,
+        uptimeRatio: 1, history: historyDays, checks: [
+          { id: 'http', name: 'HTTP liveness', kind: 'http', status: 'operational', observedAt: new Date().toISOString() },
+          { id: 'queue', name: 'Notification delay', kind: 'telemetry', status: 'degraded', observedAt: null },
+        ],
+      }],
+    }],
+  };
+  renderOverview(data);
+  assert.equal(document.querySelectorAll('.component-row').length, 1);
+  assert.equal(document.querySelector('.component-row a')?.getAttribute('href'), '/component/portal');
+  renderComponent(data, 'portal');
+  assert.equal(document.querySelector('.component-row a')?.getAttribute('href'), '/component/geo');
+  assert.match(document.querySelector('.panel')?.textContent || '', /Components.*GeoLocation Website/s);
+  assert.ok(document.querySelector('.history-bar.status-outage'));
+  renderComponent(data, 'geo');
+  assert.ok(document.querySelector('a[href="/component/portal"]'));
+  assert.match(document.querySelector('.panel')?.textContent || '', /Checks.*HTTP liveness.*Operational.*Notification delay.*Degraded/s);
+  assert.match(document.body.textContent || '', /100.00% check availability/);
+  data.incidents = [{
+    id: 20, aliases: [2], title: 'Earlier GeoLocation outage', components: ['another-component'],
+    severity: 'outage', state: 'resolved', url: '/incident/20', createdAt: '2026-10-23T08:00:00Z', updates: [],
+  }, {
+    id: 3, title: 'Unrelated outage', components: ['another-component'],
+    severity: 'outage', state: 'resolved', url: '/incident/3', createdAt: '2026-10-23T08:00:00Z', updates: [],
+  }];
+  for (const id of ['portal', 'geo']) {
+    renderComponent(data, id);
+    assert.match(document.querySelector('.incidents-section')?.textContent || '', /Earlier GeoLocation outage/);
+    assert.doesNotMatch(document.querySelector('.incidents-section')?.textContent || '', /Unrelated outage/);
+  }
+});
+
 test('public rendering keeps announcements plain text and incident excerpts readable', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
   for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
@@ -131,4 +176,26 @@ test('Azure metric alerts expose measured conditions rather than requiring raw J
   }])[0];
   assert.ok(card.details.some(detail => detail.label === 'ActiveMessages' && detail.value === '450 GreaterThan 100 (Average)'));
   assert.deepEqual(affectedComponents(card, ['xi.sitewatch.server-events'], { 'portal-server-events': ['xi.sitewatch.server-events'] }, []), ['xi.sitewatch.server-events']);
+});
+
+test('telemetry evidence keeps check scope and private diagnostics without copying them into the public draft', () => {
+  const record = {
+    source: 'check-result', id: 'xi/queue', observedAt: new Date().toISOString(),
+    evidence: {
+      site: 'xi', component: 'xi.sitewatch.server-events', name: 'Event processing',
+      checkId: 'queue', status: 'outage', detail: 'PRIVATE_QUEUE_DIAGNOSTICS',
+    },
+  };
+  const card = evidenceCards([record])[0];
+  assert.equal(card.title, 'Event processing');
+  assert.equal(card.summary, 'PRIVATE_QUEUE_DIAGNOSTICS');
+  assert.equal(card.state, 'outage');
+  const ids = affectedComponents(card, ['xi.sitewatch.server-events'], {}, []);
+  assert.deepEqual(ids, ['xi.sitewatch.server-events']);
+  const seed = incidentSeed(card, ids, ['Server Events']);
+  assert.equal(seed.severity, 'outage');
+  assert.equal(seed.state, 'investigating');
+  assert.doesNotMatch(seed.message, /PRIVATE|queue/);
+  const recovered = evidenceCards([{ ...record, evidence: { ...record.evidence, status: 'operational' } }])[0];
+  assert.equal(incidentSeed(recovered, ids, ['Server Events']).state, 'monitoring');
 });
