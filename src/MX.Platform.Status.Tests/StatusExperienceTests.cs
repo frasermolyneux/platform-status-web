@@ -150,6 +150,49 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void ResolvedLegacyImpactRemainsAvailableAfterSynchronizationAndLaterEdits()
+    {
+        var site = Catalogue().Get("mx");
+        var started = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-1).AddHours(10), TimeSpan.Zero);
+        var legacy = new IncidentRecord
+        {
+            Id = 74,
+            SiteId = "mx",
+            Published = true,
+            Title = "Resolved legacy incident",
+            Components = ["mx.sitewatch.geo-location-web"],
+            Severity = Severity.Outage,
+            State = IncidentState.Resolved,
+            StartedAt = started,
+            ResolvedAt = started.AddHours(1),
+            PublicUpdates =
+            [
+                new() { At = started, State = IncidentState.Investigating, Severity = Severity.Outage, Body = "Outage declared" },
+                new() { At = started.AddHours(1), State = IncidentState.Resolved, Severity = Severity.Outage, Body = "Recovered" }
+            ]
+        };
+        var synchronized = legacy.ObserveImpact(legacy, DateTimeOffset.UtcNow);
+        var edited = new IncidentCommand(legacy.Title, legacy.Components, Severity.Degraded,
+            IncidentState.Resolved, "Resolution clarified", true)
+            .Apply(legacy.Id, legacy.SiteId, synchronized, DateTimeOffset.UtcNow);
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        foreach (var record in new[] { synchronized, edited })
+        {
+            Assert.Empty(record.ImpactHistory);
+            var publication = new StatusMerger().Merge(site.Snapshot, live, null, [record.ToPublicIncident()], []);
+            foreach (var component in Flatten(publication.Components).Where(component =>
+                component.Id is "mx.sitewatch.geo-location-web" or "mx.service.geo-location"))
+            {
+                Assert.Equal("operational", component.Status);
+                var day = component.History.Single(day => day.Date == DateOnly.FromDateTime(started.UtcDateTime));
+                Assert.Equal("outage", day.Status);
+                Assert.Contains(legacy.Id, day.IncidentIds!);
+            }
+        }
+    }
+
+    [Fact]
     public void ObservedLegacyImpactIsNotBackdatedAndRemainsAfterResolutionAndScopeChanges()
     {
         var catalog = Catalogue();

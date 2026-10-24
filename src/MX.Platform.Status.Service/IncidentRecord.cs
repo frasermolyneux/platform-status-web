@@ -62,7 +62,8 @@ public sealed record IncidentRecord
     public IncidentRecord ObserveImpact(IncidentRecord? previous, DateTimeOffset now)
     {
         var history = previous?.ImpactHistory ?? ImpactHistory;
-        if (!Published || history.LastOrDefault() is { } last
+        if (!Published || State == IncidentState.Resolved && history.Count == 0
+            || history.LastOrDefault() is { } last
             && last.State == State && last.Severity == Severity
             && last.Components.ToHashSet().SetEquals(Components)
             && last.ScheduledStart == ScheduledStart && last.ScheduledEnd == ScheduledEnd)
