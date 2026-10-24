@@ -25,8 +25,7 @@ public sealed record CheckDefinition
     internal bool IsDue(string site, IReadOnlyList<ProbeObservation> probes, DateTimeOffset now)
     {
         var latest = LatestProbe(site, probes);
-        return latest is null || latest.ObservedAt > now
-            || now - latest.ObservedAt >= TimeSpan.FromSeconds(ExpectedIntervalSeconds);
+        return latest is null || now - latest.ObservedAt >= TimeSpan.FromSeconds(ExpectedIntervalSeconds);
     }
 }
 

@@ -499,6 +499,11 @@ public sealed partial class IndependentServiceTests : IDisposable
                     app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
                 await normal.PublishAsync(lease, default);
                 Assert.Equal(2, http.Requests);
+                await using var expire = new Npgsql.NpgsqlCommand(
+                    "DELETE FROM status_evidence WHERE source='independent-probe' AND event_id IN ($1,$2)", lease.Connection);
+                expire.Parameters.AddWithValue($"mx/{fixture}.fast");
+                expire.Parameters.AddWithValue($"xi/{fixture}.fast");
+                await expire.ExecuteNonQueryAsync();
                 foreach (var site in catalog.Sites)
                     await lease.SaveProbeEvidenceAsync(new(site.Site.Id, $"{site.Site.Id}.{fixture}", "Fast",
                         "https://fast.example.test/", "publisher", DateTimeOffset.UtcNow.AddSeconds(-31),

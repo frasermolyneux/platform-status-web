@@ -32,7 +32,7 @@ public sealed class StatusExperienceTests
     [InlineData(299, false)]
     [InlineData(300, true)]
     [InlineData(301, true)]
-    [InlineData(-60, true)]
+    [InlineData(-60, false)]
     public void HttpCheckSchedulingUsesDurableMatchingObservationsAndItsOwnInterval(int ageSeconds, bool due)
     {
         var now = DateTimeOffset.UtcNow;
