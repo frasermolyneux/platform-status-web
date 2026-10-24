@@ -132,10 +132,56 @@ each with its own ID, component, name and expected interval. A permitted
 to `/api/integrations/checks/{siteId}/{checkId}` for a configured telemetry check.
 Scope must match the definition; older observations cannot replace newer results.
 Details stay private. HTTP targets stay in reviewed configuration.
+HTTP checks default to `GET`; `method: "HEAD"` is also supported. Other methods
+are rejected, and shared definitions must agree on the method.
 
 Legacy `probes` remain in the production catalogue for rolling compatibility with
 the previous image. Explicit `checks` take precedence for each component; legacy
 probes are used only for components without explicit checks.
+
+### Bounded-cost observability coverage
+
+MX additionally covers BQBA, DM Electrical Services, CraftPledge, Talk With Tiles,
+Travel Itinerary, Twenty One, and Trip Side Kick's website and application.
+XI adds the CDN under Community Forums, Maps Manager under XI Redirect,
+Community Games & Points (Arcade, Casino, Daily Games, Powerball and Wallet),
+and the published FreezeTag statistics page.
+
+New checks run at five-minute intervals. GeoLocation Website and Portal Website
+combine origin liveness with public-hostname routing; Repository APIs combine
+liveness with database readiness. These existing App Service liveness checks,
+including GeoLocation API, run every two minutes to offset the additional Azure
+HTTP request budget. Shared GeoLocation checks execute once, not once per brand.
+The publisher reads durable observations before scheduling, retains results for
+checks not yet due, and collects at most five overdue checks per round, oldest
+deadline first. Collection and its history sample commit in one transaction.
+Each round leaves time for incident and banner publication rather than awaiting
+the entire due backlog. Restarting does not
+reset a check's schedule. HTTP-only history records components when they are
+actually observed, not on skipped collection rounds.
+Intervals are minimums; due checks run on the next publisher collection round.
+New Azure website baselines use `HEAD` to avoid downloading response bodies.
+Trip Side Kick Application uses its dependency-free liveness endpoint, not its
+database-backed readiness endpoint or an authenticated application page.
+
+This pass uses existing host limits, workspaces, telemetry and alert resources;
+it does not add Sitewatch tests, alert series, log ingestion pipelines, paid
+delivery canaries, MaxMind requests, or serverless-SQL readiness probes.
+Existing Azure HTTP checks plus the additional App Service checks have a lower
+configured request rate than the previous Azure checks alone. This is a request
+budget, not a guarantee about metered telemetry bytes or the final Azure invoice;
+request telemetry, log sizes and consumption costs must still be observed after
+release. Existing Functions checks retain their previous cadence.
+
+These are availability baselines, not transaction monitoring: login redirects
+are accepted without following them; CDN liveness does not prove every asset is
+available; a published statistics page does not prove updater freshness. Those
+signals, scheduled-job freshness, queue depth and private host/backup evidence
+remain strategic monitoring concerns owned by `platform-monitoring` and workload
+producers. Raw alerts remain private until an operator publishes an incident.
+Server Agent, protocol-aware TeamSpeak checks, additional consumption-Function
+probes, weekly-job missed-run state and new Azure alert resources are deferred
+pending a meaningful signal and an approved cost envelope.
 
 Declared component or service impact overrides healthy checks and aggregates upward.
 Observed impact, scope and maintenance windows are retained separately from public

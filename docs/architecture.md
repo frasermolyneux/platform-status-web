@@ -15,6 +15,17 @@ contracts, domain types, regional classifiers, and merger. It does not run the
 Functions host or its GitHub/blob query path. Shared KQL tenant filtering and
 `sum(itemCount)` conventions below still apply to optional Sitewatch evidence.
 
+HTTP collection is scheduled per check against durable observations, with at most
+five requests per round, oldest deadline first. Remaining due checks wait for the
+next worker tick, keeping incident publication responsive during HTTP timeouts.
+Evidence and history are committed atomically on the publisher connection, so a
+failed history write cannot advance a probe's durable schedule. Shared check identities execute once and project to
+both sites. Each collection combines new observations with persisted observations
+before component and service aggregation; a slow check's failure must survive a
+fast check's next collection. HTTP-only history advances only for components
+observed in that collection. Telemetry-backed history retains its existing
+sampling behaviour. A changed target or missing observation is immediately due.
+
 ## Legacy Azure architecture
 
 The remaining sections describe the preserved, inactive Azure implementation,

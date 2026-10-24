@@ -11,11 +11,22 @@ public sealed record CheckDefinition
     public string Component { get; init; } = "";
     public string Name { get; init; } = "";
     public string Kind { get; init; } = "http";
+    public string Method { get; init; } = "GET";
     public string? Target { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 60;
 
     public string PublicId(SiteDefinition site) => SharedId
         ?? (site.SharedComponents.ContainsKey(Component) ? $"{site.Site.Id}/{Id}" : Id);
+
+    internal ProbeObservation? LatestProbe(string site, IReadOnlyList<ProbeObservation> probes) =>
+        probes.Where(probe => probe.Site == site && probe.Component == Component && probe.Target == Target && probe.Method == Method
+            && (probe.CheckId == Id || probe.CheckId is null)).MaxBy(probe => probe.ObservedAt);
+
+    internal bool IsDue(string site, IReadOnlyList<ProbeObservation> probes, DateTimeOffset now)
+    {
+        var latest = LatestProbe(site, probes);
+        return latest is null || now - latest.ObservedAt >= TimeSpan.FromSeconds(ExpectedIntervalSeconds);
+    }
 }
 
 public sealed record CheckResult(string Site, string CheckId, [property: JsonRequired] ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
@@ -46,8 +57,7 @@ public static class ComponentChecks
         IReadOnlyList<CheckResult> signals, DateTimeOffset now)
     {
         var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
-        var probe = probes.Where(probe => probe.Site == site.Site.Id && probe.Component == check.Component
-            && (probe.CheckId == check.Id || probe.CheckId is null && probe.Target == check.Target)).MaxBy(probe => probe.ObservedAt);
+        var probe = check.LatestProbe(site.Site.Id, probes);
         var at = check.Kind == "http" ? probe?.ObservedAt : signal?.ObservedAt;
         var status = signal?.Status ?? ComponentStatus.Unknown;
         if (check.Kind == "http")

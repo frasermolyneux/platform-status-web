@@ -123,8 +123,8 @@ public sealed class StatusCatalog
         var groups = Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.SharedId is not null)
             .Select(check => (Identity: check.SharedId, Component: site.SharedComponents[check.Component], Check: check)))
             .GroupBy(entry => entry.Identity);
-        if (groups.Any(shared => shared.Select(entry => (entry.Component, entry.Check.Kind, entry.Check.Target, entry.Check.ExpectedIntervalSeconds)).Distinct().Count() != 1))
-            throw new InvalidOperationException("Shared check definitions must identify the same component, kind, target and interval.");
+        if (groups.Any(shared => shared.Select(entry => (entry.Component, entry.Check.Kind, entry.Check.Target, entry.Check.Method, entry.Check.ExpectedIntervalSeconds)).Distinct().Count() != 1))
+            throw new InvalidOperationException("Shared check definitions must identify the same component, kind, target, method and interval.");
     }
 
     private static void ValidateProbes(SiteDefinition definition, Component[] components)
@@ -143,7 +143,7 @@ public sealed class StatusCatalog
             throw new InvalidOperationException("A shared check identity requires an explicitly shared component.");
         if (!components.Any(c => c.Id == check.Component && c.Kind == "leaf") || string.IsNullOrWhiteSpace(check.Id)
             || string.IsNullOrWhiteSpace(check.Name) || check.ExpectedIntervalSeconds is < 30 or > 86400
-            || check.Kind is not ("http" or "telemetry"))
+            || check.Kind is not ("http" or "telemetry") || check.Method is not ("GET" or "HEAD"))
             throw new InvalidOperationException("Checks require a unique identity, component, name, supported kind and observation interval.");
         if (check.Kind == "telemetry" && check.Target is not null)
             throw new InvalidOperationException("Telemetry checks accept authenticated observations, not HTTP targets.");

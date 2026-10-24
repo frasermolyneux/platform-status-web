@@ -12,6 +12,7 @@ public sealed class PublicationWorker(
     IHttpClientFactory clients, ILogger<PublicationWorker> logger) : BackgroundService
 {
     private DateTimeOffset nextProbeAt;
+    private DateTimeOffset nextTelemetryAt;
     private readonly Dictionary<string, (string Fingerprint, DateTimeOffset At)> published = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -59,12 +60,16 @@ public sealed class PublicationWorker(
         await PublishAsync(publisherLock, ct);
     }
 
-    private async Task PublishAsync(PublisherLease publisherLock, CancellationToken ct)
+    internal async Task PublishAsync(PublisherLease publisherLock, CancellationToken ct)
     {
         if (DateTimeOffset.UtcNow >= nextProbeAt)
         {
+            // Back off failed collections; successful rounds check individual deadlines every worker tick.
             nextProbeAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
-            await RefreshProbesAsync(publisherLock, ct);
+            var sampleTelemetry = DateTimeOffset.UtcNow >= nextTelemetryAt;
+            await RefreshProbesAsync(publisherLock, ct, sampleTelemetry);
+            if (sampleTelemetry) nextTelemetryAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
+            nextProbeAt = DateTimeOffset.MinValue;
         }
         var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
         foreach (var definition in catalog.Sites)
@@ -116,16 +121,25 @@ public sealed class PublicationWorker(
             .ToDictionary(probe => probe.Component, probe =>
                 new ComponentLiveTelemetry(1, probe.Success ? 0 : 1, probe.ObservedAt, null));
 
-    internal async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct)
+    internal async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct, bool sampleTelemetry = true)
     {
+        var previous = new Dictionary<string, IReadOnlyList<ProbeObservation>>();
+        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
+            previous[siteId] = await database.ReadProbesAsync(siteId, ct);
+        var now = DateTimeOffset.UtcNow;
         var collected = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http")
             .Select(check => (Site: site, Check: check))).GroupBy(entry =>
-                (entry.Check.SharedId, Local: entry.Check.SharedId is null ? $"{entry.Site.Site.Id}/{entry.Check.Id}" : null)).Select(async group =>
+                (entry.Check.SharedId, Local: entry.Check.SharedId is null ? $"{entry.Site.Site.Id}/{entry.Check.Id}" : null))
+            .Where(group => group.Any(entry => entry.Check.IsDue(entry.Site.Site.Id, previous[entry.Site.Site.Id], now)))
+            .OrderBy(group => group.Min(entry => entry.Check.LatestProbe(entry.Site.Site.Id, previous[entry.Site.Site.Id])
+                ?.ObservedAt.AddSeconds(entry.Check.ExpectedIntervalSeconds) ?? DateTimeOffset.MinValue))
+            .Take(5)
+            .Select(async group =>
         {
             var first = group.First();
             var name = StatusCatalog.Flatten(first.Site.Components.Components).Single(component => component.Id == first.Check.Component).Name;
             var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
-                first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct);
+                first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct, first.Check.Method);
             return group.Select(entry => observation with
             {
                 Site = entry.Site.Site.Id,
@@ -135,6 +149,8 @@ public sealed class PublicationWorker(
             }).ToArray();
         }));
         var observations = collected.SelectMany(group => group).ToArray();
+        if (observations.Length == 0 && !sampleTelemetry) return;
+        await using var transaction = await lease.Connection.BeginTransactionAsync(ct);
         var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
         foreach (var site in catalog.Sites)
         {
@@ -145,14 +161,27 @@ public sealed class PublicationWorker(
                         site.Site.Id, observation.Component, observation.Error);
                 await lease.SaveProbeEvidenceAsync(observation, ct);
             }
-            telemetry[site.Site.Id] = ComponentChecks.Build(site, observations, await database.ReadChecksAsync(site.Site.Id, ct));
+            telemetry[site.Site.Id] = ComponentChecks.Build(site, [.. previous[site.Site.Id], .. observations],
+                await database.ReadChecksAsync(site.Site.Id, ct));
         }
+        await RecordHistoryAsync(lease, telemetry, observations, sampleTelemetry, ct);
+        await transaction.CommitAsync(ct);
+    }
+
+    private async Task RecordHistoryAsync(PublisherLease lease, Dictionary<string, Dictionary<string, ComponentLiveTelemetry>> telemetry,
+        IReadOnlyList<ProbeObservation> observations, bool sampleTelemetry, CancellationToken ct)
+    {
+        var observedShared = observations.Select(observation =>
+            catalog.Get(observation.Site).SharedComponents.GetValueOrDefault(observation.Component)).OfType<string>().ToHashSet();
         foreach (var site in catalog.Sites)
         {
             var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);
             var live = catalog.ProjectTelemetry(site, telemetry);
             foreach (var (component, sample) in live.Where(pair => pair.Value.Samples > 0))
-                if (!IsMaintained(site, component, DateTimeOffset.UtcNow, incidents))
+                if ((sampleTelemetry && sample.Checks.Any(check => check.Kind == "telemetry")
+                    || observations.Any(observation => observation.Site == site.Site.Id && observation.Component == component)
+                    || site.SharedComponents.TryGetValue(component, out var shared) && observedShared.Contains(shared))
+                    && !IsMaintained(site, component, DateTimeOffset.UtcNow, incidents))
                     await lease.RecordProbeAsync(site.Site.Id, component, sample.Failures == 0, ct);
         }
     }
