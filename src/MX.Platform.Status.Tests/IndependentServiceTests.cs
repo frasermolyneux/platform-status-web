@@ -414,6 +414,96 @@ public sealed partial class IndependentServiceTests : IDisposable
     }
 
     [PostgresFact]
+    public async Task ProbeSchedulingSurvivesRestartRetainsSlowFailuresAndCollectsSharedChecksOnce()
+    {
+        var connection = Path.Combine(_directory, "connection");
+        File.WriteAllText(connection, Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION"));
+        var fixture = "schedule-" + Guid.NewGuid().ToString("N");
+        var catalogPath = Path.Combine(_directory, "scheduling-catalog.json");
+        await File.WriteAllTextAsync(catalogPath, JsonSerializer.Serialize(Catalogue().Sites.Select(site => site with
+        {
+            Probes = [],
+            Checks =
+            [
+                new() { Id = $"{fixture}.fast", SharedId = $"{fixture}.fast", Component = $"{site.Site.Id}.{fixture}",
+                    Name = "Fast", Target = "https://fast.example.test/" },
+                new() { Id = $"{fixture}.slow", SharedId = $"{fixture}.slow", Component = $"{site.Site.Id}.{fixture}",
+                    Name = "Slow", Target = "https://slow.example.test/", ExpectedIntervalSeconds = 300 }
+            ],
+            Components = site.Components with { Components = [.. site.Components.Components, new() { Id = $"{site.Site.Id}.{fixture}", Name = "Fixture" }] },
+            SharedComponents = new(site.SharedComponents) { [$"{site.Site.Id}.{fixture}"] = fixture }
+        }), StatusJson.Options));
+        await using var app = Build(configuredIdentity: true, connection, builder =>
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Status:CatalogPath"] = catalogPath }));
+        await app.StartAsync();
+        var database = app.Services.GetRequiredService<PostgresStore>();
+        await database.InitializeAsync(default);
+        var catalog = app.Services.GetRequiredService<StatusCatalog>();
+        using var http = new SchedulingProbeFixture();
+        try
+        {
+            PublisherLease? lease = null;
+            for (var attempt = 0; lease is null && attempt < 130; attempt++)
+            {
+                lease = await database.TryPublisherLockAsync(default);
+                if (lease is null) await Task.Delay(TimeSpan.FromSeconds(1));
+            }
+            await using (lease)
+            {
+                Assert.NotNull(lease);
+                foreach (var site in catalog.Sites)
+                    await lease.SaveProbeEvidenceAsync(new(site.Site.Id, $"{site.Site.Id}.{fixture}", "Slow",
+                        "https://slow.example.test/", "publisher", DateTimeOffset.UtcNow.AddSeconds(-250),
+                        false, 503, 10, "HTTP 503", $"{fixture}.slow"), default);
+                for (var restart = 0; restart < 2; restart++)
+                {
+                    using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
+                        app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
+                    await publisher.RefreshProbesAsync(lease, default);
+                    Assert.Equal(1, http.Requests);
+                    foreach (var site in catalog.Sites)
+                    {
+                        var live = ComponentChecks.Build(site, await database.ReadProbesAsync(site.Site.Id, default), []);
+                        var publication = new MX.Platform.Status.App.Merging.StatusMerger().Merge(site.Snapshot, live, null, [], []);
+                        var component = publication.Components.Single(component => component.Id == $"{site.Site.Id}.{fixture}");
+                        Assert.Equal("outage", component.Status);
+                        Assert.Equal("outage", component.Checks!.Single(check => check.Id == $"{fixture}.slow").Status);
+                        Assert.Equal("operational", component.Checks!.Single(check => check.Id == $"{fixture}.fast").Status);
+                        var day = Assert.Single((await database.ReadHistoryAsync(site, default)).ComponentsById[component.Id].Days);
+                        Assert.Equal(1, day.Total);
+                        Assert.Equal(1, day.Failed);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
+            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id IN ($1,$2,$3,$4)");
+            foreach (var key in new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow" })
+                cleanup.Parameters.AddWithValue(key);
+            await cleanup.ExecuteNonQueryAsync();
+            await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2)");
+            counters.Parameters.AddWithValue($"mx.{fixture}");
+            counters.Parameters.AddWithValue($"xi.{fixture}");
+            await counters.ExecuteNonQueryAsync();
+        }
+    }
+
+    private sealed class SchedulingProbeFixture : HttpMessageHandler, IHttpClientFactory
+    {
+        private int _requests;
+        public int Requests => Volatile.Read(ref _requests);
+        public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal("fast.example.test", request.RequestUri!.Host);
+            Interlocked.Increment(ref _requests);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
+    }
+
+    [PostgresFact]
     public async Task BannerApiPersistsAuditsEnforcesBrandAndRevisionAndRejectsReaderWrites()
     {
         var connection = Path.Combine(_directory, "connection");

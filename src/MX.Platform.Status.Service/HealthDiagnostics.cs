@@ -63,7 +63,8 @@ public static class HealthDiagnostics
             if (component.Kind == "group") source = "Service aggregate from components";
             return new ComponentHealth(component.Id, component.Name, published?.Status ?? "unknown",
                 source,
-                target, component.Sla.ExpectedIntervalSeconds, published?.LastSampleAt, probe, failure,
+                target, configured.Select(check => check.ExpectedIntervalSeconds).DefaultIfEmpty(component.Sla.ExpectedIntervalSeconds).Min(),
+                published?.LastSampleAt, probe, failure,
                 MatchesPublication(published, observations.GetValueOrDefault(component.Id), probe),
                 publication.Incidents.Where(incident => incident.Severity != "maintenance"
                     && published?.OpenIncidentIds?.Contains(incident.Id) == true).ToArray(),

@@ -18,6 +18,28 @@
         ]},
         {"id": "mx.service.bishops-bees", "name": "Bishops Bees", "kind": "group", "children": [
           {"id": "mx.sitewatch.bishopsbees", "name": "Bishops Bees Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.bqba", "name": "BQBA", "kind": "group", "children": [
+          {"id": "mx.probe.bqba", "name": "BQBA Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.dm-electrical-services", "name": "DM Electrical Services", "kind": "group", "children": [
+          {"id": "mx.probe.dm-electrical-services", "name": "DM Electrical Services Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.craftpledge", "name": "CraftPledge", "kind": "group", "children": [
+          {"id": "mx.probe.craftpledge", "name": "CraftPledge Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.talkwithtiles", "name": "Talk With Tiles", "kind": "group", "children": [
+          {"id": "mx.probe.talkwithtiles", "name": "Talk With Tiles Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.travel-itinerary", "name": "Travel Itinerary", "kind": "group", "children": [
+          {"id": "mx.probe.travel-itinerary", "name": "Travel Itinerary Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.twenty-one", "name": "Twenty One", "kind": "group", "children": [
+          {"id": "mx.probe.twenty-one", "name": "Twenty One Website", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "mx.service.trip-side-kick", "name": "Trip Side Kick", "kind": "group", "children": [
+          {"id": "mx.probe.trip-side-kick-website", "name": "Trip Side Kick Website", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "mx.probe.trip-side-kick-app", "name": "Trip Side Kick Application", "kind": "leaf", "source": {"kind": "probe"}}
         ]}
       ]
     },
@@ -25,7 +47,14 @@
     "workloads": {
       "molyneux-me": ["mx.sitewatch.molyneux-me"],
       "geo-location": ["mx.sitewatch.geo-location-web", "mx.sitewatch.geo-location-api"],
-      "bishops-bees": ["mx.sitewatch.bishopsbees"]
+      "bishops-bees": ["mx.sitewatch.bishopsbees"],
+      "bqba": ["mx.probe.bqba"],
+      "dm-electrical-services": ["mx.probe.dm-electrical-services"],
+      "craftpledge": ["mx.probe.craftpledge"],
+      "talkwithtiles": ["mx.probe.talkwithtiles"],
+      "travel-itinerary": ["mx.probe.travel-itinerary"],
+      "twenty-one": ["mx.probe.twenty-one"],
+      "trip-side-kick": ["mx.probe.trip-side-kick-website", "mx.probe.trip-side-kick-app"]
     },
     "probes": {
       "mx.sitewatch.molyneux-me": "https://www.molyneux.me/",
@@ -35,9 +64,18 @@
     },
     "checks": [
       {"id": "mx.sitewatch.molyneux-me", "component": "mx.sitewatch.molyneux-me", "name": "Website HTTP availability", "target": "https://www.molyneux.me/"},
-      {"id": "mx.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "mx.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live"},
-      {"id": "mx.sitewatch.geo-location-api", "component": "mx.sitewatch.geo-location-api", "name": "API liveness", "target": "https://app-geo-location-api-prd-swedencentral-6f10eaac01a0.azurewebsites.net/v1.0/health/live"},
-      {"id": "mx.sitewatch.bishopsbees", "component": "mx.sitewatch.bishopsbees", "name": "Website HTTP availability", "target": "https://bishopsbees.co.uk/"}
+      {"id": "mx.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "mx.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live", "expectedIntervalSeconds": 120},
+      {"id": "mx.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "mx.sitewatch.geo-location-web", "name": "Public hostname routing", "target": "https://www.geo-location.net/api/health/live", "expectedIntervalSeconds": 300},
+      {"id": "mx.sitewatch.geo-location-api", "component": "mx.sitewatch.geo-location-api", "name": "API liveness", "target": "https://app-geo-location-api-prd-swedencentral-6f10eaac01a0.azurewebsites.net/v1.0/health/live", "expectedIntervalSeconds": 120},
+      {"id": "mx.sitewatch.bishopsbees", "component": "mx.sitewatch.bishopsbees", "name": "Website HTTP availability", "target": "https://bishopsbees.co.uk/"},
+      {"id": "mx.probe.bqba", "component": "mx.probe.bqba", "name": "Public website availability", "target": "https://bqba.co.uk/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.dm-electrical-services", "component": "mx.probe.dm-electrical-services", "name": "Public website availability", "target": "https://www.dm-electricalservices.co.uk/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.craftpledge", "component": "mx.probe.craftpledge", "name": "Public website availability", "method": "HEAD", "target": "https://www.craftpledge.org/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.talkwithtiles", "component": "mx.probe.talkwithtiles", "name": "Public website availability", "method": "HEAD", "target": "https://talkwithtiles.molyneux.me/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.travel-itinerary", "component": "mx.probe.travel-itinerary", "name": "Public website availability", "method": "HEAD", "target": "https://travelplans.molyneux.me/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.twenty-one", "component": "mx.probe.twenty-one", "name": "Public website availability", "method": "HEAD", "target": "https://twenty-one.molyneux.me/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.trip-side-kick-website", "component": "mx.probe.trip-side-kick-website", "name": "Public website availability", "method": "HEAD", "target": "https://tripsidekick.net/", "expectedIntervalSeconds": 300},
+      {"id": "mx.probe.trip-side-kick-app", "component": "mx.probe.trip-side-kick-app", "name": "Public application liveness", "method": "HEAD", "target": "https://tripsidekick.app/api/health/live", "expectedIntervalSeconds": 300}
     ]
   },
   {
@@ -51,7 +89,8 @@
     "components": {
       "components": [
         {"id": "xi.service.forums", "name": "Community Forums", "kind": "group", "children": [
-          {"id": "xi.sitewatch.forums-web", "name": "Community Forums Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.sitewatch.forums-web", "name": "Community Forums Website", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "xi.probe.cdn", "name": "Community CDN", "kind": "leaf", "source": {"kind": "probe"}}
         ]},
         {"id": "xi.service.portal", "name": "XtremeIdiots Portal", "kind": "group", "children": [
           {"id": "xi.sitewatch.portal-web", "name": "XtremeIdiots Portal Website", "kind": "leaf", "source": {"kind": "probe"}},
@@ -62,7 +101,18 @@
           {"id": "xi.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "probe"}}
         ]},
         {"id": "xi.service.redirect", "name": "XI Redirect", "kind": "group", "children": [
-          {"id": "xi.sitewatch.redirect", "name": "XI Redirect Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.sitewatch.redirect", "name": "XI Redirect Website", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "xi.probe.maps", "name": "Maps Manager", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "xi.service.games", "name": "Community Games & Points", "kind": "group", "children": [
+          {"id": "xi.probe.arcade", "name": "Arcade", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "xi.probe.casino", "name": "Casino", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "xi.probe.dailygames", "name": "Daily Games", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "xi.probe.powerball", "name": "Powerball", "kind": "leaf", "source": {"kind": "probe"}},
+          {"id": "xi.probe.wallet", "name": "XI Points Wallet", "kind": "leaf", "source": {"kind": "probe"}}
+        ]},
+        {"id": "xi.service.freezetag", "name": "FreezeTag Statistics", "kind": "group", "children": [
+          {"id": "xi.probe.freezetag", "name": "FreezeTag Statistics Website", "kind": "leaf", "source": {"kind": "probe"}}
         ]}
       ]
     },
@@ -74,7 +124,15 @@
       "portal-repository": ["xi.sitewatch.repository-api-v1", "xi.sitewatch.repository-api-v2"],
       "xi-redirect": ["xi.sitewatch.redirect"],
       "portal-servers-integration": ["xi.sitewatch.servers-integration-api"],
-      "portal-server-events": ["xi.sitewatch.server-events"]
+      "portal-server-events": ["xi.sitewatch.server-events"],
+      "xi-cdn": ["xi.probe.cdn"],
+      "xi-redirect-manager": ["xi.probe.maps"],
+      "xi-arcade": ["xi.probe.arcade"],
+      "xi-casino": ["xi.probe.casino"],
+      "xi-dailygames": ["xi.probe.dailygames"],
+      "xi-powerball": ["xi.probe.powerball"],
+      "xi-bank": ["xi.probe.wallet"],
+      "xi-freezetag-stats": ["xi.probe.freezetag"]
     },
     "probes": {
       "xi.sitewatch.forums-web": "https://www.xtremeidiots.com/",
@@ -88,13 +146,25 @@
     },
     "checks": [
       {"id": "xi.sitewatch.forums-web", "component": "xi.sitewatch.forums-web", "name": "Website HTTP availability", "target": "https://www.xtremeidiots.com/"},
-      {"id": "xi.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "xi.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live"},
-      {"id": "xi.sitewatch.portal-web", "component": "xi.sitewatch.portal-web", "name": "Website liveness", "target": "https://app-portal-web-prd-uksouth-fe584e15256a.azurewebsites.net/api/health/live"},
-      {"id": "xi.sitewatch.repository-api-v1", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 liveness", "target": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/live"},
-      {"id": "xi.sitewatch.repository-api-v2", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 liveness", "target": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/live"},
+      {"id": "xi.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "xi.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live", "expectedIntervalSeconds": 120},
+      {"id": "xi.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "xi.sitewatch.geo-location-web", "name": "Public hostname routing", "target": "https://www.geo-location.net/api/health/live", "expectedIntervalSeconds": 300},
+      {"id": "xi.sitewatch.portal-web", "component": "xi.sitewatch.portal-web", "name": "Website liveness", "target": "https://app-portal-web-prd-uksouth-fe584e15256a.azurewebsites.net/api/health/live", "expectedIntervalSeconds": 120},
+      {"id": "xi.portal-web.routing", "component": "xi.sitewatch.portal-web", "name": "Public hostname routing", "target": "https://portal.xtremeidiots.com/api/health/live", "expectedIntervalSeconds": 300},
+      {"id": "xi.sitewatch.repository-api-v1", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 liveness", "target": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/live", "expectedIntervalSeconds": 120},
+      {"id": "xi.repository-api-v1.readiness", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 database readiness", "target": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/ready", "expectedIntervalSeconds": 300},
+      {"id": "xi.sitewatch.repository-api-v2", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 liveness", "target": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/live", "expectedIntervalSeconds": 120},
+      {"id": "xi.repository-api-v2.readiness", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 database readiness", "target": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/ready", "expectedIntervalSeconds": 300},
       {"id": "xi.sitewatch.redirect", "component": "xi.sitewatch.redirect", "name": "Website HTTP availability", "target": "https://redirect.xtremeidiots.net/"},
       {"id": "xi.sitewatch.servers-integration-api", "component": "xi.sitewatch.servers-integration-api", "name": "API liveness", "target": "https://app-portal-servers-int-prd-uksouth-v1-66febf7b1b9d.azurewebsites.net/v1.0/health/live"},
-      {"id": "xi.sitewatch.server-events", "component": "xi.sitewatch.server-events", "name": "Function liveness", "target": "https://fn-portal-server-events-prd-uksouth-3e4bb7b00601.azurewebsites.net/api/health/live"}
+      {"id": "xi.sitewatch.server-events", "component": "xi.sitewatch.server-events", "name": "Function liveness", "target": "https://fn-portal-server-events-prd-uksouth-3e4bb7b00601.azurewebsites.net/api/health/live"},
+      {"id": "xi.probe.cdn", "component": "xi.probe.cdn", "name": "CDN HTTP liveness", "target": "https://cdn.xtremeidiots.com/_platform/health", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.maps", "component": "xi.probe.maps", "name": "Public website availability", "target": "https://maps.xtremeidiots.com/", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.arcade", "component": "xi.probe.arcade", "name": "Public application availability", "target": "https://www.xtremeidiots.com/arcade/", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.casino", "component": "xi.probe.casino", "name": "Public application availability", "target": "https://www.xtremeidiots.com/casino/", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.dailygames", "component": "xi.probe.dailygames", "name": "Public application availability", "target": "https://www.xtremeidiots.com/dailygames/", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.powerball", "component": "xi.probe.powerball", "name": "Public application availability", "target": "https://www.xtremeidiots.com/powerball/", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.wallet", "component": "xi.probe.wallet", "name": "Public application availability", "target": "https://www.xtremeidiots.com/wallet/", "expectedIntervalSeconds": 300},
+      {"id": "xi.probe.freezetag", "component": "xi.probe.freezetag", "name": "Published statistics availability", "target": "https://www.xtremeidiots.com/stats/stats.html", "expectedIntervalSeconds": 300}
     ]
   }
 ]

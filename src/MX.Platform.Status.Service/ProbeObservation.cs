@@ -4,12 +4,13 @@ namespace MX.Platform.Status.Service;
 
 public sealed record ProbeObservation(
     string Site, string Component, string Name, string Target, string Observer,
-    DateTimeOffset ObservedAt, bool Success, int? HttpStatus, long DurationMilliseconds, string? Error, string? CheckId = null);
+    DateTimeOffset ObservedAt, bool Success, int? HttpStatus, long DurationMilliseconds, string? Error,
+    string? CheckId = null, string Method = "GET");
 
 public static class IndependentProbe
 {
     public static async Task<ProbeObservation> ObserveAsync(
-        HttpClient client, string site, string component, string name, string target, CancellationToken ct)
+        HttpClient client, string site, string component, string name, string target, CancellationToken ct, string method = "GET")
     {
         var started = Stopwatch.GetTimestamp();
         int? status = null;
@@ -18,7 +19,7 @@ public static class IndependentProbe
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, target);
+            using var request = new HttpRequestMessage(new HttpMethod(method), target);
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             status = (int)response.StatusCode;
             if (status is < 200 or >= 400) error = $"HTTP {status} {response.ReasonPhrase}";
@@ -33,6 +34,6 @@ public static class IndependentProbe
         }
         ct.ThrowIfCancellationRequested();
         return new(site, component, name, target, Environment.MachineName, DateTimeOffset.UtcNow,
-            status is >= 200 and < 400, status, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds, error);
+            status is >= 200 and < 400, status, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds, error, Method: method);
     }
 }

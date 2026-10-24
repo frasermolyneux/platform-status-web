@@ -118,21 +118,33 @@ public sealed class PublicationWorker(
 
     internal async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct)
     {
+        var previous = new Dictionary<string, IReadOnlyList<ProbeObservation>>();
+        foreach (var site in catalog.Sites)
+            previous[site.Site.Id] = await database.ReadProbesAsync(site.Site.Id, ct);
+        var now = DateTimeOffset.UtcNow;
+        using var concurrency = new SemaphoreSlim(5);
         var collected = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http")
             .Select(check => (Site: site, Check: check))).GroupBy(entry =>
-                (entry.Check.SharedId, Local: entry.Check.SharedId is null ? $"{entry.Site.Site.Id}/{entry.Check.Id}" : null)).Select(async group =>
+                (entry.Check.SharedId, Local: entry.Check.SharedId is null ? $"{entry.Site.Site.Id}/{entry.Check.Id}" : null))
+            .Where(group => group.Any(entry => entry.Check.IsDue(entry.Site.Site.Id, previous[entry.Site.Site.Id], now)))
+            .Select(async group =>
         {
-            var first = group.First();
-            var name = StatusCatalog.Flatten(first.Site.Components.Components).Single(component => component.Id == first.Check.Component).Name;
-            var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
-                first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct);
-            return group.Select(entry => observation with
+            await concurrency.WaitAsync(ct);
+            try
             {
-                Site = entry.Site.Site.Id,
-                Component = entry.Check.Component,
-                CheckId = entry.Check.Id,
-                Name = StatusCatalog.Flatten(entry.Site.Components.Components).Single(component => component.Id == entry.Check.Component).Name
-            }).ToArray();
+                var first = group.First();
+                var name = StatusCatalog.Flatten(first.Site.Components.Components).Single(component => component.Id == first.Check.Component).Name;
+                var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
+                    first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct, first.Check.Method);
+                return group.Select(entry => observation with
+                {
+                    Site = entry.Site.Site.Id,
+                    Component = entry.Check.Component,
+                    CheckId = entry.Check.Id,
+                    Name = StatusCatalog.Flatten(entry.Site.Components.Components).Single(component => component.Id == entry.Check.Component).Name
+                }).ToArray();
+            }
+            finally { concurrency.Release(); }
         }));
         var observations = collected.SelectMany(group => group).ToArray();
         var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
@@ -145,14 +157,17 @@ public sealed class PublicationWorker(
                         site.Site.Id, observation.Component, observation.Error);
                 await lease.SaveProbeEvidenceAsync(observation, ct);
             }
-            telemetry[site.Site.Id] = ComponentChecks.Build(site, observations, await database.ReadChecksAsync(site.Site.Id, ct));
+            telemetry[site.Site.Id] = ComponentChecks.Build(site, [.. previous[site.Site.Id], .. observations],
+                await database.ReadChecksAsync(site.Site.Id, ct));
         }
         foreach (var site in catalog.Sites)
         {
             var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);
             var live = catalog.ProjectTelemetry(site, telemetry);
             foreach (var (component, sample) in live.Where(pair => pair.Value.Samples > 0))
-                if (!IsMaintained(site, component, DateTimeOffset.UtcNow, incidents))
+                if ((sample.Checks.Any(check => check.Kind == "telemetry")
+                    || observations.Any(observation => observation.Site == site.Site.Id && observation.Component == component))
+                    && !IsMaintained(site, component, DateTimeOffset.UtcNow, incidents))
                     await lease.RecordProbeAsync(site.Site.Id, component, sample.Failures == 0, ct);
         }
     }
