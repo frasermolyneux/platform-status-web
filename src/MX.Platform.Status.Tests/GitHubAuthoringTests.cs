@@ -42,7 +42,7 @@ public sealed partial class IndependentServiceTests
             Assert.Null(record.SourceUrl);
             await Retry();
             Assert.EndsWith("/issues/42", (await Read()).SourceUrl);
-            Assert.True(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default), (await Read()).GitHub?.Error);
             Assert.Equal(1, api.Creates);
             Assert.Single(api.Comments);
             await importer.SynchronizeAsync(default);
@@ -75,7 +75,7 @@ public sealed partial class IndependentServiceTests
             Assert.False(await worker.RunOnceAsync(default));
             Assert.Equal("review", (await Read()).GitHub!.State);
             await Retry();
-            Assert.True(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default), (await Read()).GitHub?.Error);
             Assert.Equal(1, api.Creates);
             Assert.Equal(3, api.Comments.Count);
             await importer.SynchronizeAsync(default);
@@ -184,7 +184,8 @@ public sealed partial class IndependentServiceTests
             Assert.True(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true), remote, options.GitHubRepository, "operator", default));
             api.LoseCommentReply = true;
             Assert.False(await worker.RunOnceAsync(default));
-            Assert.True(await worker.RunOnceAsync(default));
+            Assert.Equal("uncertain", (await Read()).GitHub!.State);
+            Assert.True(await worker.RunOnceAsync(default), (await Read()).GitHub?.Error);
             Assert.Single(api.Comments);
             Assert.Equal("External correction at the same source timestamp", api.Issue["body"]!.GetValue<string>());
             await importer.SynchronizeAsync(default);
@@ -310,13 +311,14 @@ internal sealed class GitHubWriteFixture : HttpMessageHandler, IHttpClientFactor
     public JsonObject? TokenScope { get; private set; }
     public Stream? ResponseStream { get; set; }
     private readonly HashSet<string> labels = [];
-    private DateTimeOffset time = DateTimeOffset.UtcNow;
+    private DateTimeOffset time = DateTimeOffset.MinValue;
 
     public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
     private string NextTime()
     {
         var now = DateTimeOffset.UtcNow;
-        return (time = now > time ? now : time.AddTicks(1)).ToString("O");
+        now = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMicrosecond));
+        return (time = now > time ? now : time.AddMicroseconds(1)).ToString("O");
     }
 
     public void Touch() => Issue!["updated_at"] = NextTime();
