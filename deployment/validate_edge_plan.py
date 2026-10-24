@@ -1,6 +1,7 @@
 """Reject changes outside the reviewed Cloudflare staging or activation boundary."""
 
 import argparse
+import copy
 import json
 import sys
 
@@ -134,14 +135,72 @@ def validate_plan(plan, *, activate=False):
         rules = ruleset["rules"]
         if (ruleset["zone_id"] != preflight[zone]["zone_id"]
                 or ruleset["name"] != "platform-status-origin-tls" or ruleset["kind"] != "zone"
-                or ruleset["phase"] != "http_config_settings" or len(rules) != 1):
+                or ruleset["phase"] != "http_config_settings"
+                or len(rules) not in ((1, 2) if zone == "xtremeidiots.com" else (1,))):
             raise ValueError(f"Unexpected TLS configuration scope for {zone}.")
         rule = rules[0]
         if (rule["action"] != "set_config" or rule["enabled"] is not True
                 or rule["expression"] != f'http.host eq "{hostname}"'
                 or rule["action_parameters"]["ssl"] != "strict"):
             raise ValueError(f"TLS must remain strict and limited to {hostname}.")
+        if len(rules) == 2:
+            maps = rules[1]
+            if (maps.get("ref") != "maps_origin_strict_tls" or maps["action"] != "set_config"
+                    or maps["enabled"] is not True or maps["expression"] != 'http.host eq "maps.xtremeidiots.com"'
+                    or maps["action_parameters"]["ssl"] != "strict"
+                    or any(value is not None for key, value in maps["action_parameters"].items() if key != "ssl")
+                    or any(value is not None for key, value in maps.items() if key not in {
+                        "ref", "description", "action", "enabled", "expression", "action_parameters",
+                        "id", "version", "last_updated"})):
+                raise ValueError("The additional TLS rule must be strict and limited to the maps manager.")
     return sum(resource["change"]["actions"] == ["create"] for resource in managed)
+
+
+def without_computed_metadata(value):
+    if isinstance(value, dict):
+        return {key: without_computed_metadata(item) for key, item in value.items()
+                if key not in {"id", "version", "last_updated"}}
+    if isinstance(value, list):
+        return [without_computed_metadata(item) for item in value]
+    return value
+
+
+def validate_maps_tls(plan):
+    validate_drift(plan)
+    target = 'cloudflare_ruleset.status_tls["xtremeidiots.com"]'
+    normalized = copy.deepcopy(plan)
+    changes = [resource for resource in normalized["resource_changes"] if resource["mode"] == "managed"]
+    matches = [resource for resource in changes if resource["address"] == target]
+    if len(matches) != 1:
+        raise ValueError("The existing XtremeIdiots TLS entrypoint is required.")
+    for resource in changes:
+        change = resource["change"]
+        allowed = (["no-op"], ["update"]) if resource["address"] == target else (["no-op"],)
+        if change["actions"] not in allowed or change.get("importing") is not None:
+            raise ValueError("Maps TLS must not change routing, monitors, other zones or resource ownership.")
+    change = matches[0]["change"]
+    before, after = change.get("before"), change["after"]
+    if before is None or len(after["rules"]) != 2 or len(before["rules"]) not in (1, 2):
+        raise ValueError("Maps TLS may only append its exact rule to the existing status entrypoint.")
+    if before.get("id") != after.get("id"):
+        raise ValueError("Maps TLS must preserve the existing ruleset identity.")
+    if contains_unknown(without_computed_metadata(change.get("after_unknown", {}))):
+        raise ValueError("Maps TLS requires known scope and settings; only generated rule metadata may be unknown.")
+    old, new = without_computed_metadata(before), without_computed_metadata(after)
+    expected_description = "Strict origin TLS for status sites and the maps manager."
+    if new.get("description") != expected_description or old.get("description") not in (
+            expected_description, "Strict origin TLS only for the public status hostname."):
+        raise ValueError("Unexpected maps TLS entrypoint description.")
+    old.pop("description")
+    new.pop("description")
+    old_rules, new_rules = old.pop("rules"), new.pop("rules")
+    if old != new or old_rules != new_rules[:len(old_rules)]:
+        raise ValueError("Maps TLS must preserve the complete existing entrypoint and status rule.")
+    updates = int(change["actions"] == ["update"])
+    change["actions"] = ["no-op"]
+    change["after_unknown"] = {}
+    validate_plan(normalized, activate=True)
+    return updates
 
 
 def validate_preflight(plan):
@@ -172,9 +231,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--activate", action="store_true")
     parser.add_argument("--prepare-activation", action="store_true")
+    parser.add_argument("--maps-tls", action="store_true")
     args = parser.parse_args()
     plan = json.load(sys.stdin)
-    if args.prepare_activation:
+    if args.maps_tls:
+        updates = validate_maps_tls(plan)
+        print(f"Approved maps TLS: {updates} existing-entrypoint updates; status routing remains unchanged.")
+    elif args.prepare_activation:
         validate_preflight(plan)
         print("Verified unchanged staged resources; this refresh-only plan cannot enable routing.")
     elif args.activate:

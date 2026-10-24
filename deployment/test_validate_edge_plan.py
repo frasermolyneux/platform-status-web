@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from validate_edge_plan import validate_plan, validate_preflight
+from validate_edge_plan import validate_maps_tls, validate_plan, validate_preflight
 
 
 def staged_plan():
@@ -67,7 +67,76 @@ def activation_plan():
     return plan
 
 
+def maps_tls_plan():
+    plan = staged_plan()
+    plan["resource_changes"][0]["change"]["after"]["enabled"] = True
+    for resource in plan["resource_changes"]:
+        change = resource["change"]
+        change["actions"] = ["no-op"]
+        change["before"] = copy.deepcopy(change["after"])
+    change = plan["resource_changes"][-1]["change"]
+    change["actions"] = ["update"]
+    change["before"]["id"] = change["after"]["id"] = "existing-xi-tls"
+    change["before"]["description"] = "Strict origin TLS only for the public status hostname."
+    change["after"]["description"] = "Strict origin TLS for status sites and the maps manager."
+    change["after"]["rules"].append({
+        "ref": "maps_origin_strict_tls", "description": "Validate the maps manager origin certificate.",
+        "action": "set_config", "enabled": True, "expression": 'http.host eq "maps.xtremeidiots.com"',
+        "action_parameters": {"ssl": "strict"},
+    })
+    return plan
+
+
 class EdgePlanTests(unittest.TestCase):
+    def test_maps_tls_appends_only_the_exact_rule_and_allows_idempotent_reconciliation(self):
+        plan = maps_tls_plan()
+        self.assertEqual(validate_maps_tls(plan), 1)
+        change = plan["resource_changes"][-1]["change"]
+        change["actions"] = ["no-op"]
+        change["before"] = copy.deepcopy(change["after"])
+        self.assertEqual(validate_maps_tls(plan), 0)
+        self.assertEqual(validate_preflight(plan), 0)
+
+    def test_maps_tls_rejects_status_routing_other_resources_and_existing_rule_changes(self):
+        for index, field, value in ((0, "enabled", False), (1, "description", "unreviewed")):
+            with self.subTest(index=index):
+                plan = maps_tls_plan()
+                plan["resource_changes"][index]["change"]["actions"] = ["update"]
+                plan["resource_changes"][index]["change"]["after"][field] = value
+                with self.assertRaises(ValueError):
+                    validate_maps_tls(plan)
+        plan = maps_tls_plan()
+        plan["resource_changes"][-1]["change"]["after"]["rules"][0]["expression"] = "true"
+        with self.assertRaises(ValueError):
+            validate_maps_tls(plan)
+
+    def test_maps_tls_rejects_broad_rules_imports_replacements_and_extra_settings(self):
+        for mutation in ("wildcard", "parameter", "import", "replace", "identity"):
+            with self.subTest(mutation=mutation):
+                plan = maps_tls_plan()
+                change = plan["resource_changes"][-1]["change"]
+                if mutation == "wildcard":
+                    change["after"]["rules"][1]["expression"] = 'http.host contains "xtremeidiots.com"'
+                elif mutation == "parameter":
+                    change["after"]["rules"][1]["action_parameters"]["disable_apps"] = True
+                elif mutation == "import":
+                    change["importing"] = {"id": "another-ruleset"}
+                elif mutation == "replace":
+                    change["actions"] = ["delete", "create"]
+                else:
+                    change["after"]["id"] = "another-ruleset"
+                with self.assertRaises(ValueError):
+                    validate_maps_tls(plan)
+
+    def test_maps_tls_allows_generated_metadata_but_rejects_unknown_rule_scope(self):
+        plan = maps_tls_plan()
+        change = plan["resource_changes"][-1]["change"]
+        change["after_unknown"] = {"version": True, "last_updated": True, "rules": [{}, {"id": True, "version": True}]}
+        self.assertEqual(validate_maps_tls(plan), 1)
+        change["after_unknown"]["rules"][1]["expression"] = True
+        with self.assertRaises(ValueError):
+            validate_maps_tls(plan)
+
     def test_refresh_only_preflight_validates_actual_staged_values_without_resource_changes(self):
         plan = staged_plan()
         plan["planned_values"]["root_module"] = {"resources": [
