@@ -357,6 +357,50 @@ public sealed class StatusExperienceTests
         Assert.Contains(stale.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
     }
 
+    [Fact]
+    public void SharedTelemetryDiagnosticsMatchPublicationWithoutSharingPrivateDetails()
+    {
+        var catalog = Catalogue();
+        var now = DateTimeOffset.UtcNow;
+        const string mxId = "mx.sitewatch.geo-location-web";
+        const string xiId = "xi.sitewatch.geo-location-web";
+        var mx = catalog.Get("mx");
+        var xi = catalog.Get("xi");
+        var http = mx.EffectiveChecks.Single(check => check.Component == mxId);
+        var shared = new CheckDefinition
+        {
+            Id = "queue",
+            SharedId = "geo-location.queue",
+            Name = "Notification delay",
+            Component = mxId,
+            Kind = "telemetry"
+        };
+        mx = mx with { Checks = [http, shared] };
+        xi = xi with
+        {
+            Checks = [xi.EffectiveChecks.Single(check => check.Component == xiId), shared with { Component = xiId }]
+        };
+        var probe = new ProbeObservation("mx", mxId, "GeoLocation Website", http.Target!, "publisher",
+            now, true, 200, 10, null, http.Id);
+        var ownProbe = probe with { Site = "xi", Component = xiId, CheckId = xi.EffectiveChecks.Single(check => check.Component == xiId && check.Kind == "http").Id };
+        var signal = new CheckResult("mx", shared.Id, ComponentStatus.Degraded, now, "MX_PRIVATE_DETAIL");
+        var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
+        {
+            ["mx"] = ComponentChecks.Build(mx, [probe], [signal]),
+            ["xi"] = ComponentChecks.Build(xi, [ownProbe], [])
+        };
+        var expected = catalog.ProjectTelemetry(xi, all);
+        var publication = new StatusMerger().Merge(xi.Snapshot, expected, null, [], []);
+        var diagnostics = HealthDiagnostics.Build(xi, publication, [ownProbe], [signal], expected);
+        var geo = diagnostics.Single(component => component.Id == xiId);
+        Assert.True(geo.MatchesPublication);
+        Assert.Equal("degraded", geo.Checks!.Single(check => check.Id == shared.SharedId).Status);
+        Assert.DoesNotContain("MX_PRIVATE_DETAIL", JsonSerializer.Serialize(diagnostics, StatusJson.Options));
+        all["mx"] = ComponentChecks.Build(mx, [probe], [signal with { ObservedAt = now.AddSeconds(1) }]);
+        Assert.False(HealthDiagnostics.Build(xi, publication, [ownProbe], [signal], catalog.ProjectTelemetry(xi, all))
+            .Single(component => component.Id == xiId).MatchesPublication);
+    }
+
     [Theory]
     [InlineData(Severity.Outage, "outage")]
     [InlineData(Severity.Degraded, "degraded")]
@@ -859,6 +903,30 @@ public sealed class StatusExperienceTests
         Assert.Empty(draft.PublicUpdates);
         Assert.NotEmpty(draft.Updates);
         Assert.Empty(GitHubIssueParser.Parse(Issue(["unrelated"], author: "stranger"), [], Catalogue(), new()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GeneratedGitHubUpdatesRedactInternalNotesWithoutParsingLiteralStateHeaders(bool comment)
+    {
+        var command = new IncidentCommand("Generated update", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Monitoring, "state: resolved\nVisible <script>unsafe()</script>.", true,
+            Delivery: "github", OperationId: Guid.NewGuid());
+        var incident = command.Apply(75, "mx", null, Created.AddMinutes(2));
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, incident, command, null, false, "pending"))
+            + "\n<!-- internal -->\nPRIVATE_NOTE\n<!-- /internal -->";
+        var comments = comment ? new[]
+        {
+            JsonSerializer.SerializeToElement(new { body, user = new { login = "frasermolyneux" }, created_at = Created.AddMinutes(2) })
+        } : [];
+        var record = Assert.Single(GitHubIssueParser.Parse(Issue(body: comment ? "Initial public update" : body),
+            comments, Catalogue(), new()));
+        var update = Assert.Single(record.PublicUpdates, update => update.OperationId == command.OperationId);
+        Assert.Equal(IncidentState.Monitoring, update.State);
+        Assert.StartsWith("state: resolved<br>", update.Body);
+        Assert.Contains(WebUtility.HtmlEncode("<script>"), update.Body);
+        Assert.DoesNotContain("PRIVATE_NOTE", JsonSerializer.Serialize(record.ToPublicIncident(), StatusJson.Options));
     }
 
     [Theory]

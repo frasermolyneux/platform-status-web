@@ -254,7 +254,7 @@ public static class GitHubIssueParser
     {
         var document = GitHubIncidentDocument.Read(content);
         var (text, explicitState) = document.Metadata is { } metadata
-            ? (document.Text, (IncidentState?)metadata.State) : ReadLegacyUpdate(document.Text);
+            ? (IncidentRenderer.Render(document.Text), (IncidentState?)metadata.State) : ReadLegacyUpdate(document.Text);
         at = document.Metadata?.At ?? at;
         if (text.Length > 20000) throw new InvalidDataException("Incident updates cannot exceed 20000 characters.");
         if (text.Length > 0)
