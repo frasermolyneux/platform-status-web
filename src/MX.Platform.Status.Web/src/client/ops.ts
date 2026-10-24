@@ -218,7 +218,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
               control.checked = value;
             else if (control instanceof HTMLSelectElement && control.multiple && Array.isArray(value))
               Array.from(control.options).forEach(item => { item.selected = value.includes(item.value); });
-            else if (typeof value === 'string') control.value = value;
+            else if (typeof value === 'string' && (control.name !== 'operationId' || saved.revision === revision)) control.value = value;
           }
         };
         if (saved.revision !== undefined && saved.revision !== revision) {

@@ -245,6 +245,15 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void UnknownGitHubSiteLabelsRequireReviewInsteadOfBlockingTheDeliveryWorker()
+    {
+        var command = new IncidentCommand("Incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Approved update", true);
+        Assert.Throws<GitHubIncidentConflictException>(() =>
+            GitHubIncidentDocument.Labels(Catalogue(), "mx", command, ["site:typo"]));
+    }
+
+    [Fact]
     public void GeneratedGitHubUpdatesRoundTripOnceAndRetainEditsAndExplicitRestoration()
     {
         var catalog = Catalogue();

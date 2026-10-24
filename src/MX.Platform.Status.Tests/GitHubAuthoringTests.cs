@@ -266,6 +266,15 @@ public sealed partial class IndependentServiceTests
             record = await Read();
             Assert.False(record.Published);
             Assert.Equal("draft", record.GitHub!.State);
+            Assert.Equal("PRIVATE_TITLE", record.Title);
+            Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
+            api.Issue!["labels"]!.AsArray().Add(new JsonObject { ["name"] = "status:published" });
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            record = await Read();
+            Assert.True(record.Published);
+            Assert.Equal("synced", record.GitHub!.State);
+            Assert.Equal("Authoring fixture", record.Title);
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
         }
         finally { await CleanupGitHubFixtureAsync(options, record.Id); }

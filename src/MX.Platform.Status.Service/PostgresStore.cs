@@ -326,7 +326,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 previous = JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(0), StatusJson.Options)!;
                 previousAt = reader.GetFieldValue<DateTimeOffset>(1);
             }
-        if (previous?.GitHub is { State: not "synced" } || previousAt > updatedAt
+        if (previous?.GitHub is { State: not ("synced" or "draft") } || previousAt > updatedAt
             || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion)) return;
         IncidentRecord record;
         if (previous is null)
@@ -338,7 +338,19 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         else
         {
             record = incoming with { Id = previous.Id, Revision = previous.Revision + 1 };
+            if (previous.GitHub?.State == "draft" && !incoming.Published)
+                record = record with
+                {
+                    Title = previous.Title,
+                    Components = previous.Components,
+                    Severity = previous.Severity,
+                    State = previous.State,
+                    ResolvedAt = previous.ResolvedAt,
+                    ScheduledStart = previous.ScheduledStart,
+                    ScheduledEnd = previous.ScheduledEnd
+                };
         }
+        if (previous?.GitHub is not null) record = record with { GitHub = new(record.Published ? "synced" : "draft") };
         record = record.ObserveImpact(previous, DateTimeOffset.UtcNow);
         var changed = previous is null || JsonSerializer.Serialize(previous with { Revision = 0 }, StatusJson.Options)
             != JsonSerializer.Serialize(record with { Revision = 0 }, StatusJson.Options);

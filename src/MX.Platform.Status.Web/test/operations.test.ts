@@ -337,14 +337,18 @@ for (const deferred of [false, true]) test(`queued incidents retain GitHub deliv
   }];
   await renderOperations();
   assert.match(document.body.textContent || '', /GitHub delivery: pending.*GitHub is unavailable/);
+  const savedOperation = crypto.randomUUID();
   sessionStorage.setItem('status-draft:test-account:mx:incident:1', JSON.stringify({
-    revision: deferred ? 0 : 1, values: { delivery: 'local', message: 'Next public update' },
+    revision: deferred ? 0 : 1, values: { delivery: 'local', message: 'Next public update', operationId: savedOperation },
   }));
   click('Edit incident');
   if (deferred) click('Restore older draft');
   const delivery = document.querySelector<HTMLSelectElement>('[name="delivery"]')!;
   assert.equal(delivery.value, 'github');
   assert.equal(delivery.disabled, true);
+  const operation = document.querySelector<HTMLInputElement>('[name="operationId"]')!.value;
+  if (deferred) assert.notEqual(operation, savedOperation);
+  else assert.equal(operation, savedOperation);
   document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => writes.length === 1);
   assert.equal(writes[0].body.delivery, 'github');

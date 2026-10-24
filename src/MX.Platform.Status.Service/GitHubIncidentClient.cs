@@ -60,7 +60,8 @@ public static class GitHubIncidentDocument
     public static string[] Labels(StatusCatalog catalog, string siteId, IncidentCommand command, string[] previous)
     {
         var otherSites = previous.Where(label => label.StartsWith("site:", StringComparison.Ordinal)).Select(label => label[5..])
-            .Where(id => id != siteId).Select(catalog.Get).ToArray();
+            .Where(id => id != siteId).Select(id => catalog.Sites.SingleOrDefault(site => site.Site.Id == id)
+                ?? throw new GitHubIncidentConflictException("The GitHub issue names an unknown status site. Review its site labels before retrying.")).ToArray();
         var otherComponents = otherSites.SelectMany(site =>
             previous.Where(label => label.StartsWith("component:", StringComparison.Ordinal)).Select(label => label[10..])
                 .Where(id => StatusCatalog.PublicComponents(site.Components.Components).Any(component => component.Id == id))
