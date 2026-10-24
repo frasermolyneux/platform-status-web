@@ -426,12 +426,26 @@ public sealed partial class IndependentServiceTests : IDisposable
             Checks =
             [
                 new() { Id = $"{fixture}.fast", SharedId = $"{fixture}.fast", Component = $"{site.Site.Id}.{fixture}",
-                    Name = "Fast", Target = "https://fast.example.test/" },
+                    Name = "Fast", Target = "https://fast.example.test/", ExpectedIntervalSeconds = 30 },
                 new() { Id = $"{fixture}.slow", SharedId = $"{fixture}.slow", Component = $"{site.Site.Id}.{fixture}",
-                    Name = "Slow", Target = "https://slow.example.test/", ExpectedIntervalSeconds = 300 }
+                    Name = "Slow", Target = "https://slow.example.test/", ExpectedIntervalSeconds = 300 },
+                .. (site.Site.Id == "mx" ? new List<CheckDefinition>
+                {
+                    new() { Id = $"{fixture}.one-sided", SharedId = $"{fixture}.one-sided", Component = $"mx.{fixture}.one-sided",
+                        Name = "One-sided", Target = "https://fast.example.test/", ExpectedIntervalSeconds = 300 }
+                } : [])
             ],
-            Components = site.Components with { Components = [.. site.Components.Components, new() { Id = $"{site.Site.Id}.{fixture}", Name = "Fixture" }] },
-            SharedComponents = new(site.SharedComponents) { [$"{site.Site.Id}.{fixture}"] = fixture }
+            Components = site.Components with
+            {
+                Components = [.. site.Components.Components,
+                new() { Id = $"{site.Site.Id}.{fixture}", Name = "Fixture" },
+                new() { Id = $"{site.Site.Id}.{fixture}.one-sided", Name = "One-sided fixture" }]
+            },
+            SharedComponents = new(site.SharedComponents)
+            {
+                [$"{site.Site.Id}.{fixture}"] = fixture,
+                [$"{site.Site.Id}.{fixture}.one-sided"] = $"{fixture}.one-sided"
+            }
         }), StatusJson.Options));
         await using var app = Build(configuredIdentity: true, connection, builder =>
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Status:CatalogPath"] = catalogPath }));
@@ -460,10 +474,13 @@ public sealed partial class IndependentServiceTests : IDisposable
                     using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
                         app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
                     await publisher.RefreshProbesAsync(lease, default);
-                    Assert.Equal(1, http.Requests);
+                    Assert.Equal(2, http.Requests);
+                    var all = new Dictionary<string, Dictionary<string, MX.Platform.Status.App.Telemetry.ComponentLiveTelemetry>>();
+                    foreach (var site in catalog.Sites)
+                        all[site.Site.Id] = ComponentChecks.Build(site, await database.ReadProbesAsync(site.Site.Id, default), []);
                     foreach (var site in catalog.Sites)
                     {
-                        var live = ComponentChecks.Build(site, await database.ReadProbesAsync(site.Site.Id, default), []);
+                        var live = catalog.ProjectTelemetry(site, all);
                         var publication = new MX.Platform.Status.App.Merging.StatusMerger().Merge(site.Snapshot, live, null, [], []);
                         var component = publication.Components.Single(component => component.Id == $"{site.Site.Id}.{fixture}");
                         Assert.Equal("outage", component.Status);
@@ -472,20 +489,36 @@ public sealed partial class IndependentServiceTests : IDisposable
                         var day = Assert.Single((await database.ReadHistoryAsync(site, default)).ComponentsById[component.Id].Days);
                         Assert.Equal(1, day.Total);
                         Assert.Equal(1, day.Failed);
+                        var oneSided = Assert.Single((await database.ReadHistoryAsync(site, default))
+                            .ComponentsById[$"{site.Site.Id}.{fixture}.one-sided"].Days);
+                        Assert.Equal(1, oneSided.Total);
+                        Assert.Equal(0, oneSided.Failed);
                     }
                 }
+                using var normal = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
+                    app.Services.GetRequiredService<PublicationStore>(), database, http, NullLogger<PublicationWorker>.Instance);
+                await normal.PublishAsync(lease, default);
+                Assert.Equal(2, http.Requests);
+                foreach (var site in catalog.Sites)
+                    await lease.SaveProbeEvidenceAsync(new(site.Site.Id, $"{site.Site.Id}.{fixture}", "Fast",
+                        "https://fast.example.test/", "publisher", DateTimeOffset.UtcNow.AddSeconds(-31),
+                        true, 200, 5000, null, $"{fixture}.fast"), default);
+                await normal.PublishAsync(lease, default);
+                Assert.Equal(3, http.Requests);
             }
         }
         finally
         {
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
-            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id IN ($1,$2,$3,$4)");
-            foreach (var key in new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow" })
+            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id IN ($1,$2,$3,$4,$5)");
+            foreach (var key in new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow", $"mx/{fixture}.one-sided" })
                 cleanup.Parameters.AddWithValue(key);
             await cleanup.ExecuteNonQueryAsync();
-            await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2)");
+            await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4)");
             counters.Parameters.AddWithValue($"mx.{fixture}");
             counters.Parameters.AddWithValue($"xi.{fixture}");
+            counters.Parameters.AddWithValue($"mx.{fixture}.one-sided");
+            counters.Parameters.AddWithValue($"xi.{fixture}.one-sided");
             await counters.ExecuteNonQueryAsync();
         }
     }
