@@ -228,6 +228,28 @@ public sealed partial class IndependentServiceTests
             record = await Read();
             Assert.Equal("synced", record.GitHub!.State);
 
+            var labels = api.Issue!["labels"]!.AsArray();
+            labels.Remove(labels.Single(label => label!["name"]!.GetValue<string>() == "status:incident"));
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            Assert.False((await Read()).Published);
+            labels.Add(new JsonObject { ["name"] = "status:incident" });
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            Assert.True((await Read()).Published);
+            var approvedBody = api.Issue["body"]!.GetValue<string>();
+            api.Issue["body"] = $"{GitHubIncidentDocument.Marker(Guid.NewGuid())}\n<!-- mxstatus-update:invalid -->\nUnapproved malformed metadata";
+            labels.Remove(labels.Single(label => label!["name"]!.GetValue<string>() == "status:published"));
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            Assert.False((await Read()).Published);
+            api.Issue["body"] = approvedBody;
+            labels.Add(new JsonObject { ["name"] = "status:published" });
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            record = await Read();
+            Assert.True(record.Published);
+
             command = command with
             {
                 Message = "PRIVATE_WITHDRAWAL",

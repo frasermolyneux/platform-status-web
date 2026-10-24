@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.App.Telemetry;
 
@@ -17,7 +18,7 @@ public sealed record CheckDefinition
         ?? (site.SharedComponents.ContainsKey(Component) ? $"{site.Site.Id}/{Id}" : Id);
 }
 
-public sealed record CheckResult(string Site, string CheckId, ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
+public sealed record CheckResult(string Site, string CheckId, [property: JsonRequired] ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
 {
     public string? Validate() => !Enum.IsDefined(Status) || Status == ComponentStatus.Maintenance
         || ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5) || ObservedAt == default || Detail?.Length > 2000

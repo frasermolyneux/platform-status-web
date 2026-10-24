@@ -334,15 +334,37 @@ public sealed partial class IndependentServiceTests : IDisposable
     {
         var connection = Path.Combine(_directory, "connection");
         File.WriteAllText(connection, Environment.GetEnvironmentVariable("STATUS_TEST_CONNECTION"));
-        await using var app = Build(configuredIdentity: true, connection);
+        var component = "fixture-" + Guid.NewGuid().ToString("N");
+        var catalogPath = Path.Combine(_directory, "checks-catalog.json");
+        await File.WriteAllTextAsync(catalogPath, JsonSerializer.Serialize(Catalogue().Sites.Select(site => site with
+        {
+            Probes = [],
+            Checks = site.Site.Id == "mx"
+                ? [new() { Id = component, Component = $"mx.{component}", Name = "Queue", Kind = "telemetry" }] : [],
+            Components = site.Components with { Components = [.. site.Components.Components, new() { Id = $"{site.Site.Id}.{component}", Name = "Fixture" }] },
+            SharedComponents = new(site.SharedComponents) { [$"{site.Site.Id}.{component}"] = component }
+        }), StatusJson.Options));
+        await using var app = Build(configuredIdentity: true, connection, builder =>
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Status:CatalogPath"] = catalogPath }));
         await app.StartAsync();
         var database = app.Services.GetRequiredService<PostgresStore>();
         await database.InitializeAsync(default);
-        var component = "fixture-" + Guid.NewGuid().ToString("N");
         var probe = new ProbeObservation("mx", component, "Fixture website", "https://example.test/", "test-publisher",
             DateTimeOffset.UtcNow, false, 503, 13, "HTTP 503 Service Unavailable");
         try
         {
+            using var client = app.GetTestClient();
+            client.DefaultRequestHeaders.Host = "mxstatus.io";
+            client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Ingest", "", _ingestor));
+            var path = $"/api/integrations/checks/mx/{component}";
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, new
+            {
+                site = "mx",
+                checkId = component,
+                observedAt = DateTimeOffset.UtcNow
+            })).StatusCode);
+            Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(path, new CheckResult("mx", component,
+                ComponentStatus.Outage, DateTimeOffset.UtcNow), StatusJson.Options)).StatusCode);
             PublisherLease? lease = null;
             for (var attempt = 0; lease is null && attempt < 130; attempt++)
             {
@@ -353,11 +375,23 @@ public sealed partial class IndependentServiceTests : IDisposable
             {
                 Assert.NotNull(lease);
                 await lease.SaveProbeEvidenceAsync(probe, default);
+                var catalog = app.Services.GetRequiredService<StatusCatalog>();
+                using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
+                    app.Services.GetRequiredService<PublicationStore>(), database, app.Services.GetRequiredService<IHttpClientFactory>(),
+                    NullLogger<PublicationWorker>.Instance);
+                await publisher.RefreshProbesAsync(lease, default);
+                foreach (var site in catalog.Sites)
+                {
+                    var history = await database.ReadHistoryAsync(site, default);
+                    var day = Assert.Single(history.ComponentsById[$"{site.Site.Id}.{component}"].Days);
+                    Assert.Equal(1, day.Total);
+                    Assert.Equal(1, day.Failed);
+                }
             }
             Assert.Equal(probe, Assert.Single(await database.ReadProbesAsync("mx", default), record => record.Component == component));
             Assert.DoesNotContain(await database.ReadProbesAsync("xi", default), record => record.Component == component);
-            using var client = app.GetTestClient();
             client.DefaultRequestHeaders.Host = "mxstatus.io";
+            client.DefaultRequestHeaders.Authorization = null;
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/health")).StatusCode);
             client.DefaultRequestHeaders.Authorization = new("Bearer", Token("Status.Reader", "Status.Access", _ingestor));
             var checks = (await client.GetFromJsonAsync<ComponentHealth[]>("/api/ops/health", StatusJson.Options))!;
@@ -369,9 +403,13 @@ public sealed partial class IndependentServiceTests : IDisposable
         finally
         {
             await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(connection));
-            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure') AND event_id=$1");
+            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source IN ('independent-probe','independent-probe-failure','check-result') AND event_id=$1");
             cleanup.Parameters.AddWithValue($"mx/{component}");
             await cleanup.ExecuteNonQueryAsync();
+            await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2)");
+            counters.Parameters.AddWithValue($"mx.{component}");
+            counters.Parameters.AddWithValue($"xi.{component}");
+            await counters.ExecuteNonQueryAsync();
         }
     }
 
