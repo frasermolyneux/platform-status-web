@@ -194,6 +194,29 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void EditingAnEarlierStateHeaderDoesNotRewriteUnchangedLaterComments()
+    {
+        var catalog = Catalogue();
+        static JsonElement Comment(string body, int minute) => JsonSerializer.SerializeToElement(new
+        {
+            body,
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(minute)
+        });
+        string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage", "state:monitoring"];
+        var later = Comment("Unchanged later comment", 2);
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(labels),
+            [Comment("state: investigating\nEarlier update", 1), later], catalog, new()));
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(labels, updatedMinutes: 10),
+            [Comment("state: identified\nEarlier update", 1), later], catalog, new(), [first]));
+        var unchanged = Assert.Single(edited.PublicUpdates, update => update.Body == "Unchanged later comment");
+        Assert.Equal(Created.AddMinutes(2), unchanged.At);
+        Assert.Equal(IncidentState.Investigating, unchanged.State);
+        Assert.Equal(IncidentState.Monitoring, edited.PublicUpdates[^1].State);
+        Assert.Equal(2, edited.PublicUpdates.Count(update => update.Body == "Earlier update"));
+    }
+
+    [Fact]
     public void PublicationUsesTheLatestObservationWithoutMakingPersistedEvidenceAppearFresh()
     {
         var site = Catalogue().Get("mx");

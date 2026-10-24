@@ -4,6 +4,7 @@ using MX.Platform.Status.App.Models;
 namespace MX.Platform.Status.Service;
 
 public sealed record IncidentEvidence(string Source, string Id, DateTimeOffset ObservedAt, string Context);
+public sealed record SourceUpdateSnapshot(DateTimeOffset At, string Body, IncidentState? ExplicitState);
 
 public sealed record IncidentRecord
 {
@@ -22,8 +23,8 @@ public sealed record IncidentRecord
     public IReadOnlyList<IncidentUpdate> Updates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> SourceStateUpdates { get; init; } = [];
-    public IReadOnlyList<IncidentUpdate> SourceUpdates { get; init; } = [];
-    public IReadOnlyList<IncidentUpdate> PublicSourceUpdates { get; init; } = [];
+    public IReadOnlyList<SourceUpdateSnapshot> SourceUpdates { get; init; } = [];
+    public IReadOnlyList<SourceUpdateSnapshot> PublicSourceUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicSourceStateUpdates { get; init; } = [];
     public Severity? PublicSourceSeverity { get; init; }
     public string? SourceUrl { get; init; }
