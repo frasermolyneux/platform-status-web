@@ -237,6 +237,13 @@ def runtime_directory(containers):
 
 
 def main():
+    manifest = json.loads((Path(__file__).resolve().parents[1] / "workload.json").read_text())
+    reader_key_consumers = [
+        service["name"] for service in manifest["services"]
+        if any(secret["id"] == "monitoring-reader-certificate" for secret in service.get("secrets", []))
+    ]
+    if reader_key_consumers != ["platform-status-service"]:
+        raise RuntimeError("The monitoring reader private key must be mounted in the status service only.")
     name = f"status-ci-{os.getpid()}"
     containers = []
     network_created = False

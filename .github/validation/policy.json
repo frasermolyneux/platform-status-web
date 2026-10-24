@@ -23,6 +23,14 @@
   ],
   "allowedSecrets": [
     {
+      "id": "monitoring-reader-certificate",
+      "hostPath": "/etc/platform-workloads/platform-status-web/monitoring-reader-certificate",
+      "vaultName": "kv-platform-prd-0b924e",
+      "vaultSecret": "monitoring-reader-certificate",
+      "groupId": 10001,
+      "mode": "0640"
+    },
+    {
       "id": "github-incidents-private-key",
       "hostPath": "/etc/platform-workloads/platform-status-web/github-incidents-private-key",
       "vaultName": "kv-platform-prd-0b924e",
