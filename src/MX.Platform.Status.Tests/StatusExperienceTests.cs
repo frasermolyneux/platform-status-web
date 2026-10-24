@@ -216,7 +216,17 @@ public sealed class StatusExperienceTests
         var failing = ComponentChecks.Build(mx, [observation with { Success = false }], []);
         Assert.Equal(1, failing.Values.Single().Samples);
         Assert.Equal(1, failing.Values.Single().Failures);
-        var telemetry = ComponentChecks.Build(mx, [observation], [new("mx", "queue", ComponentStatus.Degraded, now)]);
+        var signal = new CheckResult("mx", "queue", ComponentStatus.Degraded, now.AddSeconds(-15));
+        var telemetry = ComponentChecks.Build(mx, [observation], [signal]);
+        var localPublication = new StatusMerger().Merge(mx.Snapshot, telemetry, null, [], []);
+        Assert.Equal(signal.ObservedAt, Flatten(localPublication.Components)
+            .Single(component => component.Id == observation.Component).LastSampleAt);
+        Assert.True(HealthDiagnostics.Build(mx, localPublication, [observation], [signal])
+            .Single(component => component.Id == observation.Component).MatchesPublication);
+        Assert.False(HealthDiagnostics.Build(mx, localPublication, [observation with { ObservedAt = now.AddSeconds(1) }], [signal])
+            .Single(component => component.Id == observation.Component).MatchesPublication);
+        Assert.False(HealthDiagnostics.Build(mx, localPublication, [observation], [signal with { ObservedAt = now }])
+            .Single(component => component.Id == observation.Component).MatchesPublication);
         var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
         {
             ["mx"] = telemetry,

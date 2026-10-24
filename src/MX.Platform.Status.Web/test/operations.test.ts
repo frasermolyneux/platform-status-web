@@ -368,7 +368,7 @@ test('shared delivery conflicts route to the owning brand instead of a peer revi
     'https://status.xtremeidiots.com/ops/incidents#incident-4');
 });
 
-test('GitHub conflict review renders remote content safely and requires explicit version-pinned confirmation', async () => {
+test('GitHub conflict review renders remote content safely and requires operation- and version-pinned confirmation', async () => {
   history.replaceState(null, '', '/ops/incidents');
   existingIncidents = [{
     id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Conflicting incident',
@@ -389,7 +389,9 @@ test('GitHub conflict review renders remote content safely and requires explicit
   document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => writes.length === 1);
   assert.equal(writes[0].path, '/api/ops/incidents/1/github/retry');
-  assert.deepEqual(writes[0].body, { revision: 3, remoteVersion: 'reviewed-version', confirmed: true });
+  assert.deepEqual(writes[0].body, {
+    revision: 3, remoteVersion: 'reviewed-version', operationId: 'queued-operation', confirmed: true,
+  });
 });
 
 test('banner editor previews untrusted text safely and sends explicit brand-scoped publication', async () => {

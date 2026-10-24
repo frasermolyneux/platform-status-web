@@ -5,7 +5,7 @@ using NpgsqlTypes;
 
 namespace MX.Platform.Status.Service;
 
-public sealed record GitHubRetryCommand(int Revision, string? RemoteVersion, bool Confirmed);
+public sealed record GitHubRetryCommand(int Revision, string? RemoteVersion, bool Confirmed, Guid OperationId);
 
 public sealed partial class PostgresStore
 {
@@ -40,6 +40,7 @@ public sealed partial class PostgresStore
         current.Parameters.AddWithValue(job.Incident.Id);
         current.Parameters.AddWithValue(job.Incident.SiteId);
         if ((int?)(await current.ExecuteScalarAsync(ct)) != request.Revision || !request.Confirmed
+            || request.OperationId != job.OperationId
             || request.RemoteVersion != remote?.Version) return false;
         await using var write = new NpgsqlCommand("""
             UPDATE status_github_outbox SET state='pending',error=NULL,attempted=false,next_attempt_at=now(),expected_at=$1,

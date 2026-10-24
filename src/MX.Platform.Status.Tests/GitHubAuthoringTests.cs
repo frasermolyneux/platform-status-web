@@ -94,7 +94,7 @@ public sealed partial class IndependentServiceTests
         {
             var job = (await database.ReadGitHubReviewAsync("mx", record.Id, default))!;
             var remote = await github.ReadAsync(42, default);
-            Assert.True(await database.RetryGitHubAsync(job, new(job.Incident.Revision, remote.Version, true),
+            Assert.True(await database.RetryGitHubAsync(job, new(job.Incident.Revision, remote.Version, true, job.OperationId),
                 remote, options.GitHubRepository, "operator", default));
         }
     }
@@ -180,8 +180,10 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("External correction at the same source timestamp", api.Issue["body"]!.GetValue<string>());
             var job = (await database.ReadGitHubReviewAsync("mx", record.Id, default))!;
             var remote = await github.ReadAsync(42, default);
-            Assert.False(await database.RetryGitHubAsync(job, new(record.Revision - 1, remote.Version, true), remote, options.GitHubRepository, "operator", default));
-            Assert.True(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true), remote, options.GitHubRepository, "operator", default));
+            Assert.False(await database.RetryGitHubAsync(job, new(record.Revision - 1, remote.Version, true, job.OperationId), remote, options.GitHubRepository, "operator", default));
+            Assert.False(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true, Guid.NewGuid()), remote, options.GitHubRepository, "operator", default));
+            Assert.Equal("conflict", (await Read()).GitHub!.State);
+            Assert.True(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true, job.OperationId), remote, options.GitHubRepository, "operator", default));
             api.LoseCommentReply = true;
             Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("uncertain", (await Read()).GitHub!.State);

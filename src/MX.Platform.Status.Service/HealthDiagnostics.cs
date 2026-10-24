@@ -1,4 +1,6 @@
 using MX.Platform.Status.App.Contracts;
+using MX.Platform.Status.App.Models;
+using MX.Platform.Status.App.Telemetry;
 
 namespace MX.Platform.Status.Service;
 
@@ -31,6 +33,7 @@ public static class HealthDiagnostics
         var failures = siteProbes.Where(probe => !probe.Success).GroupBy(probe => probe.Component)
             .ToDictionary(group => group.Key, group => group.MaxBy(probe => probe.ObservedAt)!);
         var publicComponents = Flatten(publication.Components).ToDictionary(component => component.Id);
+        var observations = ComponentChecks.Build(site, siteProbes, signals ?? []);
         return StatusCatalog.PublicComponents(site.Components.Components).Select(component =>
         {
             publicComponents.TryGetValue(component.Id, out var published);
@@ -41,7 +44,8 @@ public static class HealthDiagnostics
             var checks = published?.Checks?.Select(check =>
             {
                 var definition = configured.SingleOrDefault(definition => definition.PublicId(site) == check.Id);
-                var result = signals?.Where(signal => signal.CheckId == definition?.Id).MaxBy(signal => signal.ObservedAt);
+                var result = signals?.Where(signal => signal.Site == site.Site.Id && signal.CheckId == definition?.Id)
+                    .MaxBy(signal => signal.ObservedAt);
                 return new CheckHealth(check.Id, check.Name, check.Kind, check.Status, check.ObservedAt, definition?.Target,
                     siteProbes.Where(observation => definition?.Id == (observation.CheckId ?? observation.Component))
                         .MaxBy(observation => observation.ObservedAt), result?.Detail);
@@ -51,11 +55,21 @@ public static class HealthDiagnostics
             return new ComponentHealth(component.Id, component.Name, published?.Status ?? "unknown",
                 source,
                 target, component.Sla.ExpectedIntervalSeconds, published?.LastSampleAt, probe, failure,
-                probe is not null && published?.LastSampleAt == probe.ObservedAt,
+                MatchesPublication(published, observations.GetValueOrDefault(component.Id), probe),
                 publication.Incidents.Where(incident => incident.Severity != "maintenance"
                     && published?.OpenIncidentIds?.Contains(incident.Id) == true).ToArray(),
                 publication.Maintenance.Where(window => window.Components.Contains(component.Id) && window.State == "in-progress").ToArray(), checks);
         }).ToArray();
+    }
+
+    private static bool MatchesPublication(ComponentDto? published, ComponentLiveTelemetry? observed, ProbeObservation? probe)
+    {
+        if (published is null) return false;
+        if (observed is null) return true;
+        if (published.Checks is { Count: > 0 })
+            return observed.Checks.All(expected => published.Checks.Any(check => check.Id == expected.Id
+                && check.ObservedAt == expected.ObservedAt && check.Status == expected.Status.ToApiString()));
+        return probe is not null && published.LastSampleAt == probe.ObservedAt;
     }
 
     private static IEnumerable<ComponentDto> Flatten(IEnumerable<ComponentDto> components) =>

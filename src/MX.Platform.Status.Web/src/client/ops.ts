@@ -397,7 +397,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
           remote: { number: number; title: string; body: string; labels: string[]; updatedAt: string; comments: string[] } | null } = await response.json();
         if (!current()) return;
         const { form, save, key } = openForm(`Review GitHub delivery for incident #${id}`,
-          `github-review:${review.remoteVersion || review.operationId}`, id);
+          `github-review:${review.operationId}:${review.remoteVersion || 'missing'}`, id);
         form.append(element('h4', 'Queued public change'), element('pre', review.localMessage));
         if (review.remote) {
           form.append(element('h4', `Current GitHub issue #${review.remote.number}: ${review.remote.title}`),
@@ -415,7 +415,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         finishForm(form, save, key, review.revision, async () => {
           if (!confirmed.checked) throw new Error('Review GitHub and explicitly confirm before retrying.');
           await request(`/api/ops/incidents/${id}/github/retry`, {
-            method: 'POST', body: JSON.stringify({ revision: review.revision, remoteVersion: review.remoteVersion, confirmed: true }),
+            method: 'POST', body: JSON.stringify({ revision: review.revision, remoteVersion: review.remoteVersion,
+              operationId: review.operationId, confirmed: true }),
           });
         });
         confirmed.checked = false;
