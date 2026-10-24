@@ -16,7 +16,8 @@ public sealed record GitHubIssueSnapshot(JsonElement Issue, IReadOnlyList<JsonEl
     public int Number => Issue.GetProperty("number").GetInt32();
     public DateTimeOffset UpdatedAt => Issue.GetProperty("updated_at").GetDateTimeOffset();
     public string Version => GitHubIncidentClient.Version(Issue, Comments);
-    public string[] ReadLabels() => Issue.GetProperty("labels").EnumerateArray().Select(label => label.GetProperty("name").GetString()!).ToArray();
+    public string[] ReadLabels() => Issue.GetProperty("labels").EnumerateArray()
+        .Select(label => label.GetProperty("name").GetString()!.ToLowerInvariant()).ToArray();
 }
 
 public sealed class GitHubIncidentConflictException(string message) : Exception(message);

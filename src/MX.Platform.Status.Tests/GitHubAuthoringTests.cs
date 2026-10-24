@@ -33,10 +33,10 @@ public sealed partial class IndependentServiceTests
         var record = (await database.SaveIncidentAsync("mx", null, command, "operator", default))!;
         try
         {
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             api.Issue!["body"] = api.Issue["body"]!.GetValue<string>()
                 .Replace(command.Message, "Edited after the lost creation reply", StringComparison.Ordinal);
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             record = await Read();
             Assert.Equal("review", record.GitHub!.State);
             Assert.Null(record.SourceUrl);
@@ -69,10 +69,10 @@ public sealed partial class IndependentServiceTests
             };
             record = (await database.SaveIncidentAsync("mx", record.Id, command, "operator", default))!;
             api.LoseCommentReply = true;
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             api.Comments[^1]["body"] = api.Comments[^1]["body"]!.GetValue<string>()
                 .Replace(command.Message, "Edited before acknowledgment", StringComparison.Ordinal);
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("review", (await Read()).GitHub!.State);
             await Retry();
             Assert.True(await worker.RunOnceAsync(default), (await Read()).GitHub?.Error);
@@ -136,7 +136,7 @@ public sealed partial class IndependentServiceTests
             Assert.Null(await database.SaveIncidentAsync("mx", record.Id,
                 command with { Delivery = "local", Revision = record.Revision, OperationId = null }, "operator", default));
             api.Offline = true;
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             Assert.True((await Read()).Published);
             Assert.Equal("pending", (await Read()).GitHub!.State);
             await using (var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile)))
@@ -147,7 +147,7 @@ public sealed partial class IndependentServiceTests
             }
             api.Offline = false;
             api.LoseCreateReply = true;
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("uncertain", (await Read()).GitHub!.State);
             Assert.True(await worker.RunOnceAsync(default));
             record = await Read();
@@ -175,7 +175,7 @@ public sealed partial class IndependentServiceTests
             };
             record = (await database.SaveIncidentAsync("mx", record.Id, command, "operator", default))!;
             api.Issue!["body"] = "External correction at the same source timestamp";
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("conflict", (await Read()).GitHub!.State);
             Assert.Equal("External correction at the same source timestamp", api.Issue["body"]!.GetValue<string>());
             var job = (await database.ReadGitHubReviewAsync("mx", record.Id, default))!;
@@ -183,7 +183,7 @@ public sealed partial class IndependentServiceTests
             Assert.False(await database.RetryGitHubAsync(job, new(record.Revision - 1, remote.Version, true), remote, options.GitHubRepository, "operator", default));
             Assert.True(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true), remote, options.GitHubRepository, "operator", default));
             api.LoseCommentReply = true;
-            Assert.False(await worker.RunOnceAsync(default));
+            Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("uncertain", (await Read()).GitHub!.State);
             Assert.True(await worker.RunOnceAsync(default), (await Read()).GitHub?.Error);
             Assert.Single(api.Comments);
@@ -251,6 +251,10 @@ public sealed partial class IndependentServiceTests
             record = await Read();
             Assert.True(record.Published);
 
+            api.Issue!["labels"]!.AsArray().Single(label => label!["name"]!.GetValue<string>() == "status:published")!["name"] = "Status:Published";
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            record = await Read();
             command = command with
             {
                 Message = "PRIVATE_WITHDRAWAL",
@@ -276,11 +280,37 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("synced", record.GitHub!.State);
             Assert.Equal("Authoring fixture", record.Title);
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
+            await VerifyIndependentGitHubJobsDrainAsync(database, options);
         }
         finally { await CleanupGitHubFixtureAsync(options, record.Id); }
 
         async Task<IncidentRecord> Read() =>
             (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id);
+    }
+
+    private static async Task VerifyIndependentGitHubJobsDrainAsync(PostgresStore database, RuntimeOptions options)
+    {
+        options = options with { GitHubRepository = $"status-writer-fixture/drain-{Guid.NewGuid():N}" };
+        using var api = new GitHubWriteFixture { TransientFailures = 2 };
+        using var worker = new GitHubOutboxWorker(options, database, new(options, Catalogue(), api),
+            NullLogger<GitHubOutboxWorker>.Instance);
+        var queued = new List<IncidentRecord>();
+        try
+        {
+            for (var index = 0; index < 3; index++)
+                queued.Add((await database.SaveIncidentAsync("mx", null,
+                    new($"Independent incident {index}", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+                        IncidentState.Investigating, "Approved update", true, Delivery: "github", OperationId: Guid.NewGuid()),
+                    "operator", default))!);
+            await worker.DrainAsync(default);
+            var records = (await database.ReadIncidentsAsync("mx", default)).ToDictionary(record => record.Id);
+            Assert.Equal(["pending", "pending", "synced"], queued.Select(record => records[record.Id].GitHub!.State));
+            Assert.Equal(1, api.Creates);
+        }
+        finally
+        {
+            foreach (var record in queued) await CleanupGitHubFixtureAsync(options, record.Id);
+        }
     }
 
     private static async Task CleanupGitHubFixtureAsync(RuntimeOptions options, int id)
@@ -312,6 +342,7 @@ internal sealed class GitHubWriteFixture : HttpMessageHandler, IHttpClientFactor
     public List<JsonObject> Comments { get; } = [];
     public List<string> Bodies { get; } = [];
     public bool Offline { get; set; }
+    public int TransientFailures { get; set; }
     public bool LoseCreateReply { get; set; }
     public bool LoseCommentReply { get; set; }
     public int Creates { get; private set; }
@@ -336,6 +367,11 @@ internal sealed class GitHubWriteFixture : HttpMessageHandler, IHttpClientFactor
     {
         Requests++;
         if (ResponseStream is not null) return new(HttpStatusCode.OK) { Content = new StreamContent(ResponseStream) };
+        if (TransientFailures > 0)
+        {
+            TransientFailures--;
+            return new(HttpStatusCode.ServiceUnavailable);
+        }
         if (Offline) return new(HttpStatusCode.ServiceUnavailable);
         var path = string.Join('/', request.RequestUri!.AbsolutePath.Split('/').Skip(4));
         JsonObject? body = null;
@@ -414,7 +450,8 @@ internal sealed class GitHubWriteFixture : HttpMessageHandler, IHttpClientFactor
         if (path == "issues/42/labels/status%3Apublished" && request.Method == HttpMethod.Delete)
         {
             Issue!["labels"] = new JsonArray(Issue["labels"]!.AsArray().Where(label =>
-                label!["name"]!.GetValue<string>() != "status:published").Select(label => label!.DeepClone()).ToArray());
+                !label!["name"]!.GetValue<string>().Equals("status:published", StringComparison.OrdinalIgnoreCase))
+                .Select(label => label!.DeepClone()).ToArray());
             Issue["updated_at"] = NextTime();
             return Reply(Issue["labels"]);
         }

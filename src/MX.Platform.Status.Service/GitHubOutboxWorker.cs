@@ -20,7 +20,7 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
         }
     }
 
-    private async Task DrainAsync(CancellationToken ct)
+    internal async Task DrainAsync(CancellationToken ct)
     {
         for (var count = 0; count < 20; count++)
             if (!await RunOnceAsync(ct)) break;
@@ -77,7 +77,7 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
         {
             await RetryLaterAsync(lease, job, attempted, exception, ct);
         }
-        return false;
+        return true;
     }
 
     private static bool IsTransient(Exception exception) => exception is HttpRequestException or OperationCanceledException

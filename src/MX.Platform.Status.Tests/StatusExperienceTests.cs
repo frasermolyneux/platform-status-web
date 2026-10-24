@@ -293,6 +293,18 @@ public sealed class StatusExperienceTests
             GitHubIncidentDocument.Labels(Catalogue(), "mx", command, ["site:typo"]));
     }
 
+    [Fact]
+    public void MixedCaseGitHubPublicationLabelsDoNotAcknowledgeAnUndeliveredWithdrawal()
+    {
+        var command = new IncidentCommand("Withdrawal", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Private withdrawal", false, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        using var api = new GitHubWriteFixture();
+        var client = new GitHubIncidentClient(new(), Catalogue(), api);
+        var snapshot = new GitHubIssueSnapshot(Issue(["Status:Incident", "Status:Published", "Site:MX", "Severity:Outage"]), []);
+        Assert.False(client.Matches(new(command.OperationId!.Value, local, command, null, false, "pending"), snapshot));
+    }
+
     [Theory]
     [InlineData("State: database unavailable")]
     [InlineData("State: resolved\nThis is descriptive text, not a state change")]
