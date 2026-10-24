@@ -39,7 +39,8 @@ public static class GitHubIssueParser
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)
         {
-            var previousIncident = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id);
+            var previousIncident = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id)
+                ?? ApprovedHistory(previous?.OrderByDescending(record => record.PublicUpdates.Count).FirstOrDefault());
             var resolvedAt = ResolutionTime(state, closedAt, updatedAt, previousIncident);
             var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
             updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, updatedAt);

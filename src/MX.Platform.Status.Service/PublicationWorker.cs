@@ -63,8 +63,8 @@ public sealed class PublicationWorker(
     {
         if (DateTimeOffset.UtcNow >= nextProbeAt)
         {
-            await RefreshProbesAsync(publisherLock, ct);
             nextProbeAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
+            await RefreshProbesAsync(publisherLock, ct);
         }
         foreach (var site in catalog.Sites)
         {

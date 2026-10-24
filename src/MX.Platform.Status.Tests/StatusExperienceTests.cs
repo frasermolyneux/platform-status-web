@@ -137,6 +137,23 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void AddingAGitHubSiteRetainsTheAlreadySharedApprovedHistoryWithoutCopyingPrivateDrafts()
+    {
+        var catalog = Catalogue();
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(body: "Original update"), [], catalog, new()));
+        string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:degraded", "state:identified"];
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: "Corrected update", updatedMinutes: 10),
+            [], catalog, new(), [first]));
+        edited = edited with { Updates = [.. edited.Updates, new() { At = Created.AddMinutes(11), Body = "PRIVATE_DRAFT" }] };
+        var both = GitHubIssueParser.Parse(Issue([.. labels, "site:xi"], body: "Corrected update", updatedMinutes: 15),
+            [], catalog, new(), [edited]);
+        var xi = Assert.Single(both, record => record.SiteId == "xi");
+        Assert.Equal(edited.PublicUpdates, xi.PublicUpdates);
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(xi, StatusJson.Options));
+        Assert.Equal(xi.PublicUpdates, Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), both)).PublicUpdates);
+    }
+
+    [Fact]
     public void GitHubUpdatesDiscoveredBeforeAnImpactChangeKeepTheirHistoricSeverityUnknown()
     {
         var catalog = Catalogue();

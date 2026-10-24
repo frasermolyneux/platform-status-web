@@ -122,6 +122,34 @@ def verify_publisher_fencing(container):
                 """)
 
 
+def verify_probe_retry_interval(container):
+    database_sql(container, """
+        CREATE SEQUENCE status_failed_probe_attempt;
+        CREATE FUNCTION reject_status_probe() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            PERFORM nextval('status_failed_probe_attempt');
+            RAISE EXCEPTION 'Injected probe persistence failure';
+        END $$;
+        CREATE TRIGGER reject_status_probe BEFORE INSERT OR UPDATE ON status_evidence
+            FOR EACH ROW WHEN (NEW.source='independent-probe')
+            EXECUTE FUNCTION reject_status_probe();
+        """)
+    try:
+        wait_for(lambda: database_sql(container, "SELECT is_called FROM status_failed_probe_attempt;") == "t",
+                 "injected post-HTTP probe persistence failure", seconds=60)
+        first = database_sql(container, "SELECT last_value FROM status_failed_probe_attempt;")
+        time.sleep(12)
+        assert database_sql(container, "SELECT last_value FROM status_failed_probe_attempt;") == first, \
+            "Persistence retries increased probe frequency above the configured 30-second interval"
+        print("Probe persistence failure did not cause five-second HTTP re-probing.")
+    finally:
+        database_sql(container, """
+            DROP TRIGGER reject_status_probe ON status_evidence;
+            DROP FUNCTION reject_status_probe();
+            DROP SEQUENCE status_failed_probe_attempt;
+            """)
+
+
 def verify_historic_thresholds(container, urls):
     day = database_sql(container, "SELECT ((now() AT TIME ZONE 'UTC')::date-1)::text;")
     expected = {
@@ -244,6 +272,7 @@ def main():
                 assert request(url, "/api/status", "unexpected.example")[0] == 404
             verify_database_restart_recovery(f"{name}-primary", f"{name}-standby", urls)
             verify_publisher_fencing(f"{name}-primary")
+            verify_probe_retry_interval(f"{name}-primary")
             verify_historic_thresholds(f"{name}-primary", urls)
             connection_port = docker("port", f"{name}-primary", "5432/tcp").split(":")[-1]
             integration_environment = dict(os.environ)
