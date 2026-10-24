@@ -64,7 +64,7 @@ public sealed partial class PostgresStore
         await using (var reader = await peers.ExecuteReaderAsync(ct))
             while (await reader.ReadAsync(ct))
                 records.Add(JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(0), StatusJson.Options)!);
-        foreach (var peer in records)
+        foreach (var peer in records.Where(peer => peer.Published))
             await WriteIncidentAsync(connection, transaction, (peer with
             {
                 Title = record.Title,

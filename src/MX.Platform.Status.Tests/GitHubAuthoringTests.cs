@@ -232,6 +232,7 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("synced", record.GitHub!.State);
 
             await VerifySiteWithdrawalAsync(importer, maintenance);
+            await VerifyPrivatePeerScopeAsync(importer, maintenance);
             var labels = api.Issue!["labels"]!.AsArray();
             labels.Remove(labels.Single(label => label!["name"]!.GetValue<string>() == "status:incident"));
             api.Touch();
@@ -351,6 +352,51 @@ public sealed partial class IndependentServiceTests
             record = await Read();
             Assert.Contains(record.Updates, update => update.Body == "PRIVATE_NEWER_NOTE");
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
+        }
+
+        async Task VerifyPrivatePeerScopeAsync(GitHubIssueWorker importer, IncidentCommand maintenance)
+        {
+            var peer = (await database.ReadGitHubSourcesAsync(options.GitHubRepository, default))
+                .Single(source => source.SiteId == "xi").Incident;
+            peer = (await database.SaveIncidentAsync("xi", peer.Id, maintenance with
+            {
+                Components = ["xi.sitewatch.geo-location-web"],
+                Revision = peer.Revision,
+                OperationId = Guid.NewGuid()
+            }, "operator", default))!;
+            Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            peer = (await database.ReadIncidentsAsync("xi", default)).Single(item => item.Id == peer.Id);
+            peer = (await database.SaveIncidentAsync("xi", peer.Id, maintenance with
+            {
+                Title = "PRIVATE_XI_TITLE",
+                Message = "PRIVATE_XI_SCOPE",
+                Components = ["xi.sitewatch.server-events"],
+                Published = false,
+                Revision = peer.Revision,
+                OperationId = Guid.NewGuid()
+            }, "operator", default))!;
+            Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            peer = (await database.ReadIncidentsAsync("xi", default)).Single(item => item.Id == peer.Id);
+            var impacts = peer.ImpactHistory.Count;
+            record = await Read();
+            record = (await database.SaveIncidentAsync("mx", record.Id, maintenance with
+            {
+                Message = "Approved MX republication",
+                Revision = record.Revision,
+                OperationId = Guid.NewGuid()
+            }, "operator", default))!;
+            peer = (await database.ReadIncidentsAsync("xi", default)).Single(item => item.Id == peer.Id);
+            Assert.False(peer.Published);
+            Assert.Equal("PRIVATE_XI_TITLE", peer.Title);
+            Assert.Equal(impacts, peer.ImpactHistory.Count);
+            Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            peer = (await database.ReadIncidentsAsync("xi", default)).Single(item => item.Id == peer.Id);
+            Assert.True(peer.Published);
+            Assert.Equal(["xi.sitewatch.geo-location-web"], peer.Components);
+            record = await Read();
         }
     }
 
