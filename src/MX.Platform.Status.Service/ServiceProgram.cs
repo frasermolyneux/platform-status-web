@@ -207,7 +207,8 @@ public static class ServiceProgram
         {
             var job = await database.ReadGitHubReviewAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, id, ct);
             if (job is null) return Results.Conflict(new { error = "No pending GitHub change exists. Refresh the workspace." });
-            var remote = await GitHubReconciliation.ReadRemoteAsync(job, options, github, ct);
+            var (remote, unavailable) = await GitHubReconciliation.ReadRemoteAsync(job, options, github, ct);
+            if (unavailable) return Results.Conflict(new { error = GitHubReconciliation.SourceUnavailableMessage });
             return await database.RetryGitHubAsync(job, command, remote,
                 options.GitHubRepository, context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct)
                 ? Results.Accepted() : Results.Conflict(new { error = "The incident or GitHub issue changed. Review both versions again before retrying." });

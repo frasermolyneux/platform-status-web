@@ -149,7 +149,7 @@ Public pages and idle incident/banner workspaces refresh every five seconds;
 manual incident updates normally reach both origins and the browser within
 15 seconds. Probe collection keeps its separate configured interval. GitHub
 changes still require the source polling interval below. Open editors are not
-replaced by automatic refresh. Incident pages list affected services, source
+replaced by automatic refresh. Incident pages list affected components, source
 issues where applicable, and recorded state/impact changes alongside descriptions.
 Older updates without recorded impact levels are identified as such.
 
@@ -248,6 +248,8 @@ Draft messages and private evidence are never exported. Withdrawing an existing
 GitHub incident removes only its publication label, not its issue body or private
 draft wording. Previously approved history remains distinct from private edits.
 Once an incident has entered GitHub delivery, later edits retain that destination.
+Unpublished brand-specific drafts are not republished by another brand's edit;
+they wait for an approved GitHub import so private scope changes remain private.
 
 The workspace shows pending, synced and review-required delivery states. Stable
 operation IDs recover lost replies without blindly repeating issue/comment writes.
@@ -258,6 +260,12 @@ and ambiguous writes require review; transient failures retry without blocking
 other incidents. GitHub does not offer atomic issue compare-and-swap: coordinate
 simultaneous external metadata edits with operators. Existing issue bodies are never
 rewritten by the editor.
+
+Missing or inaccessible source issues are shown explicitly, without offering a
+retry that might create a duplicate. Restore the issue or App access, then use
+**Recheck GitHub access** and review its current version. If the issue was
+permanently deleted, resolve the existing incident locally through its editor
+and create a new incident; delivery failure never blocks those local updates.
 
 The independent service polls the public `frasermolyneux/status-pages` repository
 every five minutes, separately from public publication and probe collection.

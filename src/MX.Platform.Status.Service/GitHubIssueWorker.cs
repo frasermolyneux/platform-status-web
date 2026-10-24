@@ -88,7 +88,8 @@ public static class GitHubIssueParser
                 GitHub = previousIncident?.GitHub,
                 GitHubVersion = GitHubIncidentClient.Version(issue, comments.Where(comment =>
                     IsTrusted(comment.GetProperty("user").GetProperty(LoginProperty).GetString()!, options)).ToArray()),
-                GitHubBaseVersion = own?.GitHubVersion,
+                GitHubBaseVersion = (own ?? previous?.FirstOrDefault())?.GitHubVersion,
+                GitHubBaseSiteId = (own ?? previous?.FirstOrDefault())?.SiteId,
                 Evidence = own?.Evidence
             });
         }

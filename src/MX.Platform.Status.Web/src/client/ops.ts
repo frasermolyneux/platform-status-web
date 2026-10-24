@@ -394,8 +394,18 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         const id = incident.gitHub?.incidentId || incident.id;
         const response = await request(`/api/ops/incidents/${id}/github`);
         const review: { operationId: string; revision: number; remoteVersion: string | null; localMessage: string;
+          sourceUnavailable?: boolean; sourceError?: string; sourceUrl?: string;
           remote: { number: number; title: string; body: string; labels: string[]; updatedAt: string; comments: string[] } | null } = await response.json();
         if (!current()) return;
+        if (review.sourceUnavailable) {
+          editor.hidden = false;
+          editor.replaceChildren(element('h3', `GitHub source unavailable for incident #${id}`),
+            element('p', review.sourceError || 'Restore the original issue or GitHub App access before retrying.', 'stale-warning'),
+            button('Recheck GitHub access', () => { void reviewGitHub(incident); }),
+            button('Close editor', () => { editor.hidden = true; }));
+          if (review.sourceUrl) editor.append(link('Open original GitHub issue', review.sourceUrl));
+          return;
+        }
         const { form, save, key } = openForm(`Review GitHub delivery for incident #${id}`,
           `github-review:${review.operationId}:${review.remoteVersion || 'missing'}`, id);
         form.append(element('h4', 'Queued public change'), element('pre', review.localMessage));

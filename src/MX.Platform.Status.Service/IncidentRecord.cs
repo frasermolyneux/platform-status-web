@@ -37,6 +37,8 @@ public sealed record IncidentRecord
     public bool GitHubSiteWithdrawn { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string? GitHubBaseVersion { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? GitHubBaseSiteId { get; init; }
 
     public Incident ToPublicIncident() => new()
     {

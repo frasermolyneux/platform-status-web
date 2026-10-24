@@ -41,6 +41,7 @@ public sealed partial class PostgresStore
         current.Parameters.AddWithValue(job.Incident.SiteId);
         if ((int?)(await current.ExecuteScalarAsync(ct)) != request.Revision || !request.Confirmed
             || request.OperationId != job.OperationId
+            || job.Incident.SourceUrl is not null && remote is null
             || request.RemoteVersion != remote?.Version) return false;
         await using var write = new NpgsqlCommand("""
             UPDATE status_github_outbox SET state='pending',error=NULL,attempted=false,next_attempt_at=now(),expected_at=$1,
@@ -71,24 +72,34 @@ public sealed partial class PostgresStore
 
 public static class GitHubReconciliation
 {
-    public static Task<GitHubIssueSnapshot?> ReadRemoteAsync(GitHubJob job, RuntimeOptions options, GitHubIncidentClient github, CancellationToken ct) =>
-        GitHubIncidentClient.IssueNumber(job.Incident.SourceUrl, options.GitHubRepository) is { } number
-            ? ReadKnownAsync(github, number, ct) : github.FindCreatedAsync(job.OperationId, ct);
+    public const string SourceUnavailableMessage = "The GitHub issue is missing or inaccessible. Restore the issue or App access before retrying. Local status updates remain available. If permanently deleted, resolve this incident and create a new one.";
 
-    private static async Task<GitHubIssueSnapshot?> ReadKnownAsync(GitHubIncidentClient github, int number, CancellationToken ct) =>
-        await github.ReadAsync(number, ct);
+    public static async Task<(GitHubIssueSnapshot? Snapshot, bool SourceUnavailable)> ReadRemoteAsync(
+        GitHubJob job, RuntimeOptions options, GitHubIncidentClient github, CancellationToken ct)
+    {
+        if (GitHubIncidentClient.IssueNumber(job.Incident.SourceUrl, options.GitHubRepository) is not { } number)
+            return (await github.FindCreatedAsync(job.OperationId, ct), false);
+        try { return (await github.ReadAsync(number, ct), false); }
+        catch (HttpRequestException exception) when (exception.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone)
+        {
+            return (null, true);
+        }
+    }
 
     public static async Task<IResult> ReviewAsync(string site, int id, PostgresStore database, GitHubIncidentClient github,
         RuntimeOptions options, CancellationToken ct)
     {
         var job = await database.ReadGitHubReviewAsync(site, id, ct);
         if (job is null) return Results.Conflict(new { error = "No pending GitHub change exists. Refresh the workspace." });
-        var remote = await ReadRemoteAsync(job, options, github, ct);
+        var (remote, unavailable) = await ReadRemoteAsync(job, options, github, ct);
         return Results.Ok(new
         {
             operationId = job.OperationId,
             revision = job.Incident.Revision,
             state = job.State,
+            sourceUnavailable = unavailable,
+            sourceError = unavailable ? SourceUnavailableMessage : null,
+            sourceUrl = job.Incident.SourceUrl,
             localMessage = job.Command.Published ? job.Command.Message : "Withdraw the status publication; private draft text will not be sent.",
             remoteVersion = remote?.Version,
             remote = remote is null ? null : new

@@ -329,6 +329,8 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         if (previous?.GitHub is { State: not ("synced" or "draft") } || previousAt > updatedAt
             || previous is not null && incoming.Revision != previous.Revision
             || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion)) return;
+        if (previous is null && !await NewGitHubSourceIsCurrentAsync(connection, transaction, repository, number, updatedAt, incoming, ct))
+            return;
         IncidentRecord record;
         if (previous is null)
         {
@@ -340,7 +342,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         {
             record = PreserveGitHubDraft(incoming, previous) with { Id = previous.Id, Revision = previous.Revision + 1 };
         }
-        if (previous?.GitHub is not null) record = record with { GitHub = new(record.Published ? "synced" : "draft") };
+        if (record.GitHub is not null) record = record with { GitHub = new(record.Published ? "synced" : "draft") };
         record = record.ObserveImpact(previous, DateTimeOffset.UtcNow);
         var changed = previous is null || JsonSerializer.Serialize(previous with { Revision = 0 }, StatusJson.Options)
             != JsonSerializer.Serialize(record with { Revision = 0 }, StatusJson.Options);
@@ -357,6 +359,35 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         source.Parameters.AddWithValue(updatedAt);
         await source.ExecuteNonQueryAsync(ct);
         await transaction.CommitAsync(ct);
+    }
+
+    private static async Task<bool> NewGitHubSourceIsCurrentAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+        string repository, int number, DateTimeOffset updatedAt, IncidentRecord incoming, CancellationToken ct)
+    {
+        await using var pending = new NpgsqlCommand("""
+            SELECT EXISTS(SELECT FROM status_github_outbox o JOIN status_incidents i ON i.id=o.incident_id
+                WHERE i.document->>'sourceUrl'=$1 AND o.state NOT IN ('synced','draft'))
+            """, connection, transaction);
+        pending.Parameters.AddWithValue(incoming.SourceUrl ?? "");
+        if ((bool)(await pending.ExecuteScalarAsync(ct))!) return false;
+        await using var read = new NpgsqlCommand("""
+            SELECT i.document->>'gitHubVersion',s.updated_at FROM status_github_sources s
+            JOIN status_incidents i ON i.id=s.incident_id
+            WHERE repository=$1 AND issue_number=$2 AND ($3::text IS NULL OR s.site_id=$3) FOR UPDATE OF i
+            """, connection, transaction);
+        read.Parameters.AddWithValue(repository);
+        read.Parameters.AddWithValue(number);
+        read.Parameters.AddWithValue(NpgsqlDbType.Text, (object?)incoming.GitHubBaseSiteId ?? DBNull.Value);
+        var expected = incoming.GitHubBaseSiteId is null ? incoming.GitHubVersion : incoming.GitHubBaseVersion;
+        var found = false;
+        await using var reader = await read.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            found = true;
+            var version = reader.IsDBNull(0) ? null : reader.GetString(0);
+            if (version != expected || reader.GetFieldValue<DateTimeOffset>(1) > updatedAt) return false;
+        }
+        return found || incoming.GitHubBaseSiteId is null;
     }
 
     private static IncidentRecord PreserveGitHubDraft(IncidentRecord incoming, IncidentRecord previous) =>

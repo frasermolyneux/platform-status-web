@@ -11,6 +11,37 @@ namespace MX.Platform.Status.Tests;
 
 public sealed partial class IndependentServiceTests
 {
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, true)]
+    [InlineData(HttpStatusCode.Gone, true)]
+    [InlineData(HttpStatusCode.Forbidden, false)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    public async Task GitHubReviewDistinguishesMissingBoundIssuesFromOtherFailures(HttpStatusCode status, bool unavailable)
+    {
+        var options = new RuntimeOptions
+        {
+            GitHubTokenFile = Path.Combine(_directory, "github-token"),
+            GitHubRepository = "status-writer-fixture/test"
+        };
+        await File.WriteAllTextAsync(options.GitHubTokenFile, "test-token");
+        using var api = new GitHubWriteFixture { IssueReadFailure = status };
+        var github = new GitHubIncidentClient(options, Catalogue(), api);
+        var command = new IncidentCommand("Review fixture", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Approved update", true);
+        var job = new GitHubJob(Guid.NewGuid(),
+            new() { SiteId = "mx", SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/42" },
+            command, null, false, "review");
+        if (unavailable)
+        {
+            var result = await GitHubReconciliation.ReadRemoteAsync(job, options, github, default);
+            Assert.True(result.SourceUnavailable);
+            Assert.Null(result.Snapshot);
+        }
+        else await Assert.ThrowsAsync<HttpRequestException>(() => GitHubReconciliation.ReadRemoteAsync(job, options, github, default));
+        Assert.Equal(0, api.Creates);
+        Assert.Empty(api.Bodies);
+    }
+
     [PostgresFact]
     public async Task GitHubOutboxReviewsEditedLostWritesAndReusesTheKnownIssueOnExplicitRetry()
     {
@@ -182,6 +213,7 @@ public sealed partial class IndependentServiceTests
             var remote = await github.ReadAsync(42, default);
             Assert.False(await database.RetryGitHubAsync(job, new(record.Revision - 1, remote.Version, true, job.OperationId), remote, options.GitHubRepository, "operator", default));
             Assert.False(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true, Guid.NewGuid()), remote, options.GitHubRepository, "operator", default));
+            Assert.False(await database.RetryGitHubAsync(job, new(record.Revision, null, true, job.OperationId), null, options.GitHubRepository, "operator", default));
             Assert.Equal("conflict", (await Read()).GitHub!.State);
             Assert.True(await database.RetryGitHubAsync(job, new(record.Revision, remote.Version, true, job.OperationId), remote, options.GitHubRepository, "operator", default));
             api.LoseCommentReply = true;
@@ -284,6 +316,7 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("synced", record.GitHub!.State);
             Assert.Equal("Authoring fixture", record.Title);
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
+            await VerifyNewBrandSnapshotCompletionAsync(database, options);
             await VerifyIndependentGitHubJobsDrainAsync(database, options);
         }
         finally { await CleanupGitHubFixtureAsync(options, record.Id); }
@@ -400,6 +433,78 @@ public sealed partial class IndependentServiceTests
         }
     }
 
+    private static async Task VerifyNewBrandSnapshotCompletionAsync(PostgresStore database, RuntimeOptions options)
+    {
+        foreach (var privateNoOp in new[] { false, true })
+        {
+            var fixtureOptions = options with { GitHubRepository = $"status-writer-fixture/new-brand-{Guid.NewGuid():N}" };
+            using var api = new GitHubWriteFixture();
+            var github = new GitHubIncidentClient(fixtureOptions, Catalogue(), api);
+            using var worker = new GitHubOutboxWorker(fixtureOptions, database, github, NullLogger<GitHubOutboxWorker>.Instance);
+            using var importer = new GitHubIssueWorker(Catalogue(), fixtureOptions, database, api, NullLogger<GitHubIssueWorker>.Instance, github);
+            var command = new IncidentCommand("New brand fixture", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+                IncidentState.Investigating, "Approved update", true, Delivery: "github", OperationId: Guid.NewGuid());
+            var record = (await database.SaveIncidentAsync("mx", null, command, "operator", default))!;
+            try
+            {
+                Assert.True(await worker.RunOnceAsync(default));
+                record = await Read();
+                if (privateNoOp)
+                {
+                    record = (await database.SaveIncidentAsync("mx", record.Id, command with
+                    {
+                        Published = false, Message = "PRIVATE_WITHDRAWAL",
+                        Revision = record.Revision, OperationId = Guid.NewGuid()
+                    }, "operator", default))!;
+                    Assert.True(await worker.RunOnceAsync(default));
+                    record = await Read();
+                }
+                api.Issue!["labels"]!.AsArray().Add(new JsonObject { ["name"] = "site:xi" });
+                api.Issue["labels"]!.AsArray().Add(new JsonObject { ["name"] = "component:xi.sitewatch.geo-location-web" });
+                api.Touch();
+                var remote = await github.ReadAsync(42, default);
+                var own = GitHubIssueParser.Parse(remote.Issue, remote.Comments, Catalogue(), fixtureOptions, [record])
+                    .Single(item => item.SiteId == "mx");
+                await Save(own, remote.UpdatedAt);
+                record = await Read();
+                record = (await database.SaveIncidentAsync("mx", record.Id, command with
+                {
+                    Published = !privateNoOp,
+                    Message = privateNoOp ? "PRIVATE_NEW_NOTE" : "Approved follow-up",
+                    Revision = record.Revision, OperationId = Guid.NewGuid()
+                }, "operator", default))!;
+                var captured = GitHubIssueParser.Parse(remote.Issue, remote.Comments, Catalogue(), fixtureOptions, [record])
+                    .Single(item => item.SiteId == "xi");
+                Assert.Equal("pending", captured.GitHub!.State);
+                await Save(captured, remote.UpdatedAt);
+                Assert.DoesNotContain(await database.ReadGitHubSourcesAsync(fixtureOptions.GitHubRepository, default),
+                    source => source.SiteId == "xi");
+                Assert.True(await worker.RunOnceAsync(default));
+                await Save(captured, remote.UpdatedAt);
+                var sources = await database.ReadGitHubSourcesAsync(fixtureOptions.GitHubRepository, default);
+                if (privateNoOp) Assert.Equal("draft", sources.Single(source => source.SiteId == "xi").Incident.GitHub!.State);
+                else Assert.DoesNotContain(sources, source => source.SiteId == "xi");
+                await importer.SynchronizeAsync(default);
+                await importer.SynchronizeAsync(default);
+                sources = await database.ReadGitHubSourcesAsync(fixtureOptions.GitHubRepository, default);
+                Assert.Equal(privateNoOp ? "draft" : "synced", sources.Single(source => source.SiteId == "xi").Incident.GitHub!.State);
+                Assert.DoesNotContain("PRIVATE", string.Join('\n', api.Bodies));
+            }
+            finally { await CleanupGitHubFixtureAsync(fixtureOptions, record.Id); }
+
+            async Task<IncidentRecord> Read() =>
+                (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id);
+
+            async Task Save(IncidentRecord incoming, DateTimeOffset observedAt)
+            {
+                await using var lease = await database.TryPublisherLockAsync(default)
+                    ?? throw new InvalidOperationException("Fixture publisher is busy.");
+                await database.SaveGitHubIncidentAsync(lease, fixtureOptions.GitHubRepository, 42,
+                    observedAt, incoming, default);
+            }
+        }
+    }
+
     private static async Task VerifyIndependentGitHubJobsDrainAsync(PostgresStore database, RuntimeOptions options)
     {
         options = options with { GitHubRepository = $"status-writer-fixture/drain-{Guid.NewGuid():N}" };
@@ -454,6 +559,7 @@ internal sealed class GitHubWriteFixture : HttpMessageHandler, IHttpClientFactor
     public List<JsonObject> Comments { get; } = [];
     public List<string> Bodies { get; } = [];
     public bool Offline { get; set; }
+    public HttpStatusCode? IssueReadFailure { get; set; }
     public int TransientFailures { get; set; }
     public bool LoseCreateReply { get; set; }
     public bool LoseCommentReply { get; set; }
@@ -529,7 +635,8 @@ internal sealed class GitHubWriteFixture : HttpMessageHandler, IHttpClientFactor
             return Reply(Issue);
         }
         if (path == "issues/42/comments" && request.Method == HttpMethod.Get) return Reply(Comments);
-        if (path == "issues/42" && request.Method == HttpMethod.Get) return Reply(Issue);
+        if (path == "issues/42" && request.Method == HttpMethod.Get)
+            return IssueReadFailure is { } failure ? new(failure) : Reply(Issue);
         if (path == "issues/42" && request.Method == HttpMethod.Patch)
         {
             if (body!["title"] is { } title) Issue!["title"] = title.DeepClone();

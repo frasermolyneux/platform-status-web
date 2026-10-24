@@ -16,6 +16,7 @@ let trafficReadStarted = 0;
 let rejectTrafficRead = false;
 let incidentReadGate: Promise<void> | undefined;
 let incidentReads = 0;
+let reviewSourceUnavailable = false;
 function trafficRow(mode = 'normal', revision = 0,
   lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
@@ -74,6 +75,7 @@ beforeEach(() => {
   rejectTrafficRead = false;
   incidentReadGate = undefined;
   incidentReads = 0;
+  reviewSourceUnavailable = false;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
@@ -103,6 +105,9 @@ beforeEach(() => {
     }
     if (path === '/api/ops/incidents/1/github') return Response.json({
       operationId: 'queued-operation', revision: 3, remoteVersion: 'reviewed-version',
+      sourceUnavailable: reviewSourceUnavailable,
+      sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
+      sourceError: 'The GitHub issue is missing or inaccessible. Restore issue or App access before retrying. Local status updates remain available.',
       localMessage: 'Approved local update', remote: { number: 1, title: 'Remote correction',
         body: '<script>REMOTE_TEXT_ONLY</script>', labels: ['status:incident'], updatedAt: timestamp, comments: [] },
     });
@@ -392,6 +397,30 @@ test('GitHub conflict review renders remote content safely and requires operatio
   assert.deepEqual(writes[0].body, {
     revision: 3, remoteVersion: 'reviewed-version', operationId: 'queued-operation', confirmed: true,
   });
+});
+
+test('missing GitHub sources expose recovery guidance without offering duplicate creation or retry', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Missing source',
+    state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1', gitHub: { state: 'review' },
+  }];
+  reviewSourceUnavailable = true;
+  await renderOperations();
+  click('Review GitHub delivery');
+  await until(() => document.body.textContent?.includes('source unavailable') === true);
+  assert.match(document.body.textContent || '', /missing or inaccessible/);
+  assert.equal(document.querySelector('[name="confirmed"]'), null);
+  assert.equal(document.querySelector('form'), null);
+  assert.equal(document.querySelector<HTMLAnchorElement>('a[href="https://github.com/frasermolyneux/status-pages/issues/1"]')?.href,
+    'https://github.com/frasermolyneux/status-pages/issues/1');
+  assert.equal(writes.length, 0);
+  reviewSourceUnavailable = false;
+  click('Recheck GitHub access');
+  await until(() => document.querySelector('[name="confirmed"]') !== null);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="confirmed"]')!.checked, false);
+  assert.equal(writes.length, 0);
 });
 
 test('banner editor previews untrusted text safely and sends explicit brand-scoped publication', async () => {
