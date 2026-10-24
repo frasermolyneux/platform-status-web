@@ -32,8 +32,9 @@ public sealed partial class PostgresStore
     private static async Task<IncidentRecord> QueueGitHubAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         IncidentRecord record, int? requestedId, IncidentCommand request, string actor, CancellationToken ct)
     {
+        var operation = request.OperationId!.Value;
         var records = await ReadGitHubPeersAsync(connection, transaction, record, ct);
-        record = MergeApprovedGitHubHistory(record, records, request.OperationId!.Value);
+        record = MergeApprovedGitHubHistory(record, records, operation);
         await WriteIncidentAsync(connection, transaction, record, actor, ct);
         await using var queue = new NpgsqlCommand("""
             INSERT INTO status_github_outbox(operation_id,incident_id,site_id,revision,command,expected_at,state,expected_version,requested_incident_id,predecessor)
@@ -42,7 +43,7 @@ public sealed partial class PostgresStore
                  WHERE (o.incident_id=$2 OR ($8<>'' AND i.document->>'sourceUrl'=$8))
                  AND o.state NOT IN ('synced','draft') ORDER BY o.created_at DESC LIMIT 1))
             """, connection, transaction);
-        queue.Parameters.AddWithValue(request.OperationId!.Value);
+        queue.Parameters.AddWithValue(operation);
         queue.Parameters.AddWithValue(record.Id);
         queue.Parameters.AddWithValue(record.SiteId);
         queue.Parameters.AddWithValue(record.Revision);
@@ -130,7 +131,7 @@ public sealed partial class PostgresStore
                 WHERE (p.incident_id=o.incident_id OR
                     (i.document->>'sourceUrl' IS NOT NULL AND peer.document->>'sourceUrl'=i.document->>'sourceUrl'))
                 AND p.created_at<o.created_at AND p.state NOT IN ('synced','draft'))
-            ORDER BY o.created_at,o.revision LIMIT 1
+            ORDER BY o.next_attempt_at,o.created_at,o.revision LIMIT 1
             """, lease.Connection);
         await using var reader = await read.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;

@@ -643,9 +643,10 @@ public sealed partial class IndependentServiceTests
     private static async Task VerifyIndependentGitHubJobsDrainAsync(PostgresStore database, RuntimeOptions options)
     {
         foreach (var interrupted in new[] { false, true })
-            await VerifyDrain(interrupted);
+            foreach (var expired in new[] { false, true })
+                await VerifyDrain(interrupted, expired);
 
-        async Task VerifyDrain(bool interrupted)
+        async Task VerifyDrain(bool interrupted, bool expired)
         {
             var fixtureOptions = options with { GitHubRepository = $"status-writer-fixture/drain-{Guid.NewGuid():N}" };
             using var api = new GitHubWriteFixture();
@@ -655,18 +656,28 @@ public sealed partial class IndependentServiceTests
             try
             {
                 for (var index = 0; index < 3; index++)
+                {
                     queued.Add((await database.SaveIncidentAsync("mx", null,
                         new($"Independent incident {index}", ["mx.sitewatch.geo-location-web"], Severity.Outage,
                             IncidentState.Investigating, "Approved update", true, Delivery: "github", OperationId: Guid.NewGuid()),
                         "operator", default))!);
-                if (interrupted)
-                {
-                    api.LoseCreateReply = true;
-                    Assert.True(await worker.RunOnceAsync(default));
-                    await MakeGitHubJobDueAsync(fixtureOptions, queued[0].Id);
+                    if (interrupted && index == 0)
+                    {
+                        api.LoseCreateReply = true;
+                        Assert.True(await worker.RunOnceAsync(default));
+                        await MakeGitHubJobDueAsync(fixtureOptions, queued[0].Id);
+                    }
                 }
                 api.TransientFailures = 2;
-                await worker.DrainAsync(default);
+                if (expired)
+                {
+                    Assert.True(await worker.RunOnceAsync(default));
+                    Assert.True(await worker.RunOnceAsync(default));
+                    await MakeGitHubJobDueAsync(fixtureOptions, queued[0].Id);
+                    await MakeGitHubJobDueAsync(fixtureOptions, queued[1].Id);
+                    Assert.True(await worker.RunOnceAsync(default));
+                }
+                else await worker.DrainAsync(default);
                 var records = (await database.ReadIncidentsAsync("mx", default)).ToDictionary(record => record.Id);
                 Assert.Equal([interrupted ? "uncertain" : "pending", "pending", "synced"],
                     queued.Select(record => records[record.Id].GitHub!.State));
