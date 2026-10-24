@@ -8,10 +8,10 @@ resource "cloudflare_ruleset" "status_tls" {
 
   zone_id     = each.value.zone_id
   name        = "platform-status-origin-tls"
-  description = "Strict origin TLS only for the public status hostname."
+  description = each.key == "xtremeidiots.com" ? "Strict origin TLS for status sites and the maps manager." : "Strict origin TLS only for the public status hostname."
   kind        = "zone"
   phase       = "http_config_settings"
-  rules = [{
+  rules = concat([{
     ref         = "status_origin_strict_tls"
     description = "Validate the status origin certificate without changing other hostnames."
     expression  = "http.host eq \"${each.value.hostname}\""
@@ -20,7 +20,16 @@ resource "cloudflare_ruleset" "status_tls" {
     action_parameters = {
       ssl = "strict"
     }
-  }]
+    }], each.key == "xtremeidiots.com" ? [{
+    ref         = "maps_origin_strict_tls"
+    description = "Validate the maps manager origin certificate."
+    expression  = "http.host eq \"maps.xtremeidiots.com\""
+    action      = "set_config"
+    enabled     = true
+    action_parameters = {
+      ssl = "strict"
+    }
+  }] : [])
 
   lifecycle {
     prevent_destroy = true

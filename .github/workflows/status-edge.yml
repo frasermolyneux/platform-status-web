@@ -16,7 +16,7 @@ on:
       operation:
         description: Plan, reconcile reviewed main, enable only the staged LB, or verify health
         type: choice
-        options: [plan, apply, activate, verify]
+        options: [plan, apply, activate, verify, maps-tls-plan, maps-tls]
         default: plan
         required: true
 
@@ -90,7 +90,9 @@ jobs:
         if: github.event_name == 'pull_request' || inputs.operation != 'verify'
         run: |
           mode=--activate
-          if [[ "${{ github.event_name }}" == "pull_request" || "${{ inputs.operation }}" == "activate" ]]; then
+          if [[ "${{ inputs.operation }}" == "maps-tls-plan" || "${{ inputs.operation }}" == "maps-tls" ]]; then
+            mode=--maps-tls
+          elif [[ "${{ github.event_name }}" == "pull_request" || "${{ inputs.operation }}" == "activate" ]]; then
             mode=--prepare-activation
           fi
           terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py "$mode"
@@ -105,7 +107,7 @@ jobs:
           terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py --activate
           terraform -chdir=edge apply -input=false edge.tfplan
       - name: Apply reviewed main configuration
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'apply'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && contains(fromJSON('["apply","maps-tls"]'), inputs.operation)
         run: terraform -chdir=edge apply -input=false edge.tfplan
       - name: Publish edge verification identifiers
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && contains(fromJSON('["apply","activate","verify"]'), inputs.operation)

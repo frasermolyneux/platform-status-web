@@ -26,10 +26,13 @@ hostname, so no previous DNS route existed to restore.
 
 `status.xtremeidiots.com` must subsequently be a CNAME to `mxstatus.io` in the
 existing `platform-connectivity` zone configuration, not a second load balancer.
-Both zones must belong to the same account. The two configuration rules set
-`ssl = "strict"` only for `mxstatus.io` and `status.xtremeidiots.com`; both global
+Both zones must belong to the same account. The existing status configuration rules
+set `ssl = "strict"` for `mxstatus.io` and `status.xtremeidiots.com`; both global
 zone SSL modes remain unchanged. Configuration Rules are available on the free
-plan, and each status zone uses one rule. Confirm existing apex/CNAME
+plan. The XtremeIdiots entrypoint additionally owns one exact-host strict TLS
+rule for `maps.xtremeidiots.com`, preserving its existing status rule and all
+zone-wide settings. DNS remains owned by `platform-connectivity`; no competing
+configuration entrypoint may be created there. Confirm existing apex/CNAME
 compatibility before activation.
 
 The plan's `status_edge_preflight` output reads both active zones through the
@@ -46,6 +49,13 @@ Subsequent plans must preserve the stack-owned entrypoints and the exact-host
 expressions. Never change the entire XtremeIdiots zone blindly.
 
 ## State and delivery
+
+For the maps hostname migration, `maps-tls-plan` produces a normal saved plan
+and `maps-tls` applies it on approved main. Its separate validation boundary
+permits only appending the exact maps TLS rule and updating the entrypoint
+description in place. It rejects status-rule changes, other resource updates,
+drift, imports, replacements, and unknown non-metadata settings. Repeated
+execution accepts an already-converged entrypoint without changing routing.
 
 `Status Edge` plans same-repository pull requests with Production OIDC. It applies
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
