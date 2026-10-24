@@ -49,7 +49,11 @@ public sealed partial class PostgresStore
         queue.Parameters.AddWithValue(record.SourceUrl ?? "");
         queue.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)requestedId ?? DBNull.Value);
         await queue.ExecuteNonQueryAsync(ct);
-        if (record.SourceUrl is null) return;
+        if (record.SourceUrl is null)
+        {
+            await RefreshGitHubDeliveryAsync(connection, transaction, record, "draft", ct);
+            return;
+        }
         await using var peers = new NpgsqlCommand("""
             SELECT document::text FROM status_incidents
             WHERE document->>'sourceUrl'=$1 AND id<>$2 FOR UPDATE
@@ -68,15 +72,18 @@ public sealed partial class PostgresStore
                 State = record.State,
                 Published = record.Published,
                 ResolvedAt = record.ResolvedAt,
+                ScheduledStart = record.ScheduledStart,
+                ScheduledEnd = record.ScheduledEnd,
                 GitHub = record.GitHub,
                 PublicUpdates = record.PublicUpdates,
                 Revision = peer.Revision + 1
             }).ObserveImpact(peer, DateTimeOffset.UtcNow), actor, ct);
+        await RefreshGitHubDeliveryAsync(connection, transaction, record, "draft", ct);
     }
 
     public Task<PublisherLease?> TryGitHubLockAsync(CancellationToken ct) => TryLockAsync(814233112, ct);
 
-    public async Task<GitHubJob?> ReadGitHubJobAsync(PublisherLease lease, CancellationToken ct)
+    public static async Task<GitHubJob?> ReadGitHubJobAsync(PublisherLease lease, CancellationToken ct)
     {
         await using var read = new NpgsqlCommand("""
             SELECT o.operation_id,i.document::text,o.command::text,
@@ -99,16 +106,18 @@ public sealed partial class PostgresStore
             reader.IsDBNull(6) ? null : reader.GetString(6));
     }
 
-    public async Task MarkGitHubAttemptAsync(PublisherLease lease, Guid operation, CancellationToken ct)
+    public static async Task MarkGitHubAttemptAsync(PublisherLease lease, Guid operation, CancellationToken ct)
     {
         await using var write = new NpgsqlCommand("UPDATE status_github_outbox SET attempted=true WHERE operation_id=$1", lease.Connection);
         write.Parameters.AddWithValue(operation);
         await write.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task SetGitHubProblemAsync(PublisherLease lease, GitHubJob job, string state, string error, CancellationToken ct)
+    public static async Task SetGitHubProblemAsync(PublisherLease lease, GitHubJob job, string state, string error, CancellationToken ct)
     {
         await using var transaction = await lease.Connection.BeginTransactionAsync(ct);
+        await using var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock(814233110)", lease.Connection, transaction);
+        await gate.ExecuteNonQueryAsync(ct);
         await using var write = new NpgsqlCommand("""
             UPDATE status_github_outbox SET state=$1,error=$2,
                 next_attempt_at=now()+CASE WHEN $1='pending' THEN interval '30 seconds' ELSE interval '0 seconds' END
@@ -118,7 +127,7 @@ public sealed partial class PostgresStore
         write.Parameters.AddWithValue(error);
         write.Parameters.AddWithValue(job.OperationId);
         await write.ExecuteNonQueryAsync(ct);
-        await SetGitHubDeliveryAsync(lease.Connection, transaction, job.Incident, new(state, error), ct);
+        await RefreshGitHubDeliveryAsync(lease.Connection, transaction, job.Incident, state, ct);
         await transaction.CommitAsync(ct);
     }
 
@@ -135,49 +144,66 @@ public sealed partial class PostgresStore
         await write.ExecuteNonQueryAsync(ct);
     }
 
+    private static async Task RefreshGitHubDeliveryAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+        IncidentRecord incident, string fallback, CancellationToken ct)
+    {
+        await using var read = new NpgsqlCommand("""
+            SELECT o.state,o.error,o.site_id,o.incident_id FROM status_github_outbox o
+            JOIN status_incidents i ON i.id=o.incident_id
+            WHERE (o.incident_id=$1 OR ($2<>'' AND i.document->>'sourceUrl'=$2))
+                AND o.state NOT IN ('synced','draft')
+            ORDER BY o.created_at,o.revision LIMIT 1
+            """, connection, transaction);
+        read.Parameters.AddWithValue(incident.Id);
+        read.Parameters.AddWithValue(incident.SourceUrl ?? "");
+        var delivery = new GitHubDelivery(fallback);
+        await using (var reader = await read.ExecuteReaderAsync(ct))
+            if (await reader.ReadAsync(ct))
+                delivery = new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetString(2), reader.GetInt32(3));
+        await SetGitHubDeliveryAsync(connection, transaction, incident, delivery, ct);
+    }
+
     public async Task CompleteGitHubJobAsync(PublisherLease lease, GitHubJob job, string repository, int number,
         DateTimeOffset remoteAt, string remoteVersion, CancellationToken ct)
     {
         await using var transaction = await lease.Connection.BeginTransactionAsync(ct);
         await using var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock(814233110)", lease.Connection, transaction);
         await gate.ExecuteNonQueryAsync(ct);
-        await BindGitHubSourceAsync(lease.Connection, transaction, job, repository, number, remoteAt, remoteVersion, ct);
+        await BindGitHubSourceAsync(lease.Connection, transaction, job, (repository, number, remoteAt, remoteVersion), ct);
         await using var acknowledge = new NpgsqlCommand("""
-            UPDATE status_github_outbox SET state='synced',remote_at=$2,remote_version=$3,error=NULL WHERE operation_id=$1;
-            UPDATE status_github_outbox SET state='pending' WHERE incident_id=$4 AND state='draft'
-                AND revision=(SELECT max(revision) FROM status_github_outbox WHERE incident_id=$4)
-                AND revision>(SELECT revision FROM status_github_outbox WHERE operation_id=$1);
+            UPDATE status_github_outbox SET state='synced',remote_at=$2,remote_version=$3,error=NULL WHERE operation_id=$1
             """, lease.Connection, transaction);
         acknowledge.Parameters.AddWithValue(job.OperationId);
         acknowledge.Parameters.AddWithValue(remoteAt);
         acknowledge.Parameters.AddWithValue(remoteVersion);
-        acknowledge.Parameters.AddWithValue(job.Incident.Id);
         await acknowledge.ExecuteNonQueryAsync(ct);
-        await using var remaining = new NpgsqlCommand("""
-            SELECT EXISTS(SELECT FROM status_github_outbox WHERE incident_id=$1 AND state NOT IN ('synced','draft'))
+        await using var activate = new NpgsqlCommand("""
+            UPDATE status_github_outbox SET state='pending' WHERE incident_id=$1 AND state='draft'
+                AND revision=(SELECT max(revision) FROM status_github_outbox WHERE incident_id=$1)
+                AND revision>(SELECT revision FROM status_github_outbox WHERE operation_id=$2)
             """, lease.Connection, transaction);
-        remaining.Parameters.AddWithValue(job.Incident.Id);
-        var pending = (bool)(await remaining.ExecuteScalarAsync(ct))!;
+        activate.Parameters.AddWithValue(job.Incident.Id);
+        activate.Parameters.AddWithValue(job.OperationId);
+        await activate.ExecuteNonQueryAsync(ct);
         var delivery = job.Command.Published ? "synced" : "draft";
-        if (pending) delivery = "pending";
-        await SetGitHubDeliveryAsync(lease.Connection, transaction,
+        await RefreshGitHubDeliveryAsync(lease.Connection, transaction,
             job.Incident with { SourceUrl = $"https://github.com/{repository}/issues/{number}" },
-            new(delivery), ct);
+            delivery, ct);
         await transaction.CommitAsync(ct);
     }
 
     private static async Task BindGitHubSourceAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
-        GitHubJob job, string repository, int number, DateTimeOffset remoteAt, string remoteVersion, CancellationToken ct)
+        GitHubJob job, (string Repository, int Number, DateTimeOffset At, string Version) source, CancellationToken ct)
     {
-        var url = $"https://github.com/{repository}/issues/{number}";
+        var url = $"https://github.com/{source.Repository}/issues/{source.Number}";
         await using var duplicates = new NpgsqlCommand("""
             UPDATE status_incidents SET document=jsonb_set(document,'{published}','false')
             WHERE id IN (SELECT incident_id FROM status_github_sources
                 WHERE repository=$1 AND issue_number=$2 AND site_id=$3 AND incident_id<>$4)
             RETURNING id
             """, connection, transaction);
-        duplicates.Parameters.AddWithValue(repository);
-        duplicates.Parameters.AddWithValue(number);
+        duplicates.Parameters.AddWithValue(source.Repository);
+        duplicates.Parameters.AddWithValue(source.Number);
         duplicates.Parameters.AddWithValue(job.Incident.SiteId);
         duplicates.Parameters.AddWithValue(job.Incident.Id);
         var aliases = new List<int>();
@@ -196,20 +222,28 @@ public sealed partial class PostgresStore
         await using var bind = new NpgsqlCommand("""
             INSERT INTO status_github_sources VALUES($1,$2,$3,$4,$5)
             ON CONFLICT(repository,issue_number,site_id) DO UPDATE
-            SET incident_id=excluded.incident_id,updated_at=excluded.updated_at;
-            UPDATE status_incidents SET document=jsonb_set(document,'{sourceUrl}',to_jsonb($6::text))
-            WHERE id=$4;
-            UPDATE status_incidents SET document=jsonb_set(document,'{gitHubVersion}',to_jsonb($7::text))
-                WHERE id=$4 OR document->>'sourceUrl'=$6;
-            UPDATE status_github_sources SET updated_at=$5 WHERE repository=$1 AND issue_number=$2;
+            SET incident_id=excluded.incident_id,updated_at=excluded.updated_at
             """, connection, transaction);
-        bind.Parameters.AddWithValue(repository);
-        bind.Parameters.AddWithValue(number);
+        bind.Parameters.AddWithValue(source.Repository);
+        bind.Parameters.AddWithValue(source.Number);
         bind.Parameters.AddWithValue(job.Incident.SiteId);
         bind.Parameters.AddWithValue(job.Incident.Id);
-        bind.Parameters.AddWithValue(remoteAt);
-        bind.Parameters.AddWithValue(url);
-        bind.Parameters.AddWithValue(remoteVersion);
+        bind.Parameters.AddWithValue(source.At);
         await bind.ExecuteNonQueryAsync(ct);
+        await using var version = new NpgsqlCommand("""
+            UPDATE status_incidents SET document=jsonb_set(jsonb_set(document,'{sourceUrl}',to_jsonb($2::text)),
+                '{gitHubVersion}',to_jsonb($3::text)) WHERE id=$1 OR document->>'sourceUrl'=$2
+            """, connection, transaction);
+        version.Parameters.AddWithValue(job.Incident.Id);
+        version.Parameters.AddWithValue(url);
+        version.Parameters.AddWithValue(source.Version);
+        await version.ExecuteNonQueryAsync(ct);
+        await using var updated = new NpgsqlCommand("""
+            UPDATE status_github_sources SET updated_at=$3 WHERE repository=$1 AND issue_number=$2
+            """, connection, transaction);
+        updated.Parameters.AddWithValue(source.Repository);
+        updated.Parameters.AddWithValue(source.Number);
+        updated.Parameters.AddWithValue(source.At);
+        await updated.ExecuteNonQueryAsync(ct);
     }
 }

@@ -157,6 +157,8 @@ public sealed partial class IndependentServiceTests
             Assert.Equal(record.Id, Assert.Single(await database.ReadGitHubSourcesAsync(options.GitHubRepository, default)).Incident.Id);
             Assert.DoesNotContain("PRIVATE", string.Join('\n', api.Bodies));
             using var importer = new GitHubIssueWorker(Catalogue(), options, database, api, NullLogger<GitHubIssueWorker>.Instance, github);
+            api.Issue!["labels"]!.AsArray().Add(new JsonObject { ["name"] = "site:xi" });
+            api.Issue["labels"]!.AsArray().Add(new JsonObject { ["name"] = "component:xi.sitewatch.geo-location-web" });
             await importer.SynchronizeAsync(default);
             record = await Read();
             Assert.Contains(record.Updates, update => update.Body == "PRIVATE_DRAFT");
@@ -189,6 +191,43 @@ public sealed partial class IndependentServiceTests
             record = await Read();
             Assert.Single(record.PublicUpdates, update => update.OperationId == command.OperationId);
 
+            var schedule = DateTimeOffset.UtcNow.AddMinutes(-1);
+            var maintenance = command with
+            {
+                Message = "Maintenance announced",
+                Severity = Severity.Maintenance,
+                ScheduledStart = schedule,
+                ScheduledEnd = schedule.AddHours(1),
+                Revision = record.Revision,
+                OperationId = Guid.NewGuid()
+            };
+            record = (await database.SaveIncidentAsync("mx", record.Id, maintenance, "operator", default))!;
+            var peer = (await database.ReadGitHubSourcesAsync(options.GitHubRepository, default)).Single(source => source.SiteId == "xi").Incident;
+            Assert.Equal(schedule, peer.ScheduledStart);
+            Assert.Equal(maintenance.ScheduledEnd, peer.ScheduledEnd);
+            Assert.NotNull(peer.ToMaintenance(DateTimeOffset.UtcNow));
+            var adjusted = maintenance with
+            {
+                Components = ["xi.sitewatch.geo-location-web"],
+                Message = "Schedule adjusted",
+                ScheduledStart = schedule.AddMinutes(-1),
+                Revision = peer.Revision,
+                OperationId = Guid.NewGuid()
+            };
+            peer = (await database.SaveIncidentAsync("xi", peer.Id, adjusted, "operator", default))!;
+            Assert.True(await worker.RunOnceAsync(default));
+            record = await Read();
+            Assert.Equal("pending", record.GitHub!.State);
+            Assert.Equal("xi", record.GitHub.SiteId);
+            Assert.Equal(peer.Id, record.GitHub.IncidentId);
+            await importer.SynchronizeAsync(default);
+            record = await Read();
+            Assert.Equal(adjusted.ScheduledStart, record.ScheduledStart);
+            Assert.Equal("Schedule adjusted", record.PublicUpdates[^1].Body);
+            Assert.True(await worker.RunOnceAsync(default));
+            record = await Read();
+            Assert.Equal("synced", record.GitHub!.State);
+
             command = command with
             {
                 Message = "PRIVATE_WITHDRAWAL",
@@ -215,15 +254,22 @@ public sealed partial class IndependentServiceTests
     private static async Task CleanupGitHubFixtureAsync(RuntimeOptions options, int id)
     {
         await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile!));
+        var ids = new List<int> { id };
+        await using (var read = source.CreateCommand("SELECT id FROM status_incidents WHERE document->>'sourceUrl' LIKE $1"))
+        {
+            read.Parameters.AddWithValue($"https://github.com/{options.GitHubRepository}/issues/%");
+            await using var reader = await read.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) ids.Add(reader.GetInt32(0));
+        }
         await using var cleanup = source.CreateCommand("""
-            DELETE FROM status_github_outbox WHERE incident_id=$1;
-            DELETE FROM status_github_sources WHERE repository=$2;
-            DELETE FROM status_audit WHERE incident_id=$1;
-            DELETE FROM status_evidence WHERE source='github-issues' AND event_id=$2;
-            DELETE FROM status_incidents WHERE id=$1;
+            DELETE FROM status_github_outbox WHERE incident_id=ANY(@ids);
+            DELETE FROM status_github_sources WHERE repository=@repository;
+            DELETE FROM status_audit WHERE incident_id=ANY(@ids);
+            DELETE FROM status_evidence WHERE source='github-issues' AND event_id=@repository;
+            DELETE FROM status_incidents WHERE id=ANY(@ids);
             """);
-        cleanup.Parameters.AddWithValue(id);
-        cleanup.Parameters.AddWithValue(options.GitHubRepository);
+        cleanup.Parameters.AddWithValue("ids", ids.Distinct().ToArray());
+        cleanup.Parameters.AddWithValue("repository", options.GitHubRepository);
         await cleanup.ExecuteNonQueryAsync();
     }
 }

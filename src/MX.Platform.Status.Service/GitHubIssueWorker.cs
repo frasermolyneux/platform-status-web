@@ -9,6 +9,7 @@ public sealed record GitHubSource(int Number, string SiteId, DateTimeOffset Upda
 
 public static class GitHubIssueParser
 {
+    internal const string LoginProperty = "login";
     private const string CreatedAtProperty = "created_at";
     private sealed record UpdateEvent(DateTimeOffset At, string Body, IncidentState? State = null);
 
@@ -22,7 +23,7 @@ public static class GitHubIssueParser
         var labels = issue.GetProperty("labels").EnumerateArray()
             .Select(label => label.GetProperty("name").GetString()!.ToLowerInvariant()).ToHashSet();
         if (!labels.Contains("status:incident")) return [];
-        if (!IsTrusted(issue.GetProperty("user").GetProperty("login").GetString()!, options))
+        if (!IsTrusted(issue.GetProperty("user").GetProperty(LoginProperty).GetString()!, options))
             throw new InvalidDataException("Incident authors must be the repository owner or an explicitly trusted maintainer.");
         var targets = ReadTargets(labels, catalog);
         var severity = ReadSeverity(labels);
@@ -85,7 +86,7 @@ public static class GitHubIssueParser
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}",
                 GitHub = previousIncident?.GitHub,
                 GitHubVersion = GitHubIncidentClient.Version(issue, comments.Where(comment =>
-                    IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)).ToArray()),
+                    IsTrusted(comment.GetProperty("user").GetProperty(LoginProperty).GetString()!, options)).ToArray()),
                 GitHubBaseVersion = own?.GitHubVersion,
                 Evidence = own?.Evidence
             });
@@ -94,7 +95,7 @@ public static class GitHubIssueParser
     }
 
     private static GitHubUpdateEnvelope? LatestMetadata(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options) =>
-        new[] { issue }.Concat(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)))
+        new[] { issue }.Concat(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty(LoginProperty).GetString()!, options)))
             .Select(item => GitHubIncidentDocument.Read(item.GetProperty("body").GetString() ?? "").Metadata)
             .Where(metadata => metadata is not null).OrderBy(metadata => metadata!.At).LastOrDefault();
 
@@ -226,7 +227,7 @@ public static class GitHubIssueParser
         {
             new(issue.GetProperty(CreatedAtProperty).GetDateTimeOffset(), issue.GetProperty("body").GetString() ?? "")
         };
-        events.AddRange(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options))
+        events.AddRange(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty(LoginProperty).GetString()!, options))
             .Select(comment => new UpdateEvent(comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), comment.GetProperty("body").GetString() ?? "")));
         events.AddRange((stateUpdates ?? []).Select(update => new UpdateEvent(update.At, update.Body, update.State)));
         var updates = new List<IncidentUpdate>();
@@ -356,7 +357,8 @@ public sealed class GitHubIssueWorker(
         foreach (var source in sources.Where(source => source.Incident.Published && !observed.Contains((source.Number, source.SiteId))))
         {
             if (await CanWithdrawAsync(source.Number, fetchedNumbers.Contains(source.Number), ct))
-                changes.Add((source.Number, DateTimeOffset.UtcNow, source.Incident with { Published = false }));
+                changes.Add((source.Number, DateTimeOffset.UtcNow,
+                    source.Incident with { Published = false, GitHubBaseVersion = source.Incident.GitHubVersion }));
             else problems.Add(new(source.Number, "Issue moved during pagination; retrying the next snapshot."));
         }
         await PersistChangesAsync(changes, ct);
@@ -390,7 +392,11 @@ public sealed class GitHubIssueWorker(
             var approved = HasLabel(issue, "status:published")
                 && GitHubIssueParser.IsTrusted(issue.GetProperty("user").GetProperty("login").GetString()!, options);
             return new(number, updatedAt, previous.Select(source =>
-                source.Incident with { Published = source.Incident.Published && approved }).ToArray(), exception.Message);
+                source.Incident with
+                {
+                    Published = source.Incident.Published && approved,
+                    GitHubBaseVersion = source.Incident.GitHubVersion
+                }).ToArray(), exception.Message);
         }
     }
 

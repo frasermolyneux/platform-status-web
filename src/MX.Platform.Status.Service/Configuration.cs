@@ -119,11 +119,11 @@ public sealed class StatusCatalog
 
     private void ValidateSharedChecks()
     {
-        foreach (var shared in Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.SharedId is not null)
+        var groups = Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.SharedId is not null)
             .Select(check => (Identity: check.SharedId, Component: site.SharedComponents[check.Component], Check: check)))
-            .GroupBy(entry => entry.Identity))
-            if (shared.Select(entry => (entry.Component, entry.Check.Kind, entry.Check.Target, entry.Check.ExpectedIntervalSeconds)).Distinct().Count() != 1)
-                throw new InvalidOperationException("Shared check definitions must identify the same component, kind, target and interval.");
+            .GroupBy(entry => entry.Identity);
+        if (groups.Any(shared => shared.Select(entry => (entry.Component, entry.Check.Kind, entry.Check.Target, entry.Check.ExpectedIntervalSeconds)).Distinct().Count() != 1))
+            throw new InvalidOperationException("Shared check definitions must identify the same component, kind, target and interval.");
     }
 
     private static void ValidateProbes(SiteDefinition definition, Component[] components)

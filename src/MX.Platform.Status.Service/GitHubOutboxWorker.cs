@@ -11,7 +11,7 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
             try
             {
                 await database.InitializeAsync(stoppingToken);
-                for (var count = 0; count < 20 && await RunOnceAsync(stoppingToken); count++) { }
+                await DrainAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception exception) { logger.LogError(exception, "GitHub delivery worker failed; durable local updates and queued changes are retained."); }
@@ -20,11 +20,17 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
         }
     }
 
+    private async Task DrainAsync(CancellationToken ct)
+    {
+        for (var count = 0; count < 20; count++)
+            if (!await RunOnceAsync(ct)) break;
+    }
+
     internal async Task<bool> RunOnceAsync(CancellationToken ct)
     {
         await using var lease = await database.TryGitHubLockAsync(ct);
         if (lease is null) return false;
-        var job = await database.ReadGitHubJobAsync(lease, ct);
+        var job = await PostgresStore.ReadGitHubJobAsync(lease, ct);
         if (job is null) return false;
         var attempted = job.Attempted;
         try
@@ -41,7 +47,7 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
             ValidateRetry(job, snapshot);
             var labels = github.DesiredLabels(job, snapshot);
             if (job.Command.Published) await github.EnsureLabelsAsync(labels, token);
-            await database.MarkGitHubAttemptAsync(lease, job.OperationId, token);
+            await PostgresStore.MarkGitHubAttemptAsync(lease, job.OperationId, token);
             attempted = true;
             snapshot = await WriteAsync(job, snapshot, labels, token);
             if (!Delivered(job, snapshot))
@@ -67,17 +73,23 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
         {
             await ProblemAsync(lease, job, "review", exception, ct);
         }
-        catch (Exception exception) when (!ct.IsCancellationRequested
-            && exception is HttpRequestException or OperationCanceledException or InvalidOperationException
-                or IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+        catch (Exception exception) when (!ct.IsCancellationRequested && IsTransient(exception))
         {
-            var error = attempted
-                ? "GitHub delivery was interrupted after a write began. The local update is safe; the remote outcome is being reconciled."
-                : "GitHub delivery is unavailable. The local update is safe and delivery will retry automatically.";
-            logger.LogWarning(exception, "GitHub delivery failed for operation {Operation}; local publication is retained.", job.OperationId);
-            await database.SetGitHubProblemAsync(lease, job, attempted ? "uncertain" : "pending", error, ct);
+            await RetryLaterAsync(lease, job, attempted, exception, ct);
         }
         return false;
+    }
+
+    private static bool IsTransient(Exception exception) => exception is HttpRequestException or OperationCanceledException
+        or InvalidOperationException or IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException;
+
+    private async Task RetryLaterAsync(PublisherLease lease, GitHubJob job, bool attempted, Exception exception, CancellationToken ct)
+    {
+        var error = attempted
+            ? "GitHub delivery was interrupted after a write began. The local update is safe; the remote outcome is being reconciled."
+            : "GitHub delivery is unavailable. The local update is safe and delivery will retry automatically.";
+        logger.LogWarning(exception, "GitHub delivery failed for operation {Operation}; local publication is retained.", job.OperationId);
+        await PostgresStore.SetGitHubProblemAsync(lease, job, attempted ? "uncertain" : "pending", error, ct);
     }
 
     private bool Delivered(GitHubJob job, GitHubIssueSnapshot snapshot) =>
@@ -105,7 +117,7 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
     private async Task ProblemAsync(PublisherLease lease, GitHubJob job, string state, Exception exception, CancellationToken ct)
     {
         logger.LogWarning(exception, "GitHub operation {Operation} requires operator review.", job.OperationId);
-        await database.SetGitHubProblemAsync(lease, job, state, exception.Message, ct);
+        await PostgresStore.SetGitHubProblemAsync(lease, job, state, exception.Message, ct);
     }
 
     private async Task<GitHubIssueSnapshot> WriteAsync(GitHubJob job, GitHubIssueSnapshot? snapshot, string[] labels, CancellationToken ct)
@@ -121,7 +133,7 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
         }
         if (!job.Command.Published)
         {
-            if (snapshot.Labels.Contains("status:published"))
+            if (snapshot.ReadLabels().Contains("status:published"))
             {
                 await github.SendAsync(HttpMethod.Delete, $"issues/{snapshot.Number}/labels/status%3Apublished", null, ct);
             }

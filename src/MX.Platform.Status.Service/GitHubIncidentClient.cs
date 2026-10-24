@@ -16,7 +16,7 @@ public sealed record GitHubIssueSnapshot(JsonElement Issue, IReadOnlyList<JsonEl
     public int Number => Issue.GetProperty("number").GetInt32();
     public DateTimeOffset UpdatedAt => Issue.GetProperty("updated_at").GetDateTimeOffset();
     public string Version => GitHubIncidentClient.Version(Issue, Comments);
-    public string[] Labels => Issue.GetProperty("labels").EnumerateArray().Select(label => label.GetProperty("name").GetString()!).ToArray();
+    public string[] ReadLabels() => Issue.GetProperty("labels").EnumerateArray().Select(label => label.GetProperty("name").GetString()!).ToArray();
 }
 
 public sealed class GitHubIncidentConflictException(string message) : Exception(message);
@@ -86,7 +86,7 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
             comments = comments.Select(comment => new
             {
                 at = comment.GetProperty("created_at").GetDateTimeOffset(),
-                author = comment.GetProperty("user").GetProperty("login").GetString(),
+                author = comment.GetProperty("user").GetProperty(GitHubIssueParser.LoginProperty).GetString(),
                 body = comment.GetProperty("body").GetString()
             })
         })));
@@ -155,7 +155,7 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
         while ((count = await input.ReadAsync(buffer, ct)) > 0)
         {
             if (output.Length + count > 4_000_000) throw new InvalidDataException("GitHub response exceeds the bounded size.");
-            output.Write(buffer, 0, count);
+            await output.WriteAsync(buffer.AsMemory(0, count), ct);
         }
         return JsonSerializer.Deserialize<JsonElement>(output.ToArray());
     }
@@ -190,7 +190,7 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
             || Version(latest, comments) != Version(issue, comments))
             throw new GitHubIncidentConflictException("The GitHub issue changed while it was read. Review the current version before retrying.");
         return new(latest, comments.Where(comment =>
-            GitHubIssueParser.IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)).ToArray());
+            GitHubIssueParser.IsTrusted(comment.GetProperty("user").GetProperty(GitHubIssueParser.LoginProperty).GetString()!, options)).ToArray());
     }
 
     public async Task<GitHubIssueSnapshot?> FindCreatedAsync(Guid operation, CancellationToken ct)
@@ -198,7 +198,7 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
         var issues = await PagesAsync("issues?state=all&sort=updated&direction=desc", ct);
         var matching = issues.Where(issue => !issue.TryGetProperty("pull_request", out _)
             && (issue.GetProperty("body").GetString() ?? "").Contains(GitHubIncidentDocument.Marker(operation), StringComparison.Ordinal)
-            && GitHubIssueParser.IsTrusted(issue.GetProperty("user").GetProperty("login").GetString()!, options)).ToArray();
+            && GitHubIssueParser.IsTrusted(issue.GetProperty("user").GetProperty(GitHubIssueParser.LoginProperty).GetString()!, options)).ToArray();
         if (matching.Length > 1) throw new GitHubIncidentConflictException("More than one GitHub issue has this operation marker. Review the repository before continuing.");
         return matching.Length == 0 ? null : await ReadAsync(matching[0].GetProperty("number").GetInt32(), ct);
     }
@@ -210,7 +210,7 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
     public bool ContainsUpdate(GitHubIssueSnapshot snapshot, GitHubJob job)
     {
         var latest = new[] { snapshot.Issue }.Concat(snapshot.Comments)
-            .Where(item => GitHubIssueParser.IsTrusted(item.GetProperty("user").GetProperty("login").GetString()!, options))
+            .Where(item => GitHubIssueParser.IsTrusted(item.GetProperty("user").GetProperty(GitHubIssueParser.LoginProperty).GetString()!, options))
             .Select(item => item.GetProperty("body").GetString() ?? "")
             .LastOrDefault(body => GitHubIncidentDocument.Read(body).Metadata?.OperationId == job.OperationId);
         return latest is not null && latest.Replace("\r\n", "\n", StringComparison.Ordinal).Trim()
@@ -218,14 +218,14 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
     }
 
     public string[] DesiredLabels(GitHubJob job, GitHubIssueSnapshot? snapshot) =>
-        GitHubIncidentDocument.Labels(catalog, job.Incident.SiteId, job.Command, snapshot?.Labels ?? []);
+        GitHubIncidentDocument.Labels(catalog, job.Incident.SiteId, job.Command, snapshot?.ReadLabels() ?? []);
 
     public bool Matches(GitHubJob job, GitHubIssueSnapshot snapshot)
     {
-        if (!job.Command.Published) return !snapshot.Labels.Contains("status:published");
+        if (!job.Command.Published) return !snapshot.ReadLabels().Contains("status:published");
         return snapshot.Issue.GetProperty("title").GetString() == job.Command.Title.Trim()
             && snapshot.Issue.GetProperty("state").GetString() == (job.Command.State == IncidentState.Resolved ? "closed" : "open")
-            && DesiredLabels(job, snapshot).ToHashSet().SetEquals(snapshot.Labels);
+            && DesiredLabels(job, snapshot).ToHashSet().SetEquals(snapshot.ReadLabels());
     }
 
     public async Task EnsureLabelsAsync(IEnumerable<string> labels, CancellationToken ct)

@@ -5,7 +5,7 @@ namespace MX.Platform.Status.Service;
 
 public sealed record IncidentEvidence(string Source, string Id, DateTimeOffset ObservedAt, string Context);
 public sealed record SourceUpdateSnapshot(DateTimeOffset At, string Body, IncidentState? ExplicitState);
-public sealed record GitHubDelivery(string State, string? Error = null);
+public sealed record GitHubDelivery(string State, string? Error = null, string? SiteId = null, int? IncidentId = null);
 
 public sealed record IncidentRecord
 {
@@ -106,8 +106,7 @@ public sealed record IncidentCommand(
             return "Invalid incident severity or state.";
         if (HasInvalidEvidence())
             return "Invalid source evidence reference.";
-        if (ScheduledStart.HasValue != ScheduledEnd.HasValue || ScheduledEnd <= ScheduledStart
-            || (Severity == Severity.Maintenance) != ScheduledStart.HasValue)
+        if (HasInvalidSchedule())
             return "Maintenance requires a valid start/end window; incidents must not specify one.";
         var publicComponents = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
         if (Published && Components.Any(id => !publicComponents.Contains(id)))
@@ -121,11 +120,14 @@ public sealed record IncidentCommand(
             || string.IsNullOrWhiteSpace(Evidence.Context) || Evidence.Context.Length > 20000
             || Evidence.ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5));
 
+    private bool HasInvalidSchedule() => ScheduledStart.HasValue != ScheduledEnd.HasValue || ScheduledEnd <= ScheduledStart
+        || (Severity == Severity.Maintenance) != ScheduledStart.HasValue;
+
     public IncidentRecord Apply(int id, string site, IncidentRecord? previous, DateTimeOffset now)
     {
         GitHubDelivery? delivery = null;
         if (Delivery == "github")
-            delivery = new(Published || previous?.SourceUrl is not null ? "pending" : "draft");
+            delivery = new(Published || previous?.SourceUrl is not null ? "pending" : "draft", SiteId: site, IncidentId: id);
         var update = new IncidentUpdate
         {
             At = now,

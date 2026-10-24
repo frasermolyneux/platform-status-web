@@ -50,11 +50,11 @@ public sealed partial class PostgresStore
         write.Parameters.AddWithValue(job.OperationId);
         if (await write.ExecuteNonQueryAsync(ct) != 1) return false;
         if (remote is not null)
-            await BindGitHubSourceAsync(connection, transaction, job, repository, remote.Number, remote.UpdatedAt, remote.Version, ct);
-        await SetGitHubDeliveryAsync(connection, transaction, job.Incident with
+            await BindGitHubSourceAsync(connection, transaction, job, (repository, remote.Number, remote.UpdatedAt, remote.Version), ct);
+        await RefreshGitHubDeliveryAsync(connection, transaction, job.Incident with
         {
             SourceUrl = remote is null ? job.Incident.SourceUrl : $"https://github.com/{repository}/issues/{remote.Number}"
-        }, new("pending"), ct);
+        }, "pending", ct);
         await using var audit = new NpgsqlCommand("""
             INSERT INTO status_audit(site_id,incident_id,actor,revision) VALUES($1,$2,$3,$4)
             """, connection, transaction);
@@ -95,7 +95,7 @@ public static class GitHubReconciliation
                 number = remote.Number,
                 title = remote.Issue.GetProperty("title").GetString(),
                 body = remote.Issue.GetProperty("body").GetString(),
-                labels = remote.Labels,
+                labels = remote.ReadLabels(),
                 updatedAt = remote.UpdatedAt,
                 comments = remote.Comments.TakeLast(10).Select(comment => comment.GetProperty("body").GetString())
             }

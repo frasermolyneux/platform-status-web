@@ -329,7 +329,7 @@ test('local emergency publication does not send a GitHub operation', async () =>
   assert.equal(writes[0].body.operationId, undefined);
 });
 
-test('queued incidents cannot restore an old local-only destination from a saved draft', async () => {
+for (const deferred of [false, true]) test(`queued incidents retain GitHub delivery after ${deferred ? 'deferred' : 'immediate'} draft restoration`, async () => {
   history.replaceState(null, '', '/ops/incidents');
   existingIncidents = [{
     id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'], title: 'Queued incident',
@@ -337,14 +337,31 @@ test('queued incidents cannot restore an old local-only destination from a saved
   }];
   await renderOperations();
   assert.match(document.body.textContent || '', /GitHub delivery: pending.*GitHub is unavailable/);
+  sessionStorage.setItem('status-draft:test-account:mx:incident:1', JSON.stringify({
+    revision: deferred ? 0 : 1, values: { delivery: 'local', message: 'Next public update' },
+  }));
   click('Edit incident');
-  setValue('delivery', 'local');
-  setValue('message', 'Next public update');
-  await renderOperations();
-  click('Edit incident');
+  if (deferred) click('Restore older draft');
   const delivery = document.querySelector<HTMLSelectElement>('[name="delivery"]')!;
   assert.equal(delivery.value, 'github');
   assert.equal(delivery.disabled, true);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.equal(writes[0].body.delivery, 'github');
+});
+
+test('shared delivery conflicts route to the owning brand instead of a peer review endpoint', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Shared incident',
+    state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
+    gitHub: { state: 'conflict', siteId: 'xi', incidentId: 4 },
+  }];
+  await renderOperations();
+  assert.equal(Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Review GitHub delivery'), false);
+  assert.equal(document.querySelector<HTMLAnchorElement>('a[href*="status.xtremeidiots.com/ops/incidents"]')?.href,
+    'https://status.xtremeidiots.com/ops/incidents#incident-4');
 });
 
 test('GitHub conflict review renders remote content safely and requires explicit version-pinned confirmation', async () => {

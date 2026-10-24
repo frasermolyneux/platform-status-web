@@ -18,7 +18,7 @@ interface Incident {
   scheduledEnd?: string;
   sourceUrl?: string;
   evidence?: { source: string; id: string; observedAt: string; context: string };
-  gitHub?: { state: string; error?: string };
+  gitHub?: { state: string; error?: string; siteId?: string; incidentId?: number };
 }
 
 interface Banner {
@@ -359,6 +359,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       form.append(element('p', 'Incidents affecting shared services, including GeoLocation Website, also appear on the other status site.', 'muted'));
       const preview = element('article', undefined, 'incident-preview');
       const updatePreview = (): void => {
+        if (incident?.sourceUrl || incident?.gitHub) delivery.value = 'github';
         preview.replaceChildren(element('h4', title.value || 'Incident preview'), element('p', update.value || 'Your public update will appear here.'));
       };
       form.append(element('p', 'Public preview', 'eyebrow'), preview);
@@ -390,12 +391,13 @@ export async function renderOperations(navigateTo: (path: string) => void = path
 
     async function reviewGitHub(incident: Incident): Promise<void> {
       try {
-        const response = await request(`/api/ops/incidents/${incident.id}/github`);
+        const id = incident.gitHub?.incidentId || incident.id;
+        const response = await request(`/api/ops/incidents/${id}/github`);
         const review: { operationId: string; revision: number; remoteVersion: string | null; localMessage: string;
           remote: { number: number; title: string; body: string; labels: string[]; updatedAt: string; comments: string[] } | null } = await response.json();
         if (!current()) return;
-        const { form, save, key } = openForm(`Review GitHub delivery for incident #${incident.id}`,
-          `github-review:${review.remoteVersion || review.operationId}`, incident.id);
+        const { form, save, key } = openForm(`Review GitHub delivery for incident #${id}`,
+          `github-review:${review.remoteVersion || review.operationId}`, id);
         form.append(element('h4', 'Queued public change'), element('pre', review.localMessage));
         if (review.remote) {
           form.append(element('h4', `Current GitHub issue #${review.remote.number}: ${review.remote.title}`),
@@ -412,7 +414,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
           : 'I checked GitHub and confirmed that the original issue was not created', confirmed, 'confirmed');
         finishForm(form, save, key, review.revision, async () => {
           if (!confirmed.checked) throw new Error('Review GitHub and explicitly confirm before retrying.');
-          await request(`/api/ops/incidents/${incident.id}/github/retry`, {
+          await request(`/api/ops/incidents/${id}/github/retry`, {
             method: 'POST', body: JSON.stringify({ revision: review.revision, remoteVersion: review.remoteVersion, confirmed: true }),
           });
         });
@@ -631,6 +633,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       if (!incidents.length) incidentSection.append(element('p', 'No incidents or maintenance windows yet.', 'empty-state'));
       for (const incident of incidents) {
         const row = element('article', undefined, 'management-row');
+        row.id = `incident-${incident.id}`;
         const copy = element('div');
         copy.append(element('h4', incident.title), element('p', `${incident.state} / ${incident.severity} / ${incident.published ? 'public' : 'draft'}`, 'muted'));
         copy.append(element('p', `Affected services or components: ${flatten(status.components).filter(component => incident.components.includes(component.id)).map(component => component.name).join(', ')}`));
@@ -645,10 +648,15 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         else control = button('Edit incident', () => openIncident(incident));
         if (control instanceof HTMLButtonElement) control.disabled = !canWrite || !runtime.writable;
         row.append(copy, control);
-        if (!sourceSite && incident.gitHub && ['conflict', 'review', 'uncertain'].includes(incident.gitHub.state)) {
-          const review = button('Review GitHub delivery', () => { void reviewGitHub(incident); });
-          review.disabled = !canWrite || !runtime.writable;
-          row.append(review);
+        if (incident.gitHub && ['conflict', 'review', 'uncertain'].includes(incident.gitHub.state)) {
+          const owner = incident.gitHub.siteId || incident.siteId || status.site.id;
+          if (owner !== status.site.id) row.append(link('Review GitHub delivery on originating status site',
+            `${owner === 'mx' ? 'https://mxstatus.io' : 'https://status.xtremeidiots.com'}/ops/incidents#incident-${incident.gitHub.incidentId || incident.id}`));
+          else {
+            const review = button('Review GitHub delivery', () => { void reviewGitHub(incident); });
+            review.disabled = !canWrite || !runtime.writable;
+            row.append(review);
+          }
         }
         incidentSection.append(row);
       }

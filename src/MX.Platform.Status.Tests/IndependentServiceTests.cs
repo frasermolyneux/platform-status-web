@@ -103,13 +103,19 @@ public sealed partial class IndependentServiceTests : IDisposable
             Site = new SiteInfo { Id = "mx" },
             GeneratedAt = generated,
             Summary = new Summary { Status = "operational" },
-            Components = [new ComponentDto { Id = "web", Status = "operational" }]
+            Components = [new ComponentDto
+            {
+                Id = "web", Status = "operational",
+                Checks = [new("http", "HTTP check", "http", "operational", generated), new("queue", "Queue", "telemetry", "outage", generated)]
+            }]
         });
         var result = await new PublicationStore(catalog, options).ReadAsync("mx");
         Assert.Equal(generated, result.GeneratedAt);
         Assert.True(result.DataFreshness!.Stale);
         Assert.Equal("unknown", result.Summary.Status);
         Assert.Equal("unknown", result.Components.Single().Status);
+        Assert.Equal("unknown", result.Components.Single().Checks![0].Status);
+        Assert.Equal("outage", result.Components.Single().Checks![1].Status);
         Assert.Throws<ArgumentException>(() => catalog.Get("../private"));
     }
 
