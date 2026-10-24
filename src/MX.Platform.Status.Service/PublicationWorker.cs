@@ -63,8 +63,10 @@ public sealed class PublicationWorker(
     {
         if (DateTimeOffset.UtcNow >= nextProbeAt)
         {
+            // Keep failure backoff; successful rounds start their interval after collection completes.
             nextProbeAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
             await RefreshProbesAsync(publisherLock, ct);
+            nextProbeAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
         }
         var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
         foreach (var definition in catalog.Sites)

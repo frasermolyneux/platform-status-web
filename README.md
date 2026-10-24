@@ -156,6 +156,7 @@ The publisher reads durable observations before scheduling, retains results for
 checks not yet due, and limits simultaneous requests to five. Restarting does not
 reset a check's schedule. HTTP-only history records components when they are
 actually observed, not on skipped collection rounds.
+Intervals are minimums; due checks run on the next publisher collection round.
 New Azure website baselines use `HEAD` to avoid downloading response bodies.
 Trip Side Kick Application uses its dependency-free liveness endpoint, not its
 database-backed readiness endpoint or an authenticated application page.
