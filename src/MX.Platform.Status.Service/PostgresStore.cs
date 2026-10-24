@@ -326,9 +326,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 previous = JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(0), StatusJson.Options)!;
                 previousAt = reader.GetFieldValue<DateTimeOffset>(1);
             }
-        if (previous?.GitHub is { State: not ("synced" or "draft") } || previousAt > updatedAt
-            || previous is not null && incoming.Revision != previous.Revision
-            || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion)) return;
+        if (ConflictsWithGitHubImport(previous, previousAt, updatedAt, incoming)) return;
         if (previous is null && !await NewGitHubSourceIsCurrentAsync(connection, transaction, repository, number, updatedAt, incoming, ct))
             return;
         IncidentRecord record;
@@ -361,6 +359,12 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         await transaction.CommitAsync(ct);
     }
 
+    private static bool ConflictsWithGitHubImport(IncidentRecord? previous, DateTimeOffset? previousAt,
+        DateTimeOffset updatedAt, IncidentRecord incoming) =>
+        previous?.GitHub is { State: not ("synced" or "draft") } || previousAt > updatedAt
+        || previous is not null && incoming.Revision != previous.Revision
+        || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion);
+
     private static async Task<bool> NewGitHubSourceIsCurrentAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         string repository, int number, DateTimeOffset updatedAt, IncidentRecord incoming, CancellationToken ct)
     {
@@ -385,7 +389,9 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         {
             found = true;
             var version = reader.IsDBNull(0) ? null : reader.GetString(0);
-            if (version != expected || reader.GetFieldValue<DateTimeOffset>(1) > updatedAt) return false;
+            // An earlier brand in this batch may already have saved this exact snapshot.
+            if (version != expected && version != incoming.GitHubVersion
+                || reader.GetFieldValue<DateTimeOffset>(1) > updatedAt) return false;
         }
         return found || incoming.GitHubBaseSiteId is null;
     }
