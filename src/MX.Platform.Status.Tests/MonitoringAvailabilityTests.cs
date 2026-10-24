@@ -32,11 +32,16 @@ public sealed class MonitoringAvailabilityTests
     private static readonly DateTimeOffset Now = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
     private static readonly CheckDefinition Check = new()
     {
-        Id = "public-alias", Kind = "telemetry",
+        Id = "public-alias",
+        Kind = "telemetry",
         Monitoring = new()
         {
-            SiteId = "mx", ComponentId = "mx.shared", CheckId = "mx.shared.routing",
-            Resources = ["platform"], Regions = ["uksouth", "eastus", "westeurope"], IntervalSeconds = 300
+            SiteId = "mx",
+            ComponentId = "mx.shared",
+            CheckId = "mx.shared.routing",
+            Resources = ["platform"],
+            Regions = ["uksouth", "eastus", "westeurope"],
+            IntervalSeconds = 300
         }
     };
 
@@ -88,6 +93,39 @@ public sealed class MonitoringAvailabilityTests
         Assert.Equal(Check.Monitoring, result.Monitoring);
         Assert.Contains("uksouth (HTTP 503", result.Detail);
         Assert.Equal(3, result.Regions.Count);
+    }
+
+    [Fact]
+    public void MonitoringOwnedChecksRejectMissingOrReboundSourceProvenance()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var check = Check with { Component = "mx.shared" };
+        var site = new SiteDefinition { Site = new() { Id = "mx" }, Checks = [check] };
+        var valid = MonitoringAvailability.Project("mx", check,
+            [Row("uksouth", true, now), Row("eastus", true, now), Row("westeurope", true, now)], now)!;
+        Assert.Equal(ComponentStatus.Operational, ComponentChecks.Build(site, [], [valid])["mx.shared"].Checks.Single().Status);
+        foreach (var invalid in new[]
+        {
+            valid with { Monitoring = null },
+            valid with { Regions = [] },
+            valid with { Monitoring = valid.Monitoring! with { CheckId = "previous-source" } }
+        })
+            Assert.Equal(ComponentStatus.Unknown, ComponentChecks.Build(site, [], [invalid])["mx.shared"].Checks.Single().Status);
+    }
+
+    [Fact]
+    public void HistoricalMeasurementOutcomesRemainSampleableAfterLiveExpiry()
+    {
+        var at = DateTimeOffset.UtcNow.AddMinutes(-16);
+        var check = Check with { Component = "mx.shared" };
+        var site = new SiteDefinition { Site = new() { Id = "mx" }, Checks = [check] };
+        var cached = MonitoringAvailability.Project("mx", check,
+            [Row("uksouth", false, at), Row("eastus", false, at), Row("westeurope", false, at)], at)!;
+        Assert.Equal(0, ComponentChecks.Build(site, [], [cached])["mx.shared"].Samples);
+        var historical = ComponentChecks.FromChecks([ComponentChecks.Observe(site, check, [cached], at)]);
+        Assert.Equal(1, historical.Samples);
+        Assert.Equal(1, historical.Failures);
+        Assert.Equal(at, historical.LastSeen);
     }
 
     [Fact]
@@ -151,17 +189,23 @@ public sealed class MonitoringAvailabilityTests
     {
         var site = new SiteDefinition
         {
-            Components = new() { Components =
+            Components = new()
+            {
+                Components =
             [
                 new() { Id = "mx.group", Kind = "group", Children =
                 [
                     new() { Id = "mx.old" }, new() { Id = "mx.new" }
                 ]}
-            ]}
+            ]
+            }
         };
         var incident = new IncidentRecord
         {
-            Published = true, State = IncidentState.Resolved, Severity = Severity.Maintenance, ResolvedAt = Now,
+            Published = true,
+            State = IncidentState.Resolved,
+            Severity = Severity.Maintenance,
+            ResolvedAt = Now,
             ImpactHistory =
             [
                 new(Now.AddMinutes(-3), IncidentState.Monitoring, Severity.Maintenance, ["mx.group"],

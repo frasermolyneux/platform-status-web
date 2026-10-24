@@ -115,7 +115,7 @@ public sealed class PublicationWorker(
         {
             var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);
             var live = catalog.ProjectTelemetry(site, telemetry);
-            foreach (var (component, sample) in live.Where(pair => pair.Value.Samples > 0))
+            foreach (var component in live.Keys)
             {
                 var shared = site.SharedComponents.GetValueOrDefault(component);
                 var identities = catalog.Sites.SelectMany(source => source.EffectiveChecks
@@ -125,16 +125,24 @@ public sealed class PublicationWorker(
                     .Select(check => InputIdentity(source, check))).ToHashSet();
                 var inputs = catalog.Sites.SelectMany(source => source.EffectiveChecks
                     .Where(check => identities.Contains(InputIdentity(source, check)))
-                    .SelectMany(check => signals[source.Site.Id].Where(signal => signal.CheckId == check.Id)
-                        .Select(signal => (Identity: InputIdentity(source, check), Signal: signal))))
+                    .SelectMany(check => signals[source.Site.Id].Where(signal => signal.CheckId == check.Id
+                            && ComponentChecks.MatchesMonitoringSource(check, signal))
+                        .Select(signal => (Identity: InputIdentity(source, check), Signal: signal, Site: source, Check: check))))
                     .GroupBy(input => input.Identity)
                     .Select(group => group.MaxBy(input => input.Signal.ObservedAt))
                     .OrderBy(input => input.Identity, StringComparer.Ordinal).ToArray();
                 if (inputs.Length == 0) continue;
                 var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(inputs.Select(input =>
-                    new { input.Identity, Key = input.Signal.ObservationKey
-                        ?? $"{input.Signal.ObservedAt:O}/{input.Signal.Status}" }), StatusJson.Options)));
+                    new
+                    {
+                        input.Identity,
+                        Key = input.Signal.ObservationKey
+                        ?? $"{input.Signal.ObservedAt:O}/{input.Signal.Status}"
+                    }), StatusJson.Options)));
                 var observedAt = inputs.Max(input => input.Signal.ObservedAt);
+                var sample = ComponentChecks.FromChecks(inputs.Select(input =>
+                    ComponentChecks.Observe(input.Site, input.Check, [input.Signal], observedAt)).ToArray());
+                if (sample.Samples == 0) continue;
                 await lease.RecordMonitoringSampleAsync(site.Site.Id, component, fingerprint, observedAt,
                     IsMaintained(site, component, observedAt, incidents) ? null : sample.Failures == 0, ct);
             }

@@ -44,7 +44,7 @@ public static class ComponentChecks
     {
         var now = DateTimeOffset.UtcNow;
         return site.EffectiveChecks.GroupBy(check => check.Component).ToDictionary(group => group.Key, group =>
-            FromChecks(group.Select(check => Observe(site, check, probes, signals, now)).ToArray()));
+            FromChecks(group.Select(check => Observe(site, check, signals, now)).ToArray()));
     }
 
     public static ComponentLiveTelemetry FromChecks(IReadOnlyList<CheckTelemetry> checks) =>
@@ -54,10 +54,15 @@ public static class ComponentChecks
             checks.Where(check => check.ObservedAt.HasValue).Select(check => check.ObservedAt).Min(), null)
         { Checks = checks };
 
-    private static CheckTelemetry Observe(SiteDefinition site, CheckDefinition check, IReadOnlyList<ProbeObservation> probes,
+    internal static bool MatchesMonitoringSource(CheckDefinition check, CheckResult signal) =>
+        check.Monitoring is null
+        || (signal.Monitoring?.Identity == check.Monitoring.Identity && signal.Regions.Count > 0);
+
+    internal static CheckTelemetry Observe(SiteDefinition site, CheckDefinition check,
         IReadOnlyList<CheckResult> signals, DateTimeOffset now)
     {
-        var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
+        var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id
+            && MatchesMonitoringSource(check, signal)).MaxBy(signal => signal.ObservedAt);
         var at = signal?.ObservedAt;
         var status = check.Kind == "telemetry" ? signal?.Status ?? ComponentStatus.Unknown : ComponentStatus.Unknown;
         if (check.Monitoring is { } source && signal is { Regions.Count: > 0 })

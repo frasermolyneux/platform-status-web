@@ -426,7 +426,9 @@ public sealed class StatusExperienceTests
         {
             Checks = [xi.EffectiveChecks.Single(check => check.Id == xiId), shared with { Component = xiId }]
         };
-        var healthy = new CheckResult("mx", monitored.Id, ComponentStatus.Operational, now);
+        var healthy = MonitoringAvailability.Project("mx", monitored, monitored.Monitoring!.Regions.Select(region =>
+            new MonitoringObservation(monitored.Monitoring.SiteId, monitored.Monitoring.ComponentId,
+                monitored.Monitoring.CheckId, region, now, true, "OK")), now)!;
         var ownHealthy = healthy with { Site = "xi", CheckId = xiId };
         var signal = new CheckResult("mx", shared.Id, ComponentStatus.Degraded, now, "MX_PRIVATE_DETAIL");
         var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
@@ -785,8 +787,12 @@ public sealed class StatusExperienceTests
         var configured = Catalogue().Get("mx");
         const string id = "mx.sitewatch.geo-location-web";
         var site = configured with { Checks = [configured.Checks.Single(check => check.Id == id)] };
-        var first = new CheckResult("mx", id, ComponentStatus.Outage, Created);
-        var latest = first with { ObservedAt = Created.AddMinutes(1), Status = ComponentStatus.Operational };
+        var check = site.Checks.Single();
+        CheckResult Measured(DateTimeOffset at, bool success) => MonitoringAvailability.Project("mx", check,
+            check.Monitoring!.Regions.Select(region => new MonitoringObservation(check.Monitoring.SiteId,
+                check.Monitoring.ComponentId, check.Monitoring.CheckId, region, at, success, null)), at)!;
+        var first = Measured(Created, false);
+        var latest = Measured(Created.AddMinutes(1), true);
         var result = ComponentChecks.Build(site, [], [latest, first,
             latest with { Site = "xi" }, latest with { CheckId = "removed-check" }]);
         var observation = Assert.Single(result).Value;

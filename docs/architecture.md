@@ -51,7 +51,10 @@ Azure queries, GitHub or target HTTP requests.
 Cached brand aliases commit together. History advances once per changed source
 observation vector, not every publication/poll; cursor and daily counter changes
 share a transaction. A failed history write rolls back the cursor, and restart
-does not recount cached inputs. Known slow failures survive faster inputs.
+does not recount cached inputs. Historical outcomes are classified at measurement
+time, so an unconsumed sample still retries after live freshness expires. Monitoring
+checks reject cached results without matching canonical provenance and regional
+observations. Known slow failures survive faster inputs.
 Maintenance advances the cursor without adding an availability sample.
 Historical incident overrides remain independently applied after measurement
 aggregation. Archived legacy probe evidence is readable privately, never used as

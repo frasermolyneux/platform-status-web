@@ -544,6 +544,57 @@ public sealed partial class IndependentServiceTests : IDisposable
                     Assert.Equal(3, Assert.Single((await database.ReadHistoryAsync(site, default))
                         .ComponentsById[$"{site.Site.Id}.{fixture}"].Days).Total);
 
+                await using (var reset = new Npgsql.NpgsqlCommand("""
+                    DELETE FROM status_probe_days WHERE component_id IN ($1,$2);
+                    DELETE FROM status_sample_cursors WHERE component_id IN ($1,$2);
+                    """, lease.Connection))
+                {
+                    reset.Parameters.AddWithValue($"mx.{fixture}");
+                    reset.Parameters.AddWithValue($"xi.{fixture}");
+                    await reset.ExecuteNonQueryAsync();
+                }
+                var expiredAt = DateTimeOffset.UtcNow.AddMinutes(-16);
+                await database.SaveMonitoringChecksAsync(initial.Where(result =>
+                        result.CheckId == $"{fixture}.fast" || result.CheckId == $"{fixture}.slow")
+                    .Select(result => result with
+                    {
+                        Status = ComponentStatus.Outage,
+                        ObservedAt = expiredAt,
+                        ObservationKey = "unconsumed-expired"
+                    }).ToArray(), default);
+                foreach (var site in catalog.Sites)
+                    Assert.Equal(0, ComponentChecks.Build(site, [], await database.ReadChecksAsync(site.Site.Id, default))
+                        [$"{site.Site.Id}.{fixture}"].Samples);
+                await using (var rejectExpiredHistory = new Npgsql.NpgsqlCommand(
+                    $"ALTER TABLE status_probe_days ADD CONSTRAINT {constraint} CHECK (component_id <> 'mx.{fixture}') NOT VALID",
+                    lease.Connection))
+                    await rejectExpiredHistory.ExecuteNonQueryAsync();
+                try
+                {
+                    await Assert.ThrowsAsync<Npgsql.PostgresException>(() => normal.PublishAsync(lease, default));
+                    await using var cursor = new Npgsql.NpgsqlCommand(
+                        "SELECT count(*) FROM status_sample_cursors WHERE component_id IN ($1,$2)", lease.Connection);
+                    cursor.Parameters.AddWithValue($"mx.{fixture}");
+                    cursor.Parameters.AddWithValue($"xi.{fixture}");
+                    Assert.Equal(0L, await cursor.ExecuteScalarAsync());
+                }
+                finally
+                {
+                    await using var restore = new Npgsql.NpgsqlCommand(
+                        $"ALTER TABLE status_probe_days DROP CONSTRAINT {constraint}", lease.Connection);
+                    await restore.ExecuteNonQueryAsync();
+                }
+                await normal.PublishAsync(lease, default);
+                await normal.PublishAsync(lease, default);
+                foreach (var site in catalog.Sites)
+                {
+                    var day = Assert.Single((await database.ReadHistoryAsync(site, default))
+                        .ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
+                    Assert.Equal(1, day.Total);
+                    Assert.Equal(1, day.Failed);
+                    Assert.Equal(DateOnly.FromDateTime(expiredAt.UtcDateTime), day.Date);
+                }
+
                 var maintenanceCommand = new IncidentCommand("Fixture maintenance", [$"mx.{fixture}.one-sided"],
                     Severity.Maintenance, IncidentState.Monitoring, "Exclude the measured maintenance window", true,
                     ScheduledStart: DateTimeOffset.UtcNow.AddMinutes(-1), ScheduledEnd: DateTimeOffset.UtcNow.AddMinutes(30));

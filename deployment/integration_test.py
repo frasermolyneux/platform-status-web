@@ -93,6 +93,11 @@ def seed_monitoring_results(container, catalog):
             document = json.dumps({
                 "site": site["site"]["id"], "checkId": check["id"],
                 "status": "operational", "observedAt": observed,
+                "monitoring": source,
+                "regions": [
+                    {"region": region, "samples": 1, "failures": 0, "lastSeen": observed}
+                    for region in source["regions"]
+                ],
                 "observationKey": hashlib.sha256((identity + observed).encode()).hexdigest(),
                 "detail": "Synthetic monitoring fixture; no workload request."
             }).replace("'", "''")
