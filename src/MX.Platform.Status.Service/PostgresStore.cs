@@ -370,9 +370,11 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     {
         await using var pending = new NpgsqlCommand("""
             SELECT EXISTS(SELECT FROM status_github_outbox o JOIN status_incidents i ON i.id=o.incident_id
-                WHERE i.document->>'sourceUrl'=$1 AND o.state NOT IN ('synced','draft'))
+                WHERE (i.document->>'sourceUrl'=$1 OR (o.operation_id=$2 AND i.document->>'sourceUrl' IS NULL))
+                    AND o.state NOT IN ('synced','draft'))
             """, connection, transaction);
         pending.Parameters.AddWithValue(incoming.SourceUrl ?? "");
+        pending.Parameters.AddWithValue(NpgsqlDbType.Uuid, (object?)incoming.GitHubSourceOperationId ?? DBNull.Value);
         if ((bool)(await pending.ExecuteScalarAsync(ct))!) return false;
         await using var read = new NpgsqlCommand("""
             SELECT i.document->>'gitHubVersion',s.updated_at FROM status_github_sources s

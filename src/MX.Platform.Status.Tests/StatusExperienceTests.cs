@@ -101,6 +101,54 @@ public sealed class StatusExperienceTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GitHubResolutionBeforeMidnightDoesNotExtendImpactIntoThePollingDay(bool lateBaseline)
+    {
+        var site = Catalogue().Get("mx");
+        var midnight = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero);
+        var poll = midnight.AddMinutes(5);
+        var target = "mx.sitewatch.geo-location-web";
+        var command = new IncidentCommand("Resolved GitHub incident", [target], Severity.Outage,
+            IncidentState.Investigating, "Approved update", true);
+        var opened = command.Apply(73, "mx", null, midnight.AddMinutes(-10));
+        if (lateBaseline)
+        {
+            opened = opened with { ImpactHistory = [] };
+            opened = opened.ObserveImpact(opened, poll);
+        }
+        var resolvedAt = midnight.AddMinutes(-5);
+        var closed = (opened with { State = IncidentState.Resolved, ResolvedAt = resolvedAt }).ObserveImpact(opened, poll);
+        Assert.Equal(lateBaseline ? poll : resolvedAt, closed.ImpactHistory[^1].At);
+        var history = new HistoryDocument();
+        foreach (var component in StatusCatalog.Flatten(site.Components.Components).Where(component => component.Kind == "leaf"))
+            history.ComponentsById[component.Id] = new ComponentHistoryRecord
+            {
+                Days = Enumerable.Range(-1, 2).Select(day => new HistoryDay
+                {
+                    Date = DateOnly.FromDateTime(midnight.UtcDateTime).AddDays(day),
+                    Status = ComponentStatus.Operational,
+                    Total = 100,
+                    Failed = 0,
+                    Uptime = 1
+                }).ToList()
+            };
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        var publication = new StatusMerger().Merge(site.Snapshot, live, history, [closed.ToPublicIncident()], []);
+        publication = IncidentImpact.Apply(PublicationWorker.CorrectTodayHistory(publication, history), [closed.ToPublicIncident()]);
+        var geo = Flatten(publication.Components).Single(component => component.Id == target);
+        Assert.Equal(lateBaseline ? "operational" : "outage",
+            geo.History.Single(day => day.Date == DateOnly.FromDateTime(midnight.UtcDateTime).AddDays(-1)).Status);
+        Assert.Equal("operational", geo.History.Single(day => day.Date == DateOnly.FromDateTime(midnight.UtcDateTime)).Status);
+        var reopened = command.Apply(73, "mx", closed, poll.AddMinutes(1));
+        var closedAgain = (reopened with { State = IncidentState.Resolved, ResolvedAt = poll.AddMinutes(2) })
+            .ObserveImpact(reopened, poll.AddMinutes(3));
+        Assert.Equal(poll.AddMinutes(2), closedAgain.ImpactHistory[^1].At);
+        Assert.Equal(closedAgain.ImpactHistory.OrderBy(observation => observation.At), closedAgain.ImpactHistory);
+    }
+
     [Fact]
     public void ObservedLegacyImpactIsNotBackdatedAndRemainsAfterResolutionAndScopeChanges()
     {

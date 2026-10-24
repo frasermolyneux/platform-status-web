@@ -39,6 +39,8 @@ public sealed record IncidentRecord
     public string? GitHubBaseVersion { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string? GitHubBaseSiteId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Guid? GitHubSourceOperationId { get; init; }
 
     public Incident ToPublicIncident() => new()
     {
@@ -65,9 +67,11 @@ public sealed record IncidentRecord
             && last.Components.ToHashSet().SetEquals(Components)
             && last.ScheduledStart == ScheduledStart && last.ScheduledEnd == ScheduledEnd)
             return this with { ImpactHistory = history };
+        var at = State == IncidentState.Resolved ? ResolvedAt ?? now : now;
+        if (history.LastOrDefault() is { } latest && at < latest.At) at = latest.At;
         return this with
         {
-            ImpactHistory = [.. history, new(now, State, Severity, Components, ScheduledStart, ScheduledEnd)]
+            ImpactHistory = [.. history, new(at, State, Severity, Components, ScheduledStart, ScheduledEnd)]
         };
     }
 

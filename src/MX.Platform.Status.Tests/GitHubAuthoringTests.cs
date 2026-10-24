@@ -65,6 +65,11 @@ public sealed partial class IndependentServiceTests
         try
         {
             Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            Assert.Empty(await database.ReadGitHubSourcesAsync(options.GitHubRepository, default));
+            var related = (await database.ReadIncidentsAsync("mx", default))
+                .Where(item => item.Id == record.Id || item.SourceUrl == $"https://github.com/{options.GitHubRepository}/issues/42");
+            Assert.Equal(record.Id, Assert.Single(related).Id);
             api.Issue!["body"] = api.Issue["body"]!.GetValue<string>()
                 .Replace(command.Message, "Edited after the lost creation reply", StringComparison.Ordinal);
             Assert.True(await worker.RunOnceAsync(default));
@@ -453,8 +458,10 @@ public sealed partial class IndependentServiceTests
                 {
                     record = (await database.SaveIncidentAsync("mx", record.Id, command with
                     {
-                        Published = false, Message = "PRIVATE_WITHDRAWAL",
-                        Revision = record.Revision, OperationId = Guid.NewGuid()
+                        Published = false,
+                        Message = "PRIVATE_WITHDRAWAL",
+                        Revision = record.Revision,
+                        OperationId = Guid.NewGuid()
                     }, "operator", default))!;
                     Assert.True(await worker.RunOnceAsync(default));
                     record = await Read();
@@ -471,7 +478,8 @@ public sealed partial class IndependentServiceTests
                 {
                     Published = !privateNoOp,
                     Message = privateNoOp ? "PRIVATE_NEW_NOTE" : "Approved follow-up",
-                    Revision = record.Revision, OperationId = Guid.NewGuid()
+                    Revision = record.Revision,
+                    OperationId = Guid.NewGuid()
                 }, "operator", default))!;
                 var captured = GitHubIssueParser.Parse(remote.Issue, remote.Comments, Catalogue(), fixtureOptions, [record])
                     .Single(item => item.SiteId == "xi");

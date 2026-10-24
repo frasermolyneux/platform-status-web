@@ -90,6 +90,7 @@ public static class GitHubIssueParser
                     IsTrusted(comment.GetProperty("user").GetProperty(LoginProperty).GetString()!, options)).ToArray()),
                 GitHubBaseVersion = (own ?? previous?.FirstOrDefault())?.GitHubVersion,
                 GitHubBaseSiteId = (own ?? previous?.FirstOrDefault())?.SiteId,
+                GitHubSourceOperationId = sourceBody.Metadata?.OperationId,
                 Evidence = own?.Evidence
             });
         }
