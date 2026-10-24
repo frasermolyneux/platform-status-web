@@ -250,6 +250,8 @@ draft wording. Previously approved history remains distinct from private edits.
 Once an incident has entered GitHub delivery, later edits retain that destination.
 Unpublished brand-specific drafts are not republished by another brand's edit;
 they wait for an approved GitHub import so private scope changes remain private.
+Restoring a withdrawn brand merges approved history from its peers rather than
+replacing their newer updates with the withdrawn brand's older timeline.
 
 The workspace shows pending, synced and review-required delivery states. Stable
 operation IDs recover lost replies without blindly repeating issue/comment writes.

@@ -322,6 +322,7 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("Authoring fixture", record.Title);
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
             await VerifyNewBrandSnapshotCompletionAsync(database, options);
+            await VerifyWithdrawnBrandRepublicationAsync(database, options);
             await VerifyGitHubEnqueueOrderAsync(database, options);
             await VerifyIndependentGitHubJobsDrainAsync(database, options);
         }
@@ -512,6 +513,76 @@ public sealed partial class IndependentServiceTests
                     observedAt, incoming, default);
             }
         }
+    }
+
+    private static async Task VerifyWithdrawnBrandRepublicationAsync(PostgresStore database, RuntimeOptions options)
+    {
+        options = options with { GitHubRepository = $"status-writer-fixture/republish-{Guid.NewGuid():N}" };
+        using var api = new GitHubWriteFixture();
+        var github = new GitHubIncidentClient(options, Catalogue(), api);
+        using var worker = new GitHubOutboxWorker(options, database, github, NullLogger<GitHubOutboxWorker>.Instance);
+        using var importer = new GitHubIssueWorker(Catalogue(), options, database, api, NullLogger<GitHubIssueWorker>.Instance, github);
+        var command = new IncidentCommand("Republication fixture", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Initial approval", true, Delivery: "github", OperationId: Guid.NewGuid());
+        var record = (await database.SaveIncidentAsync("mx", null, command, "operator", default))!;
+        try
+        {
+            Assert.True(await worker.RunOnceAsync(default));
+            var labels = api.Issue!["labels"]!.AsArray();
+            labels.Add(new JsonObject { ["name"] = "site:xi" });
+            labels.Add(new JsonObject { ["name"] = "component:xi.sitewatch.geo-location-web" });
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            labels.Remove(labels.Single(label => label!["name"]!.GetValue<string>() == "site:xi"));
+            labels.Remove(labels.Single(label => label!["name"]!.GetValue<string>() == "component:xi.sitewatch.geo-location-web"));
+            api.Touch();
+            await importer.SynchronizeAsync(default);
+            record = (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id);
+            command = command with
+            {
+                Message = "Approved while XI was withdrawn",
+                State = IncidentState.Monitoring,
+                Severity = Severity.Degraded,
+                Revision = record.Revision,
+                OperationId = Guid.NewGuid()
+            };
+            record = (await database.SaveIncidentAsync("mx", record.Id, command, "operator", default))!;
+            Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            var peer = (await database.ReadIncidentsAsync("xi", default)).Single(item =>
+                item.SourceUrl == $"https://github.com/{options.GitHubRepository}/issues/42");
+            Assert.False(peer.Published);
+            var republish = command with
+            {
+                Components = ["xi.sitewatch.geo-location-web"],
+                Message = "XI publication restored",
+                Revision = peer.Revision,
+                OperationId = Guid.NewGuid()
+            };
+            peer = (await database.SaveIncidentAsync("xi", peer.Id, republish, "operator", default))!;
+            Assert.Contains(peer.Updates, update => update.OperationId == command.OperationId);
+            await AssertHistory();
+            Assert.True(await worker.RunOnceAsync(default));
+            await importer.SynchronizeAsync(default);
+            await AssertHistory();
+            var revision = (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id).Revision;
+            await importer.SynchronizeAsync(default);
+            await AssertHistory();
+            Assert.Equal(revision, (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id).Revision);
+
+            async Task AssertHistory()
+            {
+                foreach (var site in new[] { "mx", "xi" })
+                {
+                    var current = (await database.ReadIncidentsAsync(site, default)).Single(item =>
+                        item.SourceUrl == $"https://github.com/{options.GitHubRepository}/issues/42");
+                    Assert.True(current.Published);
+                    Assert.Single(current.PublicUpdates, update => update.OperationId == command.OperationId);
+                    Assert.Single(current.PublicUpdates, update => update.OperationId == republish.OperationId);
+                }
+            }
+        }
+        finally { await CleanupGitHubFixtureAsync(options, record.Id); }
     }
 
     private static async Task VerifyGitHubEnqueueOrderAsync(PostgresStore database, RuntimeOptions options)

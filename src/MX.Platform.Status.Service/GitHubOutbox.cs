@@ -29,9 +29,12 @@ public sealed partial class PostgresStore
         return (true, same ? record : null);
     }
 
-    private static async Task QueueGitHubAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+    private static async Task<IncidentRecord> QueueGitHubAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         IncidentRecord record, int? requestedId, IncidentCommand request, string actor, CancellationToken ct)
     {
+        var records = await ReadGitHubPeersAsync(connection, transaction, record, ct);
+        record = MergeApprovedGitHubHistory(record, records, request.OperationId!.Value);
+        await WriteIncidentAsync(connection, transaction, record, actor, ct);
         await using var queue = new NpgsqlCommand("""
             INSERT INTO status_github_outbox(operation_id,incident_id,site_id,revision,command,expected_at,state,expected_version,requested_incident_id,predecessor)
             VALUES($1,$2,$3,$4,$5,(SELECT max(updated_at) FROM status_github_sources WHERE incident_id=$2),$6,$7,$9,
@@ -52,18 +55,8 @@ public sealed partial class PostgresStore
         if (record.SourceUrl is null)
         {
             await RefreshGitHubDeliveryAsync(connection, transaction, record, "draft", ct);
-            return;
+            return record;
         }
-        await using var peers = new NpgsqlCommand("""
-            SELECT document::text FROM status_incidents
-            WHERE document->>'sourceUrl'=$1 AND id<>$2 FOR UPDATE
-            """, connection, transaction);
-        peers.Parameters.AddWithValue(record.SourceUrl);
-        peers.Parameters.AddWithValue(record.Id);
-        var records = new List<IncidentRecord>();
-        await using (var reader = await peers.ExecuteReaderAsync(ct))
-            while (await reader.ReadAsync(ct))
-                records.Add(JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(0), StatusJson.Options)!);
         foreach (var peer in records.Where(peer => peer.Published))
             await WriteIncidentAsync(connection, transaction, (peer with
             {
@@ -75,10 +68,51 @@ public sealed partial class PostgresStore
                 ScheduledStart = record.ScheduledStart,
                 ScheduledEnd = record.ScheduledEnd,
                 GitHub = record.GitHub,
+                Updates = peer.Updates.Concat(record.PublicUpdates).Distinct().OrderBy(update => update.At).ToArray(),
                 PublicUpdates = record.PublicUpdates,
+                PublicSourceUpdates = record.PublicSourceUpdates,
+                PublicSourceStateUpdates = record.PublicSourceStateUpdates,
+                PublicSourceSeverity = record.PublicSourceSeverity,
+                PublicSourceObservedAt = record.PublicSourceObservedAt,
                 Revision = peer.Revision + 1
             }).ObserveImpact(peer, DateTimeOffset.UtcNow), actor, ct);
         await RefreshGitHubDeliveryAsync(connection, transaction, record, "draft", ct);
+        return record;
+    }
+
+    private static async Task<IReadOnlyList<IncidentRecord>> ReadGitHubPeersAsync(NpgsqlConnection connection,
+        NpgsqlTransaction transaction, IncidentRecord record, CancellationToken ct)
+    {
+        if (record.SourceUrl is null) return [];
+        await using var peers = new NpgsqlCommand("""
+            SELECT document::text FROM status_incidents
+            WHERE document->>'sourceUrl'=$1 AND id<>$2 FOR UPDATE
+            """, connection, transaction);
+        peers.Parameters.AddWithValue(record.SourceUrl);
+        peers.Parameters.AddWithValue(record.Id);
+        var records = new List<IncidentRecord>();
+        await using var reader = await peers.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            records.Add(JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(0), StatusJson.Options)!);
+        return records;
+    }
+
+    private static IncidentRecord MergeApprovedGitHubHistory(IncidentRecord record, IReadOnlyList<IncidentRecord> peers, Guid operation)
+    {
+        var records = peers.Append(record).ToArray();
+        var source = records.OrderByDescending(item => item.PublicSourceObservedAt)
+            .ThenByDescending(item => item.PublicSourceUpdates.Count)
+            .ThenByDescending(item => item.PublicUpdates.Count(update => update.OperationId != operation)).First();
+        var updates = records.SelectMany(item => item.PublicUpdates).Distinct().OrderBy(update => update.At).ToArray();
+        return record with
+        {
+            Updates = record.Updates.Concat(updates).Distinct().OrderBy(update => update.At).ToArray(),
+            PublicUpdates = updates,
+            PublicSourceUpdates = source.PublicSourceUpdates,
+            PublicSourceStateUpdates = source.PublicSourceStateUpdates,
+            PublicSourceSeverity = source.PublicSourceSeverity,
+            PublicSourceObservedAt = source.PublicSourceObservedAt
+        };
     }
 
     public Task<PublisherLease?> TryGitHubLockAsync(CancellationToken ct) => TryLockAsync(814233112, ct);

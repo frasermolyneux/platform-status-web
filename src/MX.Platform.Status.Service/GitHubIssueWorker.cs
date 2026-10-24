@@ -83,6 +83,7 @@ public static class GitHubIssueParser
                 PublicSourceUpdates = published ? sourceUpdates : previousIncident?.PublicSourceUpdates ?? [],
                 PublicSourceStateUpdates = publicStateUpdates,
                 PublicSourceSeverity = published ? severity : previousIncident?.PublicSourceSeverity,
+                PublicSourceObservedAt = previousIncident?.PublicSourceObservedAt,
                 PublicAliases = aliases.Where(id => id != own?.Id).ToArray(),
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}",
                 GitHub = previousIncident?.GitHub,

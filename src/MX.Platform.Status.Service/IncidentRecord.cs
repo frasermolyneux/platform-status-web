@@ -29,6 +29,7 @@ public sealed record IncidentRecord
     public IReadOnlyList<SourceUpdateSnapshot> PublicSourceUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicSourceStateUpdates { get; init; } = [];
     public Severity? PublicSourceSeverity { get; init; }
+    public DateTimeOffset? PublicSourceObservedAt { get; init; }
     public IReadOnlyList<int> PublicAliases { get; init; } = [];
     public string? SourceUrl { get; init; }
     public IncidentEvidence? Evidence { get; init; }

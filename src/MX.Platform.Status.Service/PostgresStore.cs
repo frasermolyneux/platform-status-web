@@ -215,9 +215,10 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             id = (int)(await insert.ExecuteScalarAsync(ct))!;
         }
         var record = request.Apply(id.Value, site, previous, DateTimeOffset.UtcNow);
-        await WriteIncidentAsync(connection, transaction, record, actor, ct);
         if (request.Delivery == "github")
-            await QueueGitHubAsync(connection, transaction, record, requestedId, request, actor, ct);
+            record = await QueueGitHubAsync(connection, transaction, record, requestedId, request, actor, ct);
+        else
+            await WriteIncidentAsync(connection, transaction, record, actor, ct);
         await transaction.CommitAsync(ct);
         return record;
     }
@@ -342,6 +343,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             record = PreserveGitHubDraft(incoming, previous) with { Id = previous.Id, Revision = previous.Revision + 1 };
         }
         if (record.GitHub is not null) record = record with { GitHub = new(record.Published ? "synced" : "draft") };
+        record = StampPublicSourceObservation(record, previous);
         record = record.ObserveImpact(previous, DateTimeOffset.UtcNow);
         var changed = previous is null || JsonSerializer.Serialize(previous with { Revision = 0 }, StatusJson.Options)
             != JsonSerializer.Serialize(record with { Revision = 0 }, StatusJson.Options);
@@ -365,6 +367,18 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         previous?.GitHub is { State: not ("synced" or "draft") } || previousAt > updatedAt
         || previous is not null && incoming.Revision != previous.Revision
         || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion);
+
+    private static IncidentRecord StampPublicSourceObservation(IncidentRecord record, IncidentRecord? previous)
+    {
+        var changed = record.Published && (previous?.PublicSourceObservedAt is null
+            || !record.PublicSourceUpdates.SequenceEqual(previous.PublicSourceUpdates)
+            || !record.PublicSourceStateUpdates.SequenceEqual(previous.PublicSourceStateUpdates)
+            || record.PublicSourceSeverity != previous.PublicSourceSeverity);
+        return record with
+        {
+            PublicSourceObservedAt = changed ? DateTimeOffset.UtcNow : previous?.PublicSourceObservedAt ?? record.PublicSourceObservedAt
+        };
+    }
 
     private static async Task<bool> NewGitHubSourceIsCurrentAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
         string repository, int number, DateTimeOffset updatedAt, IncidentRecord incoming, CancellationToken ct)

@@ -234,6 +234,7 @@ public sealed class StatusCatalog
             PublicSourceUpdates = [],
             PublicSourceStateUpdates = [],
             PublicSourceSeverity = null,
+            PublicSourceObservedAt = null,
             ImpactHistory = history
         };
     }
