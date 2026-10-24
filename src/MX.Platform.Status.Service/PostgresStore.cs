@@ -84,12 +84,13 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 PRIMARY KEY(repository,issue_number,site_id));
             CREATE TABLE IF NOT EXISTS status_github_outbox (
                 operation_id uuid PRIMARY KEY, incident_id integer NOT NULL REFERENCES status_incidents(id),
-                site_id text NOT NULL, revision integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+                site_id text NOT NULL, revision integer NOT NULL, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
                 command jsonb NOT NULL, expected_at timestamptz, remote_at timestamptz,
                 expected_version text, remote_version text, predecessor uuid,
                 requested_incident_id integer,
                 next_attempt_at timestamptz NOT NULL DEFAULT now(),
                 state text NOT NULL, attempted boolean NOT NULL DEFAULT false, error text);
+            ALTER TABLE status_github_outbox ALTER COLUMN created_at SET DEFAULT clock_timestamp();
             CREATE TABLE IF NOT EXISTS status_traffic (
                 hostname text PRIMARY KEY, site_id text NOT NULL, document jsonb NOT NULL);
             CREATE TABLE IF NOT EXISTS status_traffic_audit (

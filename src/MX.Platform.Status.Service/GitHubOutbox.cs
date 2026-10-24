@@ -120,7 +120,7 @@ public sealed partial class PostgresStore
         await gate.ExecuteNonQueryAsync(ct);
         await using var write = new NpgsqlCommand("""
             UPDATE status_github_outbox SET state=$1,error=$2,
-                next_attempt_at=now()+CASE WHEN $1='pending' THEN interval '30 seconds' ELSE interval '0 seconds' END
+                next_attempt_at=clock_timestamp()+CASE WHEN $1 IN ('pending','uncertain') THEN interval '30 seconds' ELSE interval '0 seconds' END
             WHERE operation_id=$3
             """, lease.Connection, transaction);
         write.Parameters.AddWithValue(state);

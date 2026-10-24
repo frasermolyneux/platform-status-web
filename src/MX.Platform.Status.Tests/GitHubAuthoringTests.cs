@@ -72,6 +72,7 @@ public sealed partial class IndependentServiceTests
             Assert.Equal(record.Id, Assert.Single(related).Id);
             api.Issue!["body"] = api.Issue["body"]!.GetValue<string>()
                 .Replace(command.Message, "Edited after the lost creation reply", StringComparison.Ordinal);
+            await MakeGitHubJobDueAsync(options, record.Id);
             Assert.True(await worker.RunOnceAsync(default));
             record = await Read();
             Assert.Equal("review", record.GitHub!.State);
@@ -108,6 +109,7 @@ public sealed partial class IndependentServiceTests
             Assert.True(await worker.RunOnceAsync(default));
             api.Comments[^1]["body"] = api.Comments[^1]["body"]!.GetValue<string>()
                 .Replace(command.Message, "Edited before acknowledgment", StringComparison.Ordinal);
+            await MakeGitHubJobDueAsync(options, record.Id);
             Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("review", (await Read()).GitHub!.State);
             await Retry();
@@ -175,16 +177,13 @@ public sealed partial class IndependentServiceTests
             Assert.True(await worker.RunOnceAsync(default));
             Assert.True((await Read()).Published);
             Assert.Equal("pending", (await Read()).GitHub!.State);
-            await using (var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile)))
-            {
-                await using var retry = source.CreateCommand("UPDATE status_github_outbox SET next_attempt_at=now() WHERE incident_id=$1");
-                retry.Parameters.AddWithValue(record.Id);
-                await retry.ExecuteNonQueryAsync();
-            }
+            await MakeGitHubJobDueAsync(options, record.Id);
             api.Offline = false;
             api.LoseCreateReply = true;
             Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("uncertain", (await Read()).GitHub!.State);
+            Assert.False(await worker.RunOnceAsync(default));
+            await MakeGitHubJobDueAsync(options, record.Id);
             Assert.True(await worker.RunOnceAsync(default));
             record = await Read();
             Assert.Equal("synced", record.GitHub!.State);
@@ -224,6 +223,7 @@ public sealed partial class IndependentServiceTests
             api.LoseCommentReply = true;
             Assert.True(await worker.RunOnceAsync(default));
             Assert.Equal("uncertain", (await Read()).GitHub!.State);
+            await MakeGitHubJobDueAsync(options, record.Id);
             Assert.True(await worker.RunOnceAsync(default), (await Read()).GitHub?.Error);
             Assert.Single(api.Comments);
             Assert.Equal("External correction at the same source timestamp", api.Issue["body"]!.GetValue<string>());
@@ -322,6 +322,7 @@ public sealed partial class IndependentServiceTests
             Assert.Equal("Authoring fixture", record.Title);
             Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(record.PublicUpdates, StatusJson.Options));
             await VerifyNewBrandSnapshotCompletionAsync(database, options);
+            await VerifyGitHubEnqueueOrderAsync(database, options);
             await VerifyIndependentGitHubJobsDrainAsync(database, options);
         }
         finally { await CleanupGitHubFixtureAsync(options, record.Id); }
@@ -513,29 +514,106 @@ public sealed partial class IndependentServiceTests
         }
     }
 
-    private static async Task VerifyIndependentGitHubJobsDrainAsync(PostgresStore database, RuntimeOptions options)
+    private static async Task VerifyGitHubEnqueueOrderAsync(PostgresStore database, RuntimeOptions options)
     {
-        options = options with { GitHubRepository = $"status-writer-fixture/drain-{Guid.NewGuid():N}" };
-        using var api = new GitHubWriteFixture { TransientFailures = 2 };
+        options = options with { GitHubRepository = $"status-writer-fixture/order-{Guid.NewGuid():N}" };
+        using var api = new GitHubWriteFixture();
         using var worker = new GitHubOutboxWorker(options, database, new(options, Catalogue(), api),
             NullLogger<GitHubOutboxWorker>.Instance);
-        var queued = new List<IncidentRecord>();
+        var command = new IncidentCommand("Queue order fixture", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Initial update", true, Delivery: "github", OperationId: Guid.NewGuid());
+        var record = (await database.SaveIncidentAsync("mx", null, command, "operator", default))!;
         try
         {
-            for (var index = 0; index < 3; index++)
-                queued.Add((await database.SaveIncidentAsync("mx", null,
-                    new($"Independent incident {index}", ["mx.sitewatch.geo-location-web"], Severity.Outage,
-                        IncidentState.Investigating, "Approved update", true, Delivery: "github", OperationId: Guid.NewGuid()),
-                    "operator", default))!);
-            await worker.DrainAsync(default);
-            var records = (await database.ReadIncidentsAsync("mx", default)).ToDictionary(record => record.Id);
-            Assert.Equal(["pending", "pending", "synced"], queued.Select(record => records[record.Id].GitHub!.State));
-            Assert.Equal(1, api.Creates);
+            Assert.True(await worker.RunOnceAsync(default));
+            record = (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id);
+            await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile!));
+            await using var connection = await source.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            // Establish an older transaction that enqueues only after a newer save.
+            await using (var begin = new Npgsql.NpgsqlCommand("SELECT now()", connection, transaction))
+                await begin.ExecuteScalarAsync();
+            command = command with { Message = "Predecessor", Revision = record.Revision, OperationId = Guid.NewGuid() };
+            record = (await database.SaveIncidentAsync("mx", record.Id, command, "operator", default))!;
+            var successor = command with { Message = "Successor", Revision = record.Revision, OperationId = Guid.NewGuid() };
+            var next = successor.Apply(record.Id, "mx", record, DateTimeOffset.UtcNow);
+            await using (var gate = new Npgsql.NpgsqlCommand("SELECT pg_advisory_xact_lock(814233110)", connection, transaction))
+                await gate.ExecuteNonQueryAsync();
+            await using (var write = new Npgsql.NpgsqlCommand(
+                "UPDATE status_incidents SET revision=$1,document=$2 WHERE id=$3", connection, transaction))
+            {
+                write.Parameters.AddWithValue(next.Revision);
+                write.Parameters.AddWithValue(NpgsqlTypes.NpgsqlDbType.Jsonb, JsonSerializer.Serialize(next, StatusJson.Options));
+                write.Parameters.AddWithValue(record.Id);
+                await write.ExecuteNonQueryAsync();
+            }
+            await using (var enqueue = new Npgsql.NpgsqlCommand("""
+                INSERT INTO status_github_outbox(operation_id,incident_id,site_id,revision,command,state,expected_at,expected_version,predecessor)
+                SELECT $1,incident_id,site_id,$2,$3,'pending',expected_at,expected_version,operation_id
+                FROM status_github_outbox WHERE operation_id=$4
+                """, connection, transaction))
+            {
+                enqueue.Parameters.AddWithValue(successor.OperationId!.Value);
+                enqueue.Parameters.AddWithValue(next.Revision);
+                enqueue.Parameters.AddWithValue(NpgsqlTypes.NpgsqlDbType.Jsonb, JsonSerializer.Serialize(successor, StatusJson.Options));
+                enqueue.Parameters.AddWithValue(command.OperationId!.Value);
+                Assert.Equal(1, await enqueue.ExecuteNonQueryAsync());
+            }
+            await transaction.CommitAsync();
+            Assert.True(await worker.RunOnceAsync(default));
+            Assert.Contains(GitHubIncidentDocument.Marker(command.OperationId!.Value), Assert.Single(api.Comments)["body"]!.GetValue<string>());
+            Assert.True(await worker.RunOnceAsync(default));
+            Assert.Contains(GitHubIncidentDocument.Marker(successor.OperationId!.Value), api.Comments[1]["body"]!.GetValue<string>());
+            Assert.Equal("synced", (await database.ReadIncidentsAsync("mx", default)).Single(item => item.Id == record.Id).GitHub!.State);
         }
-        finally
+        finally { await CleanupGitHubFixtureAsync(options, record.Id); }
+    }
+
+    private static async Task VerifyIndependentGitHubJobsDrainAsync(PostgresStore database, RuntimeOptions options)
+    {
+        foreach (var interrupted in new[] { false, true })
+            await VerifyDrain(interrupted);
+
+        async Task VerifyDrain(bool interrupted)
         {
-            foreach (var record in queued) await CleanupGitHubFixtureAsync(options, record.Id);
+            var fixtureOptions = options with { GitHubRepository = $"status-writer-fixture/drain-{Guid.NewGuid():N}" };
+            using var api = new GitHubWriteFixture();
+            using var worker = new GitHubOutboxWorker(fixtureOptions, database, new(fixtureOptions, Catalogue(), api),
+                NullLogger<GitHubOutboxWorker>.Instance);
+            var queued = new List<IncidentRecord>();
+            try
+            {
+                for (var index = 0; index < 3; index++)
+                    queued.Add((await database.SaveIncidentAsync("mx", null,
+                        new($"Independent incident {index}", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+                            IncidentState.Investigating, "Approved update", true, Delivery: "github", OperationId: Guid.NewGuid()),
+                        "operator", default))!);
+                if (interrupted)
+                {
+                    api.LoseCreateReply = true;
+                    Assert.True(await worker.RunOnceAsync(default));
+                    await MakeGitHubJobDueAsync(fixtureOptions, queued[0].Id);
+                }
+                api.TransientFailures = 2;
+                await worker.DrainAsync(default);
+                var records = (await database.ReadIncidentsAsync("mx", default)).ToDictionary(record => record.Id);
+                Assert.Equal([interrupted ? "uncertain" : "pending", "pending", "synced"],
+                    queued.Select(record => records[record.Id].GitHub!.State));
+                Assert.Equal(interrupted ? 2 : 1, api.Creates);
+            }
+            finally
+            {
+                foreach (var record in queued) await CleanupGitHubFixtureAsync(fixtureOptions, record.Id);
+            }
         }
+    }
+
+    private static async Task MakeGitHubJobDueAsync(RuntimeOptions options, int id)
+    {
+        await using var source = Npgsql.NpgsqlDataSource.Create(File.ReadAllText(options.DatabaseConnectionFile!));
+        await using var retry = source.CreateCommand("UPDATE status_github_outbox SET next_attempt_at=now() WHERE incident_id=$1");
+        retry.Parameters.AddWithValue(id);
+        await retry.ExecuteNonQueryAsync();
     }
 
     private static async Task CleanupGitHubFixtureAsync(RuntimeOptions options, int id)
