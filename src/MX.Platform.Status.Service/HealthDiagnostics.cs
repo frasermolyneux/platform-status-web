@@ -40,15 +40,16 @@ public static class HealthDiagnostics
             var target = configured.FirstOrDefault(check => check.Kind == "http")?.Target;
             var checks = published?.Checks?.Select(check =>
             {
-                var definition = configured.SingleOrDefault(definition => (definition.SharedId ?? definition.Id) == check.Id);
+                var definition = configured.SingleOrDefault(definition => definition.PublicId(site) == check.Id);
                 var result = signals?.Where(signal => signal.CheckId == definition?.Id).MaxBy(signal => signal.ObservedAt);
                 return new CheckHealth(check.Id, check.Name, check.Kind, check.Status, check.ObservedAt, definition?.Target,
                     siteProbes.Where(observation => definition?.Id == (observation.CheckId ?? observation.Component))
                         .MaxBy(observation => observation.ObservedAt), result?.Detail);
             }).ToArray() ?? [];
+            var source = target is null ? "Telemetry checks and declared incidents" : "Independent HTTP checks (publisher)";
+            if (component.Kind == "group") source = "Service aggregate from components";
             return new ComponentHealth(component.Id, component.Name, published?.Status ?? "unknown",
-                component.Kind == "group" ? "Service aggregate from components"
-                    : target is null ? "Telemetry checks and declared incidents" : "Independent HTTP checks (publisher)",
+                source,
                 target, component.Sla.ExpectedIntervalSeconds, published?.LastSampleAt, probe, failure,
                 probe is not null && published?.LastSampleAt == probe.ObservedAt,
                 publication.Incidents.Where(incident => incident.Severity != "maintenance"

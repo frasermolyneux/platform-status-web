@@ -118,13 +118,23 @@ public sealed class PublicationWorker(
 
     private async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct)
     {
-        var observations = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http").Select(async check =>
+        var collected = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http")
+            .Select(check => (Site: site, Check: check))).GroupBy(entry =>
+                (entry.Check.SharedId, Local: entry.Check.SharedId is null ? $"{entry.Site.Site.Id}/{entry.Check.Id}" : null)).Select(async group =>
         {
-            var name = StatusCatalog.Flatten(site.Components.Components).Single(component => component.Id == check.Component).Name;
+            var first = group.First();
+            var name = StatusCatalog.Flatten(first.Site.Components.Components).Single(component => component.Id == first.Check.Component).Name;
             var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
-                site.Site.Id, check.Component, name, check.Target!, ct);
-            return observation with { CheckId = check.Id };
-        })));
+                first.Site.Site.Id, first.Check.Component, name, first.Check.Target!, ct);
+            return group.Select(entry => observation with
+            {
+                Site = entry.Site.Site.Id,
+                Component = entry.Check.Component,
+                CheckId = entry.Check.Id,
+                Name = StatusCatalog.Flatten(entry.Site.Components.Components).Single(component => component.Id == entry.Check.Component).Name
+            }).ToArray();
+        }));
+        var observations = collected.SelectMany(group => group).ToArray();
         foreach (var site in catalog.Sites)
         {
             var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);

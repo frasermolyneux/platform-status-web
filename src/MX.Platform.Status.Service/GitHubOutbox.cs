@@ -158,9 +158,11 @@ public sealed partial class PostgresStore
             """, lease.Connection, transaction);
         remaining.Parameters.AddWithValue(job.Incident.Id);
         var pending = (bool)(await remaining.ExecuteScalarAsync(ct))!;
+        var delivery = job.Command.Published ? "synced" : "draft";
+        if (pending) delivery = "pending";
         await SetGitHubDeliveryAsync(lease.Connection, transaction,
             job.Incident with { SourceUrl = $"https://github.com/{repository}/issues/{number}" },
-            new(pending ? "pending" : job.Command.Published ? "synced" : "draft"), ct);
+            new(delivery), ct);
         await transaction.CommitAsync(ct);
     }
 

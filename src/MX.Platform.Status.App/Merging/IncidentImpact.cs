@@ -27,9 +27,8 @@ public static class IncidentImpact
                 .Select(incident => incident.Id).Distinct().Order().ToArray(),
             History = component.History.Select(day =>
             {
-                var impacts = publication.Incidents.Select(incident => (incident.Id, States: records.GetValueOrDefault(incident.Id)?.ImpactHistory is { Count: > 0 } observations
-                    ? ObservedImpacts(observations, incident.ResolvedAt, day.Date, ids).ToArray()
-                    : incident.Components.Any(ids.Contains) ? Impacts(incident, day.Date, publication.Maintenance).ToArray() : []))
+                var impacts = publication.Incidents.Select(incident =>
+                    (incident.Id, States: ImpactsForDay(incident, records, day.Date, ids, publication.Maintenance).ToArray()))
                     .Where(impact => impact.States.Length > 0).ToArray();
                 var states = impacts.SelectMany(impact => impact.States)
                     .Concat(children?.SelectMany(child => child.History.Where(sample => sample.Date == day.Date)
@@ -45,24 +44,40 @@ public static class IncidentImpact
         };
     }
 
+    private static IEnumerable<string> ImpactsForDay(IncidentDto incident, IReadOnlyDictionary<int, Incident> records,
+        DateOnly date, ISet<string> components, IReadOnlyList<MaintenanceDto> maintenance)
+    {
+        if (records.GetValueOrDefault(incident.Id)?.ImpactHistory is { Count: > 0 } observations)
+            return ObservedImpacts(observations, incident.ResolvedAt, date, components);
+        return incident.Components.Any(components.Contains) ? Impacts(incident, date, maintenance) : [];
+    }
+
     private static IEnumerable<string> ObservedImpacts(IReadOnlyList<IncidentImpactObservation> history,
         DateTimeOffset? resolvedAt, DateOnly date, ISet<string> components)
     {
-        var observations = history.OrderBy(observation => observation.At).ToArray();
-        for (var index = 0; index < observations.Length; index++)
+        foreach (var source in history.GroupBy(observation => observation.SourceSite))
         {
-            var observation = observations[index];
-            if (observation.State == IncidentState.Resolved || !observation.Components.Any(components.Contains)) continue;
-            var end = index + 1 < observations.Length ? observations[index + 1].At : resolvedAt ?? DateTimeOffset.UtcNow;
-            var start = observation.At;
-            if (observation.Severity == Severity.Maintenance)
+            var observations = source.OrderBy(observation => observation.At).ToArray();
+            for (var index = 0; index < observations.Length; index++)
             {
-                if (observation.ScheduledStart is not { } windowStart || observation.ScheduledEnd is not { } windowEnd) continue;
-                start = start > windowStart ? start : windowStart;
-                end = Earlier(end, windowEnd);
+                var end = index + 1 < observations.Length ? observations[index + 1].At : resolvedAt ?? DateTimeOffset.UtcNow;
+                if (ObservationImpact(observations[index], end, date, components) is { } impact) yield return impact;
             }
-            if (AffectsDate(start, end, date)) yield return observation.Severity.ToApiString();
         }
+    }
+
+    private static string? ObservationImpact(IncidentImpactObservation observation, DateTimeOffset end,
+        DateOnly date, ISet<string> components)
+    {
+        if (observation.State == IncidentState.Resolved || !observation.Components.Any(components.Contains)) return null;
+        var start = observation.At;
+        if (observation.Severity == Severity.Maintenance)
+        {
+            if (observation.ScheduledStart is not { } windowStart || observation.ScheduledEnd is not { } windowEnd) return null;
+            start = start > windowStart ? start : windowStart;
+            end = Earlier(end, windowEnd);
+        }
+        return AffectsDate(start, end, date) ? observation.Severity.ToApiString() : null;
     }
 
     private static IEnumerable<string> Descendants(ComponentDto component) =>

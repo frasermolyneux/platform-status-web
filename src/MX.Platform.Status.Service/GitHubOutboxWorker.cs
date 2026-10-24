@@ -29,30 +29,22 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
         var attempted = job.Attempted;
         try
         {
-            if (!options.GitHubWriteConfigured) throw new InvalidOperationException("GitHub writer credentials are not configured. The local incident is published; GitHub delivery remains queued.");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(90));
             var token = timeout.Token;
-            var number = GitHubIncidentClient.IssueNumber(job.Incident.SourceUrl, options.GitHubRepository);
-            if (job.Incident.SourceUrl is not null && number is null)
-                throw new GitHubIncidentConflictException("This incident belongs to a different GitHub repository. Restore the configured source before retrying.");
-            var snapshot = number.HasValue ? await github.ReadAsync(number.Value, token)
-                : job.Attempted ? await github.FindCreatedAsync(job.OperationId, token) : null;
-            if (snapshot is not null && github.Matches(job, snapshot) && (!job.Command.Published || github.ContainsUpdate(snapshot, job)))
+            var snapshot = await ReadSnapshotAsync(job, token);
+            if (snapshot is not null && Delivered(job, snapshot))
             {
                 await database.CompleteGitHubJobAsync(lease, job, options.GitHubRepository, snapshot.Number, snapshot.UpdatedAt, snapshot.Version, token);
                 return true;
             }
-            if (job.Attempted)
-                throw new GitHubOutcomeUnknownException("A previous GitHub write has an unconfirmed outcome. Review GitHub before explicitly retrying; no duplicate issue or update was sent.");
-            if (snapshot is not null && (snapshot.UpdatedAt != job.ExpectedAt || snapshot.Version != job.ExpectedVersion))
-                throw new GitHubIncidentConflictException("GitHub changed since this update was prepared. The local status update remains published; review GitHub before applying the queued change.");
+            ValidateRetry(job, snapshot);
             var labels = github.DesiredLabels(job, snapshot);
             if (job.Command.Published) await github.EnsureLabelsAsync(labels, token);
             await database.MarkGitHubAttemptAsync(lease, job.OperationId, token);
             attempted = true;
             snapshot = await WriteAsync(job, snapshot, labels, token);
-            if (!github.Matches(job, snapshot) || job.Command.Published && !github.ContainsUpdate(snapshot, job))
+            if (!Delivered(job, snapshot))
                 throw new GitHubIncidentConflictException("GitHub changed during delivery. The local update is retained; review the remote issue before continuing.");
             await database.CompleteGitHubJobAsync(lease, job, options.GitHubRepository, snapshot.Number, snapshot.UpdatedAt, snapshot.Version, token);
             return true;
@@ -86,6 +78,28 @@ public sealed class GitHubOutboxWorker(RuntimeOptions options, PostgresStore dat
             await database.SetGitHubProblemAsync(lease, job, attempted ? "uncertain" : "pending", error, ct);
         }
         return false;
+    }
+
+    private bool Delivered(GitHubJob job, GitHubIssueSnapshot snapshot) =>
+        github.Matches(job, snapshot) && (!job.Command.Published || github.ContainsUpdate(snapshot, job));
+
+    private async Task<GitHubIssueSnapshot?> ReadSnapshotAsync(GitHubJob job, CancellationToken ct)
+    {
+        if (!options.GitHubWriteConfigured)
+            throw new InvalidOperationException("GitHub writer credentials are not configured. The local incident is published; GitHub delivery remains queued.");
+        var number = GitHubIncidentClient.IssueNumber(job.Incident.SourceUrl, options.GitHubRepository);
+        if (number.HasValue) return await github.ReadAsync(number.Value, ct);
+        if (job.Incident.SourceUrl is not null)
+            throw new GitHubIncidentConflictException("This incident belongs to a different GitHub repository. Restore the configured source before retrying.");
+        return job.Attempted ? await github.FindCreatedAsync(job.OperationId, ct) : null;
+    }
+
+    private static void ValidateRetry(GitHubJob job, GitHubIssueSnapshot? snapshot)
+    {
+        if (job.Attempted)
+            throw new GitHubOutcomeUnknownException("A previous GitHub write has an unconfirmed outcome. Review GitHub before explicitly retrying; no duplicate issue or update was sent.");
+        if (snapshot is not null && (snapshot.UpdatedAt != job.ExpectedAt || snapshot.Version != job.ExpectedVersion))
+            throw new GitHubIncidentConflictException("GitHub changed since this update was prepared. The local status update remains published; review GitHub before applying the queued change.");
     }
 
     private async Task ProblemAsync(PublisherLease lease, GitHubJob job, string state, Exception exception, CancellationToken ct)

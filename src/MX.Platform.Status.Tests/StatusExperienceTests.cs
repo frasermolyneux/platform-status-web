@@ -96,6 +96,34 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void SharedIssueProjectionRetainsEachBrandsIndependentlyScopedHistoricalImpact()
+    {
+        var catalog = Catalogue();
+        var started = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(-2).AddHours(10), TimeSpan.Zero);
+        var command = new IncidentCommand("Shared source", ["mx.sitewatch.geo-location-api"], Severity.Outage,
+            IncidentState.Investigating, "Impact declared", true);
+        var mx = command.Apply(62, "mx", null, started);
+        mx = (command with { State = IncidentState.Resolved }).Apply(62, "mx", mx, started.AddHours(2));
+        command = command with { Components = ["xi.sitewatch.geo-location-web"] };
+        var xi = command.Apply(63, "xi", null, started.AddDays(1));
+        xi = (command with { State = IncidentState.Resolved }).Apply(63, "xi", xi, started.AddDays(1).AddHours(2));
+        const string url = "https://github.com/frasermolyneux/status-pages/issues/28";
+        var site = catalog.Get("mx");
+        var projected = Assert.Single(catalog.ProjectIncidents(site, [mx with { SourceUrl = url }, xi with { SourceUrl = url }]));
+        var live = site.EffectiveChecks.ToDictionary(check => check.Component,
+            _ => new ComponentLiveTelemetry(1, 0, DateTimeOffset.UtcNow, null));
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()], []);
+        var components = Flatten(publication.Components).ToDictionary(component => component.Id);
+        var first = DateOnly.FromDateTime(started.UtcDateTime);
+        Assert.Equal("outage", components["mx.sitewatch.geo-location-api"].History.Single(day => day.Date == first).Status);
+        Assert.Equal("unknown", components["mx.sitewatch.geo-location-api"].History.Single(day => day.Date == first.AddDays(1)).Status);
+        Assert.Equal("unknown", components["mx.sitewatch.geo-location-web"].History.Single(day => day.Date == first).Status);
+        Assert.Equal("outage", components["mx.sitewatch.geo-location-web"].History.Single(day => day.Date == first.AddDays(1)).Status);
+        foreach (var date in new[] { first, first.AddDays(1) })
+            Assert.Equal("outage", components["mx.service.geo-location"].History.Single(day => day.Date == date).Status);
+    }
+
+    [Fact]
     public void MultipleChecksAggregateWithoutHidingMissingSignalsAndShareGeoLocationAcrossBrandHierarchy()
     {
         var catalog = Catalogue();
@@ -112,7 +140,7 @@ public sealed class StatusExperienceTests
         var observation = new ProbeObservation("mx", "mx.sitewatch.geo-location-web", "GeoLocation Website",
             "https://example.com/", "publisher", now, true, 200, 10, null, "http");
         var missing = ComponentChecks.Build(mx, [observation], []);
-        Assert.Contains(missing.Values.Single().Checks, check => check.Id == "queue" && check.Status == ComponentStatus.Unknown);
+        Assert.Contains(missing.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
         Assert.Equal(0, missing.Values.Single().Samples);
         var failing = ComponentChecks.Build(mx, [observation with { Success = false }], []);
         Assert.Equal(1, failing.Values.Single().Samples);
@@ -129,10 +157,18 @@ public sealed class StatusExperienceTests
         Assert.Equal("degraded", publication.Components.Single(component => component.Id == "xi.service.portal").Status);
         var geo = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.geo-location-web");
         Assert.Equal(2, geo.Checks!.Count);
-        Assert.Contains(geo.Checks, check => check.Id == "queue" && check.Status == "degraded");
+        Assert.Contains(geo.Checks, check => check.Id == "mx/queue" && check.Status == "degraded");
+        var xiChecks = xi with
+        {
+            Checks = [new() { Id = "queue", Name = "Another queue", Component = "xi.sitewatch.geo-location-web", Kind = "telemetry" }]
+        };
+        all["xi"] = ComponentChecks.Build(xiChecks, [], [new("xi", "queue", ComponentStatus.Operational, now.AddSeconds(1))]);
+        var independentChecks = catalog.ProjectTelemetry(xi, all)["xi.sitewatch.geo-location-web"].Checks;
+        Assert.Contains(independentChecks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Degraded);
+        Assert.Contains(independentChecks, check => check.Id == "xi/queue" && check.Status == ComponentStatus.Operational);
         var stale = ComponentChecks.Build(mx, [observation],
             [new("mx", "queue", ComponentStatus.Operational, now.AddMinutes(-10))]);
-        Assert.Contains(stale.Values.Single().Checks, check => check.Id == "queue" && check.Status == ComponentStatus.Unknown);
+        Assert.Contains(stale.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
     }
 
     [Theory]
@@ -246,6 +282,13 @@ public sealed class StatusExperienceTests
         Assert.False(client.ContainsUpdate(new(Issue(body: editedBody), []), job));
         Assert.True(client.ContainsUpdate(new(issue, []), job));
         Assert.True(client.ContainsUpdate(new(Issue(body: editedBody), [restoredComment]), job));
+        var editedComment = JsonSerializer.SerializeToElement(new
+        {
+            body = editedBody,
+            created_at = Created.AddMinutes(25),
+            user = new { login = "frasermolyneux" }
+        });
+        Assert.False(client.ContainsUpdate(new(issue, [editedComment]), job));
     }
 
     [Fact]

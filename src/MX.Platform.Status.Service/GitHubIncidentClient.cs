@@ -207,11 +207,15 @@ public sealed class GitHubIncidentClient(RuntimeOptions options, StatusCatalog c
         url?.StartsWith($"https://github.com/{repository}/issues/", StringComparison.Ordinal) == true
             && int.TryParse(url.Split('/')[^1], NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > 0 ? number : null;
 
-    public bool ContainsUpdate(GitHubIssueSnapshot snapshot, GitHubJob job) =>
-        new[] { snapshot.Issue }.Concat(snapshot.Comments).Any(item =>
-            GitHubIssueParser.IsTrusted(item.GetProperty("user").GetProperty("login").GetString()!, options)
-            && (item.GetProperty("body").GetString() ?? "").Replace("\r\n", "\n", StringComparison.Ordinal).Trim()
-                == GitHubIncidentDocument.Body(job).Replace("\r\n", "\n", StringComparison.Ordinal).Trim());
+    public bool ContainsUpdate(GitHubIssueSnapshot snapshot, GitHubJob job)
+    {
+        var latest = new[] { snapshot.Issue }.Concat(snapshot.Comments)
+            .Where(item => GitHubIssueParser.IsTrusted(item.GetProperty("user").GetProperty("login").GetString()!, options))
+            .Select(item => item.GetProperty("body").GetString() ?? "")
+            .LastOrDefault(body => GitHubIncidentDocument.Read(body).Metadata?.OperationId == job.OperationId);
+        return latest is not null && latest.Replace("\r\n", "\n", StringComparison.Ordinal).Trim()
+            == GitHubIncidentDocument.Body(job).Replace("\r\n", "\n", StringComparison.Ordinal).Trim();
+    }
 
     public string[] DesiredLabels(GitHubJob job, GitHubIssueSnapshot? snapshot) =>
         GitHubIncidentDocument.Labels(catalog, job.Incident.SiteId, job.Command, snapshot?.Labels ?? []);

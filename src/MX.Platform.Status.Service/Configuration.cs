@@ -92,49 +92,64 @@ public sealed class StatusCatalog
         if (Sites.Count == 0 || Sites.Select(s => s.Site.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Sites.Count)
             throw new InvalidOperationException("Status site IDs must be unique.");
         var domains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var definition in Sites)
-        {
-            if (!Regex.IsMatch(definition.Site.Id, "^[a-z][a-z0-9-]{0,31}$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)))
-                throw new InvalidOperationException("Invalid status site ID.");
-            if (definition.Site.Domains.Count == 0 || definition.Site.Domains.Any(domain =>
-                Uri.CheckHostName(domain) != UriHostNameType.Dns || !domains.Add(domain)))
-                throw new InvalidOperationException("Status domains must be valid and unique.");
-            var components = Flatten(definition.Components.Components).ToArray();
-            if (components.Length == 0 || components.Select(c => c.Id).Distinct().Count() != components.Length)
-                throw new InvalidOperationException("Status component IDs must be unique within a site.");
-            if (components.Any(component => component.Kind is not ("group" or "leaf")
-                || component.Kind == "leaf" && component.Children.Count > 0))
-                throw new InvalidOperationException("Services contain components; leaf components cannot contain children.");
-            ValidateProbes(definition, components);
-            ValidateSharedComponents(definition);
-            if (definition.Workloads.Any(workload => string.IsNullOrWhiteSpace(workload.Key)
-                || workload.Value.Length == 0 || workload.Value.Distinct().Count() != workload.Value.Length
-                || workload.Value.Any(id => !PublicComponents(definition.Components.Components).Any(c => c.Id == id))))
-                throw new InvalidOperationException("Workload mappings must name distinct public components from their own site.");
-        }
+        foreach (var definition in Sites) ValidateSite(definition, domains);
+        ValidateSharedChecks();
+    }
+
+    private static void ValidateSite(SiteDefinition definition, HashSet<string> domains)
+    {
+        if (!Regex.IsMatch(definition.Site.Id, "^[a-z][a-z0-9-]{0,31}$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)))
+            throw new InvalidOperationException("Invalid status site ID.");
+        if (definition.Site.Domains.Count == 0 || definition.Site.Domains.Any(domain =>
+            Uri.CheckHostName(domain) != UriHostNameType.Dns || !domains.Add(domain)))
+            throw new InvalidOperationException("Status domains must be valid and unique.");
+        var components = Flatten(definition.Components.Components).ToArray();
+        if (components.Length == 0 || components.Select(c => c.Id).Distinct().Count() != components.Length)
+            throw new InvalidOperationException("Status component IDs must be unique within a site.");
+        if (components.Any(component => component.Kind is not ("group" or "leaf")
+            || component.Kind == "leaf" && component.Children.Count > 0))
+            throw new InvalidOperationException("Services contain components; leaf components cannot contain children.");
+        ValidateProbes(definition, components);
+        ValidateSharedComponents(definition);
+        if (definition.Workloads.Any(workload => string.IsNullOrWhiteSpace(workload.Key)
+            || workload.Value.Length == 0 || workload.Value.Distinct().Count() != workload.Value.Length
+            || workload.Value.Any(id => !PublicComponents(definition.Components.Components).Any(c => c.Id == id))))
+            throw new InvalidOperationException("Workload mappings must name distinct public components from their own site.");
+    }
+
+    private void ValidateSharedChecks()
+    {
+        foreach (var shared in Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.SharedId is not null)
+            .Select(check => (Identity: check.SharedId, Component: site.SharedComponents[check.Component], Check: check)))
+            .GroupBy(entry => entry.Identity))
+            if (shared.Select(entry => (entry.Component, entry.Check.Kind, entry.Check.Target, entry.Check.ExpectedIntervalSeconds)).Distinct().Count() != 1)
+                throw new InvalidOperationException("Shared check definitions must identify the same component, kind, target and interval.");
     }
 
     private static void ValidateProbes(SiteDefinition definition, Component[] components)
     {
         if (definition.EffectiveChecks.Select(check => check.Id).Distinct().Count() != definition.EffectiveChecks.Count
-            || definition.EffectiveChecks.Select(check => check.SharedId ?? check.Id).Distinct().Count() != definition.EffectiveChecks.Count)
+            || definition.EffectiveChecks.Select(check => check.PublicId(definition)).Distinct().Count() != definition.EffectiveChecks.Count)
             throw new InvalidOperationException("Check IDs must be unique within a site.");
         foreach (var check in definition.EffectiveChecks)
-        {
-            if (check.SharedId is not null && (string.IsNullOrWhiteSpace(check.SharedId)
-                || !definition.SharedComponents.ContainsKey(check.Component)))
-                throw new InvalidOperationException("A shared check identity requires an explicitly shared component.");
-            if (!components.Any(c => c.Id == check.Component && c.Kind == "leaf") || string.IsNullOrWhiteSpace(check.Id)
-                || string.IsNullOrWhiteSpace(check.Name) || check.ExpectedIntervalSeconds is < 30 or > 86400
-                || check.Kind is not ("http" or "telemetry"))
-                throw new InvalidOperationException("Checks require a unique identity, component, name, supported kind and observation interval.");
-            if (check.Kind == "telemetry" && check.Target is not null)
-                throw new InvalidOperationException("Telemetry checks accept authenticated observations, not HTTP targets.");
-            if (check.Kind == "http" && (!Uri.TryCreate(check.Target, UriKind.Absolute, out var uri) || uri.Scheme != "https"
-                || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query)
-                || Uri.CheckHostName(uri.Host) != UriHostNameType.Dns))
-                throw new InvalidOperationException("Probes require a known leaf component and a public HTTPS URL without credentials or query strings.");
-        }
+            ValidateCheck(definition, components, check);
+    }
+
+    private static void ValidateCheck(SiteDefinition definition, Component[] components, CheckDefinition check)
+    {
+        if (check.SharedId is not null && (string.IsNullOrWhiteSpace(check.SharedId)
+            || !definition.SharedComponents.ContainsKey(check.Component)))
+            throw new InvalidOperationException("A shared check identity requires an explicitly shared component.");
+        if (!components.Any(c => c.Id == check.Component && c.Kind == "leaf") || string.IsNullOrWhiteSpace(check.Id)
+            || string.IsNullOrWhiteSpace(check.Name) || check.ExpectedIntervalSeconds is < 30 or > 86400
+            || check.Kind is not ("http" or "telemetry"))
+            throw new InvalidOperationException("Checks require a unique identity, component, name, supported kind and observation interval.");
+        if (check.Kind == "telemetry" && check.Target is not null)
+            throw new InvalidOperationException("Telemetry checks accept authenticated observations, not HTTP targets.");
+        if (check.Kind == "http" && (!Uri.TryCreate(check.Target, UriKind.Absolute, out var uri) || uri.Scheme != "https"
+            || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query)
+            || Uri.CheckHostName(uri.Host) != UriHostNameType.Dns))
+            throw new InvalidOperationException("Probes require a known leaf component and a public HTTPS URL without credentials or query strings.");
     }
 
     private static void ValidateSharedComponents(SiteDefinition definition)
@@ -177,6 +192,8 @@ public sealed class StatusCatalog
                 {
                     Components = group.Where(record => record.Published == incident.Published)
                         .SelectMany(record => record.Components).Distinct().ToArray(),
+                    ImpactHistory = group.Where(record => record.Published == incident.Published)
+                        .SelectMany(record => record.ImpactHistory.Select(observation => observation with { SourceSite = record.SiteId })).ToArray(),
                     PublicAliases = group.SelectMany(record => record.PublicAliases.Append(record.Id))
                         .Where(id => id > 0 && id != incident.Id).Distinct().ToArray()
                 };

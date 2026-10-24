@@ -12,6 +12,9 @@ public sealed record CheckDefinition
     public string Kind { get; init; } = "http";
     public string? Target { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 60;
+
+    public string PublicId(SiteDefinition site) => SharedId
+        ?? (site.SharedComponents.ContainsKey(Component) ? $"{site.Site.Id}/{Id}" : Id);
 }
 
 public sealed record CheckResult(string Site, string CheckId, ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
@@ -28,7 +31,7 @@ public static class ComponentChecks
     {
         var now = DateTimeOffset.UtcNow;
         return site.EffectiveChecks.GroupBy(check => check.Component).ToDictionary(group => group.Key, group =>
-            FromChecks(group.Select(check => Observe(site.Site.Id, check, probes, signals, now)).ToArray()));
+            FromChecks(group.Select(check => Observe(site, check, probes, signals, now)).ToArray()));
     }
 
     public static ComponentLiveTelemetry FromChecks(IReadOnlyList<CheckTelemetry> checks) =>
@@ -38,18 +41,21 @@ public static class ComponentChecks
             checks.Where(check => check.ObservedAt.HasValue).Select(check => check.ObservedAt).Min(), null)
         { Checks = checks };
 
-    private static CheckTelemetry Observe(string site, CheckDefinition check, IReadOnlyList<ProbeObservation> probes,
+    private static CheckTelemetry Observe(SiteDefinition site, CheckDefinition check, IReadOnlyList<ProbeObservation> probes,
         IReadOnlyList<CheckResult> signals, DateTimeOffset now)
     {
-        var signal = signals.Where(signal => signal.Site == site && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
-        var probe = probes.Where(probe => probe.Site == site && probe.Component == check.Component
+        var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
+        var probe = probes.Where(probe => probe.Site == site.Site.Id && probe.Component == check.Component
             && (probe.CheckId == check.Id || probe.CheckId is null && probe.Target == check.Target)).MaxBy(probe => probe.ObservedAt);
         var at = check.Kind == "http" ? probe?.ObservedAt : signal?.ObservedAt;
-        var status = check.Kind == "http"
-            ? probe is null ? ComponentStatus.Unknown : probe.Success ? ComponentStatus.Operational : ComponentStatus.Outage
-            : signal?.Status ?? ComponentStatus.Unknown;
+        var status = signal?.Status ?? ComponentStatus.Unknown;
+        if (check.Kind == "http")
+        {
+            status = ComponentStatus.Unknown;
+            if (probe is not null) status = probe.Success ? ComponentStatus.Operational : ComponentStatus.Outage;
+        }
         if (at is null || now - at > TimeSpan.FromSeconds(check.ExpectedIntervalSeconds * 3) || at > now.AddMinutes(5))
             status = ComponentStatus.Unknown;
-        return new(check.SharedId ?? check.Id, check.Name, check.Kind, status, at);
+        return new(check.PublicId(site), check.Name, check.Kind, status, at);
     }
 }

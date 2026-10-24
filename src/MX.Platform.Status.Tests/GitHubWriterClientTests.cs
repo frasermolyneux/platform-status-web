@@ -27,7 +27,9 @@ public sealed class GitHubWriterClientTests
             await File.WriteAllTextAsync(filename, key.ExportPkcs8PrivateKeyPem());
             var options = new RuntimeOptions
             {
-                GitHubPrivateKeyFile = filename, GitHubAppId = 42, GitHubInstallationId = 100,
+                GitHubPrivateKeyFile = filename,
+                GitHubAppId = 42,
+                GitHubInstallationId = 100,
                 GitHubRepository = "status-writer-fixture/status-pages"
             };
             using var api = new GitHubWriteFixture();

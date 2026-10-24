@@ -104,10 +104,7 @@ public sealed record IncidentCommand(
             return "Select one or more distinct components from this site.";
         if (!Enum.IsDefined(Severity) || !Enum.IsDefined(State))
             return "Invalid incident severity or state.";
-        if (Evidence is not null && (string.IsNullOrWhiteSpace(Evidence.Source) || Evidence.Source.Length > 100
-            || string.IsNullOrWhiteSpace(Evidence.Id) || Evidence.Id.Length > 2000
-            || string.IsNullOrWhiteSpace(Evidence.Context) || Evidence.Context.Length > 20000
-            || Evidence.ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5)))
+        if (HasInvalidEvidence())
             return "Invalid source evidence reference.";
         if (ScheduledStart.HasValue != ScheduledEnd.HasValue || ScheduledEnd <= ScheduledStart
             || (Severity == Severity.Maintenance) != ScheduledStart.HasValue)
@@ -118,15 +115,24 @@ public sealed record IncidentCommand(
         return null;
     }
 
+    private bool HasInvalidEvidence() => Evidence is not null
+        && (string.IsNullOrWhiteSpace(Evidence.Source) || Evidence.Source.Length > 100
+            || string.IsNullOrWhiteSpace(Evidence.Id) || Evidence.Id.Length > 2000
+            || string.IsNullOrWhiteSpace(Evidence.Context) || Evidence.Context.Length > 20000
+            || Evidence.ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5));
+
     public IncidentRecord Apply(int id, string site, IncidentRecord? previous, DateTimeOffset now)
     {
+        GitHubDelivery? delivery = null;
+        if (Delivery == "github")
+            delivery = new(Published || previous?.SourceUrl is not null ? "pending" : "draft");
         var update = new IncidentUpdate
         {
             At = now,
             OperationId = OperationId,
             State = State,
             Severity = Severity,
-            Body = WebUtility.HtmlEncode(Message.Trim()).Replace("\n", "<br>", StringComparison.Ordinal)
+            Body = WebUtility.HtmlEncode(Message.Trim().Replace("\r\n", "\n", StringComparison.Ordinal)).Replace("\n", "<br>", StringComparison.Ordinal)
         };
         return ((previous ?? new IncidentRecord()) with
         {
@@ -145,7 +151,7 @@ public sealed record IncidentCommand(
             Updates = [.. previous?.Updates ?? [], update],
             PublicUpdates = Published ? [.. previous?.PublicUpdates ?? [], update] : previous?.PublicUpdates ?? [],
             Evidence = Evidence ?? previous?.Evidence,
-            GitHub = Delivery == "github" ? new(Published || previous?.SourceUrl is not null ? "pending" : "draft") : null
+            GitHub = delivery
         }).ObserveImpact(previous, now);
     }
 }

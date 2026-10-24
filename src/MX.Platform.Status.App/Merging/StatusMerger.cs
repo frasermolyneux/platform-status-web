@@ -124,11 +124,11 @@ public sealed class StatusMerger
 
         if (liveData.TryGetValue(component.Id, out var telemetry))
         {
-            var liveStatus = telemetry.Checks.Count > 0
-                ? Summarize(telemetry.Checks.Select(check => check.Status))
-                : telemetry.Regions.Count > 0
+            var liveStatus = telemetry.Regions.Count > 0
                 ? ComponentStatusCalculator.ClassifyLiveStatusRegional(telemetry.Regions, component.Sla)
                 : ComponentStatusCalculator.ClassifyLiveStatus(telemetry.Samples, telemetry.Failures, telemetry.LastSeen, component.Sla);
+            if (telemetry.Checks.Count > 0)
+                liveStatus = Summarize(telemetry.Checks.Select(check => check.Status));
             historicalDays[^1] = todayHistory with
             {
                 Status = liveStatus,

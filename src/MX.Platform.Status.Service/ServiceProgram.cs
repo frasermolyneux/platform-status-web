@@ -177,6 +177,27 @@ public static class ServiceProgram
             SaveIncidentAsync(context, command, null, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
         app.MapPut("/api/ops/incidents/{id:int}", (int id, HttpContext context, IncidentCommand command, PostgresStore database, CancellationToken ct) =>
             SaveIncidentAsync(context, command, id, catalog, database, ct)).RequireAuthorization(OperatorPolicy);
+        MapGitHubOperations(app, catalog, options);
+        MapCheckIngest(app, catalog);
+        app.MapPost("/api/integrations/azure", async (JsonElement payload, PostgresStore database, CancellationToken ct) =>
+        {
+            if (!AzureAlert.TryParse(payload, out var alert)) return Results.BadRequest(new { error = "Unsupported Azure common alert payload." });
+            if (!await database.IsWritableAsync(ct)) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            await database.SaveEvidenceAsync("azure-alert", alert.Id, alert.ObservedAt, payload, ct);
+            return Results.Accepted();
+        }).RequireAuthorization("ingest");
+        app.MapGet("/feed.xml", WriteFeedAsync);
+        app.MapGet("/api/feed.xml", WriteFeedAsync);
+        app.Map("/api/{**path}", () => Results.NotFound());
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
+        app.MapFallbackToFile("/component/{id}", "index.html");
+        app.MapFallbackToFile("index.html");
+        return app;
+    }
+
+    private static void MapGitHubOperations(WebApplication app, StatusCatalog catalog, RuntimeOptions options)
+    {
         app.MapGet("/api/ops/incidents/{id:int}/github", (int id, HttpContext context, PostgresStore database,
             GitHubIncidentClient github, CancellationToken ct) =>
             GitHubReconciliation.ReviewAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, id, database, github, options, ct))
@@ -191,13 +212,10 @@ public static class ServiceProgram
                 options.GitHubRepository, context.User.FindFirstValue("oid") ?? throw new InvalidOperationException("Operator identity is missing."), ct)
                 ? Results.Accepted() : Results.Conflict(new { error = "The incident or GitHub issue changed. Review both versions again before retrying." });
         }).RequireAuthorization(OperatorPolicy);
-        app.MapPost("/api/integrations/azure", async (JsonElement payload, PostgresStore database, CancellationToken ct) =>
-        {
-            if (!AzureAlert.TryParse(payload, out var alert)) return Results.BadRequest(new { error = "Unsupported Azure common alert payload." });
-            if (!await database.IsWritableAsync(ct)) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            await database.SaveEvidenceAsync("azure-alert", alert.Id, alert.ObservedAt, payload, ct);
-            return Results.Accepted();
-        }).RequireAuthorization("ingest");
+    }
+
+    private static void MapCheckIngest(WebApplication app, StatusCatalog catalog)
+    {
         app.MapPost("/api/integrations/checks/{siteId}/{checkId}", async (string siteId, string checkId, CheckResult result,
             PostgresStore database, CancellationToken ct) =>
         {
@@ -209,18 +227,18 @@ public static class ServiceProgram
                 return Results.BadRequest(new { error = "Invalid telemetry check scope or observation." });
             if (!await database.IsWritableAsync(ct)) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             await database.SaveEvidenceAsync("check-result", $"{siteId}/{checkId}", result.ObservedAt,
-                JsonSerializer.SerializeToElement(new { result.Site, result.CheckId, result.Status, result.ObservedAt,
-                    result.Detail, Component = check.Component, Name = check.Name }, StatusJson.Options), ct);
+                JsonSerializer.SerializeToElement(new
+                {
+                    result.Site,
+                    result.CheckId,
+                    result.Status,
+                    result.ObservedAt,
+                    result.Detail,
+                    Component = check.Component,
+                    Name = check.Name
+                }, StatusJson.Options), ct);
             return Results.Accepted();
         }).RequireAuthorization("ingest");
-        app.MapGet("/feed.xml", WriteFeedAsync);
-        app.MapGet("/api/feed.xml", WriteFeedAsync);
-        app.Map("/api/{**path}", () => Results.NotFound());
-        app.UseDefaultFiles();
-        app.UseStaticFiles();
-        app.MapFallbackToFile("/component/{id}", "index.html");
-        app.MapFallbackToFile("index.html");
-        return app;
     }
 
     private static void UseRequestBoundary(WebApplication app, StatusCatalog catalog)

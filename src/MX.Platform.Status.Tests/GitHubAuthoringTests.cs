@@ -62,8 +62,10 @@ public sealed partial class IndependentServiceTests
 
             command = command with
             {
-                State = IncidentState.Monitoring, Message = "Approved recovery",
-                Revision = record.Revision, OperationId = Guid.NewGuid()
+                State = IncidentState.Monitoring,
+                Message = "Approved recovery",
+                Revision = record.Revision,
+                OperationId = Guid.NewGuid()
             };
             record = (await database.SaveIncidentAsync("mx", record.Id, command, "operator", default))!;
             api.LoseCommentReply = true;

@@ -18,7 +18,8 @@ public sealed record Incident
 }
 
 public sealed record IncidentImpactObservation(DateTimeOffset At, IncidentState State, Severity Severity,
-    IReadOnlyList<string> Components, DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null);
+    IReadOnlyList<string> Components, DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null,
+    string? SourceSite = null);
 
 public sealed record IncidentUpdate
 {
