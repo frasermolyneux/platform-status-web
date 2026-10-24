@@ -428,9 +428,10 @@ def main():
                 WHERE original.id={int(record['id'])};
                 """)
             for label, url in urls.items():
-                wait_for(lambda: len(request(url, "/api/status")[1].get("incidents", [])) == 1002,
-                         f"{label} active records preserved beyond historical and draft limits")
+                wait_for(lambda: len(request(url, "/api/status")[1].get("incidents", [])) == 1003,
+                         f"{label} active records and all recent history preserved beyond draft limits")
                 publication = request(url, "/api/status")[1]
+                assert sum(item["title"] == "Historic integration incident" for item in publication["incidents"]) == 1001
                 assert {record["id"], maintenance_record["id"]}.issubset(
                     {item["id"] for item in publication["incidents"]})
                 assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(publication)

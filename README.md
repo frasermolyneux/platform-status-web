@@ -133,6 +133,10 @@ to `/api/integrations/checks/{siteId}/{checkId}` for a configured telemetry chec
 Scope must match the definition; older observations cannot replace newer results.
 Details stay private. HTTP targets stay in reviewed configuration.
 
+Legacy `probes` remain in the production catalogue for rolling compatibility with
+the previous image. Explicit `checks` take precedence for each component; legacy
+probes are used only for components without explicit checks.
+
 Declared component or service impact overrides healthy checks and aggregates upward.
 Observed impact, scope and maintenance windows are retained separately from public
 messages, so resolving an incident or editing its scope does not recolour the past

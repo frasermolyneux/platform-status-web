@@ -76,6 +76,18 @@ test('services drill down to components and checks without flattening the overvi
   assert.ok(document.querySelector('a[href="/component/portal"]'));
   assert.match(document.querySelector('.panel')?.textContent || '', /Checks.*HTTP liveness.*Operational.*Notification delay.*Degraded/s);
   assert.match(document.body.textContent || '', /100.00% check availability/);
+  data.incidents = [{
+    id: 20, aliases: [2], title: 'Earlier GeoLocation outage', components: ['another-component'],
+    severity: 'outage', state: 'resolved', url: '/incident/20', createdAt: '2026-10-23T08:00:00Z', updates: [],
+  }, {
+    id: 3, title: 'Unrelated outage', components: ['another-component'],
+    severity: 'outage', state: 'resolved', url: '/incident/3', createdAt: '2026-10-23T08:00:00Z', updates: [],
+  }];
+  for (const id of ['portal', 'geo']) {
+    renderComponent(data, id);
+    assert.match(document.querySelector('.incidents-section')?.textContent || '', /Earlier GeoLocation outage/);
+    assert.doesNotMatch(document.querySelector('.incidents-section')?.textContent || '', /Unrelated outage/);
+  }
 });
 
 test('public rendering keeps announcements plain text and incident excerpts readable', async () => {

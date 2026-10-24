@@ -14,6 +14,46 @@ public sealed class StatusExperienceTests
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
     private static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
 
+    [Fact]
+    public void ExplicitChecksReplaceLegacyProbesForTheirComponentWhileOtherLegacyProbesRemainAvailable()
+    {
+        var site = Catalogue().Get("mx") with
+        {
+            Checks = [new() { Id = "queue", Name = "Queue delay", Component = "mx.sitewatch.geo-location-web", Kind = "telemetry" }]
+        };
+        var queue = Assert.Single(site.EffectiveChecks, check => check.Component == "mx.sitewatch.geo-location-web");
+        Assert.Equal("telemetry", queue.Kind);
+        Assert.Equal("queue", queue.Id);
+        Assert.Contains(site.EffectiveChecks, check => check.Component == "mx.sitewatch.molyneux-me" && check.Kind == "http");
+    }
+
+    [Theory]
+    [InlineData("operational")]
+    [InlineData("unknown")]
+    public void ConfiguredChecksOverrideStaticSourceFallbackAndBubbleUpToTheirService(string staticStatus)
+    {
+        var site = Catalogue().Get("mx") with
+        {
+            Probes = [],
+            Checks = [new() { Id = "queue", Name = "Queue delay", Component = "component", Kind = "telemetry" }],
+            Components = new()
+            {
+                Components = [new()
+                {
+                    Id = "service", Name = "Service", Kind = "group",
+                    Children = [new()
+                    {
+                        Id = "component", Name = "Component", Kind = "leaf",
+                        Source = new() { Kind = "static", Status = staticStatus }
+                    }]
+                }]
+            }
+        };
+        var live = ComponentChecks.Build(site, [], [new("mx", "queue", ComponentStatus.Outage, DateTimeOffset.UtcNow)]);
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [], []);
+        Assert.All(Flatten(publication.Components), component => Assert.Equal("outage", component.Status));
+    }
+
     [Theory]
     [InlineData("xi.sitewatch.portal-web")]
     [InlineData("xi.service.portal")]
@@ -251,6 +291,38 @@ public sealed class StatusExperienceTests
             IncidentState.Investigating, "Approved update", true);
         Assert.Throws<GitHubIncidentConflictException>(() =>
             GitHubIncidentDocument.Labels(Catalogue(), "mx", command, ["site:typo"]));
+    }
+
+    [Theory]
+    [InlineData("State: database unavailable")]
+    [InlineData("State: resolved\nThis is descriptive text, not a state change")]
+    [InlineData("### Public update\n## Keep the approved formatting")]
+    public void GeneratedGitHubUpdatesPreserveApprovedTextWithoutLegacyHeaderParsing(string message)
+    {
+        var catalog = Catalogue();
+        var command = new IncidentCommand("Generated incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Identified, message, true, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, local, command, null, false, "pending"));
+        var imported = Assert.Single(GitHubIssueParser.Parse(Issue(body: body), [], catalog, new(), [local]));
+        Assert.Equal(IncidentState.Identified, imported.State);
+        Assert.Equal(local.PublicUpdates, imported.PublicUpdates);
+    }
+
+    [Fact]
+    public void ResolvingThroughTheWorkspaceDoesNotPreventSubsequentGitHubReopening()
+    {
+        var catalog = Catalogue();
+        var command = new IncidentCommand("Generated incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Resolved, "Service recovered", true, Delivery: "github", OperationId: Guid.NewGuid());
+        var local = command.Apply(19, "mx", null, Created);
+        var labels = GitHubIncidentDocument.Labels(catalog, "mx", command, ["state:monitoring"]);
+        Assert.DoesNotContain(labels, label => label.StartsWith("state:", StringComparison.Ordinal));
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, local, command, null, false, "pending"));
+        var reopened = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: body, updatedMinutes: 10), [], catalog, new(), [local]));
+        Assert.Equal(IncidentState.Investigating, reopened.State);
+        Assert.Null(reopened.ResolvedAt);
+        Assert.Equal(IncidentState.Investigating, reopened.PublicUpdates[^1].State);
     }
 
     [Fact]

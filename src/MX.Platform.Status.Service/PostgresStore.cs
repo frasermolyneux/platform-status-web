@@ -337,18 +337,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         }
         else
         {
-            record = incoming with { Id = previous.Id, Revision = previous.Revision + 1 };
-            if (previous.GitHub?.State == "draft" && !incoming.Published)
-                record = record with
-                {
-                    Title = previous.Title,
-                    Components = previous.Components,
-                    Severity = previous.Severity,
-                    State = previous.State,
-                    ResolvedAt = previous.ResolvedAt,
-                    ScheduledStart = previous.ScheduledStart,
-                    ScheduledEnd = previous.ScheduledEnd
-                };
+            record = PreserveGitHubDraft(incoming, previous) with { Id = previous.Id, Revision = previous.Revision + 1 };
         }
         if (previous?.GitHub is not null) record = record with { GitHub = new(record.Published ? "synced" : "draft") };
         record = record.ObserveImpact(previous, DateTimeOffset.UtcNow);
@@ -368,6 +357,18 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         await source.ExecuteNonQueryAsync(ct);
         await transaction.CommitAsync(ct);
     }
+
+    private static IncidentRecord PreserveGitHubDraft(IncidentRecord incoming, IncidentRecord previous) =>
+        previous.GitHub?.State == "draft" && !incoming.Published ? incoming with
+        {
+            Title = previous.Title,
+            Components = previous.Components,
+            Severity = previous.Severity,
+            State = previous.State,
+            ResolvedAt = previous.ResolvedAt,
+            ScheduledStart = previous.ScheduledStart,
+            ScheduledEnd = previous.ScheduledEnd
+        } : incoming;
 
     public async Task<StatusApiResponse?> ReadPublicationAsync(string site, CancellationToken ct)
     {

@@ -75,7 +75,8 @@ public sealed record SiteDefinition
     public Dictionary<string, string> SharedComponents { get; init; } = [];
 
     public SiteConfigurationSnapshot Snapshot => new(Site, Components, "", "", DateTimeOffset.UtcNow);
-    public IReadOnlyList<CheckDefinition> EffectiveChecks => [.. Checks, .. Probes.Select(pair => new CheckDefinition
+    public IReadOnlyList<CheckDefinition> EffectiveChecks => [.. Checks,
+        .. Probes.Where(pair => !Checks.Any(check => check.Component == pair.Key)).Select(pair => new CheckDefinition
     {
         Id = pair.Key, Component = pair.Key, Name = "HTTP health", Target = pair.Value
     })];

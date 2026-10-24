@@ -117,12 +117,14 @@ public sealed class StatusMerger
                 children.Select(child => child.LastSampleAt).Where(value => value.HasValue).Max());
         }
 
-        if (component.Source.Kind.Equals("static", StringComparison.OrdinalIgnoreCase))
+        liveData.TryGetValue(component.Id, out var telemetry);
+        if (component.Source.Kind.Equals("static", StringComparison.OrdinalIgnoreCase)
+            && (telemetry is null || telemetry.Checks.Count == 0))
         {
             return (ParseStaticStatus(component.Source.Status), null);
         }
 
-        if (liveData.TryGetValue(component.Id, out var telemetry))
+        if (telemetry is not null)
         {
             var liveStatus = telemetry.Regions.Count > 0
                 ? ComponentStatusCalculator.ClassifyLiveStatusRegional(telemetry.Regions, component.Sla)

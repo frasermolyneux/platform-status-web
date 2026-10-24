@@ -249,16 +249,30 @@ public static class GitHubIssueParser
     private static void AddUpdate(List<IncidentUpdate> updates, string content, DateTimeOffset at, IncidentState fallback,
         List<SourceUpdateSnapshot>? snapshots)
     {
-        var state = fallback;
-        IncidentState? explicitState = null;
         var document = GitHubIncidentDocument.Read(content);
-        var text = IncidentRenderer.Render(document.Text);
-        if (document.Metadata is { } metadata)
+        var (text, explicitState) = document.Metadata is { } metadata
+            ? (document.Text, (IncidentState?)metadata.State) : ReadLegacyUpdate(document.Text);
+        at = document.Metadata?.At ?? at;
+        if (text.Length > 20000) throw new InvalidDataException("Incident updates cannot exceed 20000 characters.");
+        if (text.Length > 0)
         {
-            at = metadata.At;
-            state = metadata.State;
-            explicitState = metadata.State;
+            var update = new IncidentUpdate
+            {
+                At = at,
+                State = explicitState ?? fallback,
+                Severity = document.Metadata?.Severity,
+                OperationId = document.Metadata?.OperationId,
+                Body = WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal)
+            };
+            updates.Add(update);
+            snapshots?.Add(new(at, update.Body, explicitState));
         }
+    }
+
+    private static (string Text, IncidentState? State) ReadLegacyUpdate(string content)
+    {
+        var text = IncidentRenderer.Render(content);
+        IncidentState? explicitState = null;
         const string formHeading = "### Public update\n";
         if (text.StartsWith(formHeading, StringComparison.Ordinal))
             text = text[formHeading.Length..].TrimStart();
@@ -268,24 +282,10 @@ public static class GitHubIssueParser
             var value = firstLine[6..].Trim().ToLowerInvariant();
             if (value is not ("investigating" or "identified" or "monitoring" or "resolved"))
                 throw new InvalidDataException("Comment state headers must use investigating, identified, monitoring or resolved.");
-            state = Enum.Parse<IncidentState>(value, true);
-            explicitState = state;
+            explicitState = Enum.Parse<IncidentState>(value, true);
             text = text.Contains('\n') ? text[(text.IndexOf('\n') + 1)..].Trim() : "";
         }
-        if (text.Length > 20000) throw new InvalidDataException("Incident updates cannot exceed 20000 characters.");
-        if (text.Length > 0)
-        {
-            var update = new IncidentUpdate
-            {
-                At = at,
-                State = state,
-                Severity = document.Metadata?.Severity,
-                OperationId = document.Metadata?.OperationId,
-                Body = WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal)
-            };
-            updates.Add(update);
-            snapshots?.Add(new(at, update.Body, explicitState));
-        }
+        return (text, explicitState);
     }
 }
 

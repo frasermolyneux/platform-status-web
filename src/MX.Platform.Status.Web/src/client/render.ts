@@ -173,7 +173,9 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     return;
   }
   const info = getStatusInfo(component.status);
-  const affectedIds = new Set(flattenComponents([component]).map(item => item.id));
+  const descendants = flattenComponents([component]);
+  const affectedIds = new Set(descendants.map(item => item.id));
+  const historicalIncidents = new Set(descendants.flatMap(item => item.history.flatMap(day => day.incidentIds ?? [])));
   const parent = flattenComponents(data.components).find(item => item.children?.some(child => child.id === component.id));
   app.innerHTML = safeHtml(`
     ${announcements(data)}
@@ -189,7 +191,8 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     ${component.checks?.length ? `<section class="panel"><h3>Checks</h3>${component.checks.map(check =>
       `<article class="component-row"><span>${escapeHtml(check.name)}</span><span class="${getStatusInfo(check.status).className}">${getStatusDotHtml(check.status)}${getStatusInfo(check.status).label}</span><span>${check.observedAt ? formatRelative(check.observedAt) : 'Awaiting first observation'}</span></article>`).join('')}</section>` : ''}
     <section class="incidents-section"><h3>Incidents affecting this ${component.kind === 'group' ? 'service' : 'component'}</h3>
-    ${data.incidents.filter(incident => incident.components.some(id => affectedIds.has(id)))
+    ${data.incidents.filter(incident => incident.components.some(id => affectedIds.has(id))
+      || [incident.id, ...(incident.aliases ?? [])].some(id => historicalIncidents.has(id)))
       .map(incident => renderIncidentCard(incident, data)).join('') || '<p>No published incidents for this service.</p>'}</section>
   `);
 }

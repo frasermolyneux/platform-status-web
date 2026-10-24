@@ -67,9 +67,10 @@ public static class GitHubIncidentDocument
                 .Where(id => StatusCatalog.PublicComponents(site.Components.Components).Any(component => component.Id == id))
             .Concat(previous.Where(label => label.StartsWith("workload:", StringComparison.Ordinal)).Select(label => label[9..])
                 .Where(site.Workloads.ContainsKey).SelectMany(workload => site.Workloads[workload]))).Distinct().ToArray();
+        var stateLabels = command.State == IncidentState.Resolved ? Array.Empty<string>() : [$"state:{command.State.ToApiString()}"];
         return [.. previous.Where(label => label is not ("status:incident" or "status:published")
             && !new[] { "site:", "workload:", "component:", "state:", "severity:" }.Any(prefix => label.StartsWith(prefix, StringComparison.Ordinal))),
-            "status:incident", "status:published", $"severity:{command.Severity.ToApiString()}", $"state:{command.State.ToApiString()}",
+            "status:incident", "status:published", $"severity:{command.Severity.ToApiString()}", .. stateLabels,
             $"site:{siteId}", .. otherSites.Select(site => $"site:{site.Site.Id}"),
             .. command.Components.Concat(otherComponents).Distinct().Select(id => $"component:{id}")];
     }

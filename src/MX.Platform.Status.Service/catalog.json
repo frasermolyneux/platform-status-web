@@ -27,6 +27,12 @@
       "geo-location": ["mx.sitewatch.geo-location-web", "mx.sitewatch.geo-location-api"],
       "bishops-bees": ["mx.sitewatch.bishopsbees"]
     },
+    "probes": {
+      "mx.sitewatch.molyneux-me": "https://www.molyneux.me/",
+      "mx.sitewatch.geo-location-web": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live",
+      "mx.sitewatch.geo-location-api": "https://app-geo-location-api-prd-swedencentral-6f10eaac01a0.azurewebsites.net/v1.0/health/live",
+      "mx.sitewatch.bishopsbees": "https://bishopsbees.co.uk/"
+    },
     "checks": [
       {"id": "mx.sitewatch.molyneux-me", "component": "mx.sitewatch.molyneux-me", "name": "Website HTTP availability", "target": "https://www.molyneux.me/"},
       {"id": "mx.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "mx.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live"},
@@ -69,6 +75,16 @@
       "xi-redirect": ["xi.sitewatch.redirect"],
       "portal-servers-integration": ["xi.sitewatch.servers-integration-api"],
       "portal-server-events": ["xi.sitewatch.server-events"]
+    },
+    "probes": {
+      "xi.sitewatch.forums-web": "https://www.xtremeidiots.com/",
+      "xi.sitewatch.geo-location-web": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live",
+      "xi.sitewatch.portal-web": "https://app-portal-web-prd-uksouth-fe584e15256a.azurewebsites.net/api/health/live",
+      "xi.sitewatch.repository-api-v1": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/live",
+      "xi.sitewatch.repository-api-v2": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/live",
+      "xi.sitewatch.redirect": "https://redirect.xtremeidiots.net/",
+      "xi.sitewatch.servers-integration-api": "https://app-portal-servers-int-prd-uksouth-v1-66febf7b1b9d.azurewebsites.net/v1.0/health/live",
+      "xi.sitewatch.server-events": "https://fn-portal-server-events-prd-uksouth-3e4bb7b00601.azurewebsites.net/api/health/live"
     },
     "checks": [
       {"id": "xi.sitewatch.forums-web", "component": "xi.sitewatch.forums-web", "name": "Website HTTP availability", "target": "https://www.xtremeidiots.com/"},
