@@ -280,7 +280,7 @@ def main():
                 f"Host=127.0.0.1;Port={connection_port};Database=status;Username=status_app;"
                 f"Password={credentials['app-password']}"
             )
-            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "ProbeDiagnosticsPersist",
+            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "GitHubOutboxPublishes", "GitHubOutboxReviews", "ProbeDiagnosticsPersist",
                             "TrafficControlsPersist", "TrafficFailuresRemain", "TrafficConcurrencyRejects")
             native_results = root / "native-results"
             subprocess.run([

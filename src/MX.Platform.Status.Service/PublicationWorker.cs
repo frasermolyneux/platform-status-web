@@ -66,17 +66,21 @@ public sealed class PublicationWorker(
             nextProbeAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
             await RefreshProbesAsync(publisherLock, ct);
         }
+        var telemetry = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>();
+        foreach (var definition in catalog.Sites)
+            telemetry[definition.Site.Id] = ComponentChecks.Build(definition,
+                await database.ReadProbesAsync(definition.Site.Id, ct), await database.ReadChecksAsync(definition.Site.Id, ct));
         foreach (var site in catalog.Sites)
         {
             var publicIds = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
             var incidents = (await database.ReadIncidentsAsync(catalog, site, true, ct))
                 .Where(i => i.Published && i.Components.All(publicIds.Contains)).ToArray();
-            var live = LatestTelemetry(site, await database.ReadProbesAsync(site.Site.Id, ct));
+            var live = catalog.ProjectTelemetry(site, telemetry);
             var history = await database.ReadHistoryAsync(site, ct);
             var publication = new StatusMerger().Merge(site.Snapshot, live, history,
                 incidents.Select(i => i.ToPublicIncident()),
                 incidents.Where(i => i.Severity == Severity.Maintenance).Select(i => i.ToMaintenance(DateTimeOffset.UtcNow)));
-            publication = CorrectTodayHistory(publication, history);
+            publication = IncidentImpact.Apply(CorrectTodayHistory(publication, history), incidents.Select(incident => incident.ToPublicIncident()));
             publication = publication with
             {
                 Banners = (await database.ReadBannersAsync(site.Site.Id, ct))
@@ -107,18 +111,19 @@ public sealed class PublicationWorker(
 
     internal static Dictionary<string, ComponentLiveTelemetry> LatestTelemetry(
         SiteDefinition site, IReadOnlyList<ProbeObservation> probes) =>
-        probes.Where(probe => probe.Site == site.Site.Id && site.Probes.ContainsKey(probe.Component))
+        probes.Where(probe => probe.Site == site.Site.Id && site.EffectiveChecks.Any(check => check.Component == probe.Component))
             .GroupBy(probe => probe.Component).Select(group => group.MaxBy(probe => probe.ObservedAt)!)
             .ToDictionary(probe => probe.Component, probe =>
                 new ComponentLiveTelemetry(1, probe.Success ? 0 : 1, probe.ObservedAt, null));
 
     private async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct)
     {
-        var observations = await Task.WhenAll(catalog.Sites.SelectMany(site => site.Probes.Select(async probe =>
+        var observations = await Task.WhenAll(catalog.Sites.SelectMany(site => site.EffectiveChecks.Where(check => check.Kind == "http").Select(async check =>
         {
-            var name = StatusCatalog.Flatten(site.Components.Components).Single(component => component.Id == probe.Key).Name;
-            return await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
-                site.Site.Id, probe.Key, name, probe.Value, ct);
+            var name = StatusCatalog.Flatten(site.Components.Components).Single(component => component.Id == check.Component).Name;
+            var observation = await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
+                site.Site.Id, check.Component, name, check.Target!, ct);
+            return observation with { CheckId = check.Id };
         })));
         foreach (var site in catalog.Sites)
         {
@@ -129,19 +134,21 @@ public sealed class PublicationWorker(
                     logger.LogWarning("Independent probe failed for {Site}/{Component}: {Reason}.",
                         site.Site.Id, observation.Component, observation.Error);
                 await lease.SaveProbeEvidenceAsync(observation, ct);
-                if (!IsMaintained(site, observation, incidents))
-                    await lease.RecordProbeAsync(site.Site.Id, observation.Component, observation.Success, ct);
             }
+            var live = ComponentChecks.Build(site, observations, await database.ReadChecksAsync(site.Site.Id, ct));
+            foreach (var (component, telemetry) in live.Where(pair => pair.Value.Samples > 0))
+                if (!IsMaintained(site, component, DateTimeOffset.UtcNow, incidents))
+                    await lease.RecordProbeAsync(site.Site.Id, component, telemetry.Failures == 0, ct);
         }
     }
 
-    private static bool IsMaintained(SiteDefinition site, ProbeObservation observation, IReadOnlyList<IncidentRecord> incidents) =>
+    private static bool IsMaintained(SiteDefinition site, string componentId, DateTimeOffset at, IReadOnlyList<IncidentRecord> incidents) =>
         incidents.Any(incident => incident.Published && incident.Severity == Severity.Maintenance
-            && incident.State != IncidentState.Resolved && incident.ScheduledStart <= observation.ObservedAt
-            && incident.ScheduledEnd > observation.ObservedAt
+            && incident.State != IncidentState.Resolved && incident.ScheduledStart <= at
+            && incident.ScheduledEnd > at
             && incident.Components.Any(id => StatusCatalog.PublicComponents(site.Components.Components)
                 .Where(component => component.Id == id).SelectMany(component => StatusCatalog.PublicComponents([component]))
-                .Any(component => component.Id == observation.Component)));
+                .Any(component => component.Id == componentId)));
 
     internal static StatusApiResponse CorrectTodayHistory(StatusApiResponse publication, HistoryDocument history) =>
         publication with { Components = publication.Components.Select(c => CorrectComponent(c, history)).ToArray() };

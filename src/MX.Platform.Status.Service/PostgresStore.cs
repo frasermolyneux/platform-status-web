@@ -82,11 +82,24 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 incident_id integer NOT NULL REFERENCES status_incidents(id),
                 updated_at timestamptz NOT NULL,
                 PRIMARY KEY(repository,issue_number,site_id));
+            CREATE TABLE IF NOT EXISTS status_github_outbox (
+                operation_id uuid PRIMARY KEY, incident_id integer NOT NULL REFERENCES status_incidents(id),
+                site_id text NOT NULL, revision integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+                command jsonb NOT NULL, expected_at timestamptz, remote_at timestamptz,
+                expected_version text, remote_version text, predecessor uuid,
+                requested_incident_id integer,
+                next_attempt_at timestamptz NOT NULL DEFAULT now(),
+                state text NOT NULL, attempted boolean NOT NULL DEFAULT false, error text);
             CREATE TABLE IF NOT EXISTS status_traffic (
                 hostname text PRIMARY KEY, site_id text NOT NULL, document jsonb NOT NULL);
             CREATE TABLE IF NOT EXISTS status_traffic_audit (
                 id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(),
                 hostname text NOT NULL, site_id text NOT NULL, document jsonb NOT NULL);
+            UPDATE status_incidents SET document=jsonb_set(document,'{impactHistory}',jsonb_build_array(jsonb_build_object(
+                'at',now(),'state',document->'state','severity',document->'severity','components',document->'components',
+                'scheduledStart',document->'scheduledStart','scheduledEnd',document->'scheduledEnd')))
+            WHERE document->>'published'='true' AND document->>'state'<>'resolved'
+                AND COALESCE(jsonb_array_length(document->'impactHistory'),0)=0;
             """, connection, transaction);
         await command.ExecuteNonQueryAsync(ct);
         await transaction.CommitAsync(ct);
@@ -111,13 +124,16 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         }
     }
 
-    public async Task<PublisherLease?> TryPublisherLockAsync(CancellationToken ct)
+    public Task<PublisherLease?> TryPublisherLockAsync(CancellationToken ct) => TryLockAsync(814233107, ct);
+
+    private async Task<PublisherLease?> TryLockAsync(int key, CancellationToken ct)
     {
         var connection = await Source.OpenConnectionAsync(ct);
         try
         {
-            await using var command = new NpgsqlCommand("SELECT pg_try_advisory_lock(814233107)", connection);
-            if ((bool)(await command.ExecuteScalarAsync(ct))!) return new PublisherLease(connection);
+            await using var command = new NpgsqlCommand("SELECT pg_try_advisory_lock($1)", connection);
+            command.Parameters.AddWithValue(key);
+            if ((bool)(await command.ExecuteScalarAsync(ct))!) return new PublisherLease(connection, key);
         }
         catch
         {
@@ -146,10 +162,12 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         ReadIncidentDocumentsAsync(site, """
             SELECT document::text FROM (
                 SELECT id, document FROM status_incidents
-                WHERE site_id=$1 AND document->>'published'='true' AND document->>'state'<>'resolved'
+                WHERE site_id=$1 AND document->>'published'='true' AND
+                    (document->>'state'<>'resolved' OR (document->>'resolvedAt')::timestamptz >= now()-interval '90 days')
                 UNION ALL
                 (SELECT id, document FROM status_incidents
                  WHERE site_id=$1 AND document->>'published'='true' AND document->>'state'='resolved'
+                    AND ((document->>'resolvedAt')::timestamptz < now()-interval '90 days' OR document->>'resolvedAt' IS NULL)
                  ORDER BY id DESC LIMIT 1000)
             ) records ORDER BY id DESC
             """, ct);
@@ -169,6 +187,14 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     {
         await using var connection = await Writer.OpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
+        await using var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock(814233110)", connection, transaction);
+        await gate.ExecuteNonQueryAsync(ct);
+        if (request.Delivery == "github" && request.OperationId is { } operation)
+        {
+            var repeated = await ReadRepeatedGitHubCommandAsync(connection, transaction, operation, site, id, request, ct);
+            if (repeated.Found) return repeated.Record;
+        }
+        var requestedId = id;
         IncidentRecord? previous = null;
         if (id.HasValue)
         {
@@ -178,7 +204,8 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             var json = await read.ExecuteScalarAsync(ct) as string;
             if (json is null) return null;
             previous = JsonSerializer.Deserialize<IncidentRecord>(json, StatusJson.Options)!;
-            if (previous.Revision != request.Revision || previous.SourceUrl is not null) return null;
+            if (previous.Revision != request.Revision
+                || (previous.SourceUrl is not null || previous.GitHub is not null) && request.Delivery != "github") return null;
         }
         else
         {
@@ -188,6 +215,8 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         }
         var record = request.Apply(id.Value, site, previous, DateTimeOffset.UtcNow);
         await WriteIncidentAsync(connection, transaction, record, actor, ct);
+        if (request.Delivery == "github")
+            await QueueGitHubAsync(connection, transaction, record, requestedId, request, actor, ct);
         await transaction.CommitAsync(ct);
         return record;
     }
@@ -282,17 +311,25 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         await using var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock(814233110)", connection, transaction);
         await gate.ExecuteNonQueryAsync(ct);
         await using var read = new NpgsqlCommand("""
-            SELECT i.document::text FROM status_github_sources s
+            SELECT i.document::text,s.updated_at FROM status_github_sources s
             JOIN status_incidents i ON i.id=s.incident_id
             WHERE repository=$1 AND issue_number=$2 AND s.site_id=$3 FOR UPDATE OF i
             """, connection, transaction);
         read.Parameters.AddWithValue(repository);
         read.Parameters.AddWithValue(number);
         read.Parameters.AddWithValue(incoming.SiteId);
-        var json = await read.ExecuteScalarAsync(ct) as string;
+        IncidentRecord? previous = null;
+        DateTimeOffset? previousAt = null;
+        await using (var reader = await read.ExecuteReaderAsync(ct))
+            if (await reader.ReadAsync(ct))
+            {
+                previous = JsonSerializer.Deserialize<IncidentRecord>(reader.GetString(0), StatusJson.Options)!;
+                previousAt = reader.GetFieldValue<DateTimeOffset>(1);
+            }
+        if (previous?.GitHub is { State: not "synced" } || previousAt > updatedAt
+            || previous?.GitHub is not null && (incoming.GitHub is null || incoming.GitHubBaseVersion != previous.GitHubVersion)) return;
         IncidentRecord record;
-        var changed = true;
-        if (json is null)
+        if (previous is null)
         {
             await using var insert = new NpgsqlCommand("INSERT INTO status_incidents(site_id,revision,document) VALUES($1,0,'{}') RETURNING id", connection, transaction);
             insert.Parameters.AddWithValue(incoming.SiteId);
@@ -300,11 +337,11 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         }
         else
         {
-            var previous = JsonSerializer.Deserialize<IncidentRecord>(json, StatusJson.Options)!;
             record = incoming with { Id = previous.Id, Revision = previous.Revision + 1 };
-            changed = JsonSerializer.Serialize(previous with { Revision = 0 }, StatusJson.Options)
-                != JsonSerializer.Serialize(record with { Revision = 0 }, StatusJson.Options);
         }
+        record = record.ObserveImpact(previous, DateTimeOffset.UtcNow);
+        var changed = previous is null || JsonSerializer.Serialize(previous with { Revision = 0 }, StatusJson.Options)
+            != JsonSerializer.Serialize(record with { Revision = 0 }, StatusJson.Options);
         if (changed) await WriteIncidentAsync(connection, transaction, record, $"github:{repository}#{number}", ct);
         await using var source = new NpgsqlCommand("""
             INSERT INTO status_github_sources VALUES($1,$2,$3,$4,$5)
@@ -389,6 +426,17 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         return result.Distinct().ToArray();
     }
 
+    public async Task<IReadOnlyList<CheckResult>> ReadChecksAsync(string site, CancellationToken ct)
+    {
+        await using var command = Source.CreateCommand("SELECT document::text FROM status_evidence WHERE source='check-result' AND document->>'site'=$1");
+        command.Parameters.AddWithValue(site);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var result = new List<CheckResult>();
+        while (await reader.ReadAsync(ct))
+            result.Add(JsonSerializer.Deserialize<CheckResult>(reader.GetString(0), StatusJson.Options)!);
+        return result;
+    }
+
     public async Task PruneAsync(CancellationToken ct)
     {
         await using var command = Source.CreateCommand("""
@@ -405,7 +453,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     }
 }
 
-public sealed class PublisherLease(NpgsqlConnection connection) : IAsyncDisposable
+public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233107) : IAsyncDisposable
 {
     internal NpgsqlConnection Connection => connection;
 
@@ -413,7 +461,7 @@ public sealed class PublisherLease(NpgsqlConnection connection) : IAsyncDisposab
     {
         await using var command = new NpgsqlCommand(PostgresStore.EvidenceUpsert, connection);
         command.Parameters.AddWithValue("independent-probe");
-        command.Parameters.AddWithValue($"{observation.Site}/{observation.Component}");
+        command.Parameters.AddWithValue($"{observation.Site}/{observation.CheckId ?? observation.Component}");
         command.Parameters.AddWithValue(observation.ObservedAt);
         command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(observation, StatusJson.Options));
         await command.ExecuteNonQueryAsync(ct);
@@ -455,7 +503,8 @@ public sealed class PublisherLease(NpgsqlConnection connection) : IAsyncDisposab
         {
             if (connection.State == System.Data.ConnectionState.Open)
             {
-                await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(814233107)", connection);
+                await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock($1)", connection);
+                command.Parameters.AddWithValue(key);
                 command.CommandTimeout = 5;
                 await command.ExecuteNonQueryAsync();
             }

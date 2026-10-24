@@ -112,6 +112,35 @@ Shared incidents are managed on their originating site, or in their source GitHu
 issue. XI also includes Servers Integration API and Server Events. Server Agent
 is omitted until it has a suitable availability signal.
 
+### Services, components and checks
+
+The catalogue uses **Service → Component → Check**. Public overviews list services;
+opening one shows its components and their histories. Opening a component shows its
+individual checks. A service aggregates component status, and a component aggregates
+its configured checks. Checks report operational, degraded, outage or unknown;
+missing or stale observations remain unknown, not healthy.
+
+XtremeIdiots Portal groups its Website, Repository APIs v1/v2, Servers Integration
+API, Server Events and GeoLocation Website. GeoLocation remains a top-level MX
+service. Explicit shared identities retain the same GeoLocation status and incidents
+across those different presentations. `sharedId` identifies the same logical check
+on both brands without changing existing private evidence IDs.
+
+`checks` supports independent `http` and authenticated `telemetry` definitions,
+each with its own ID, component, name and expected interval. A permitted
+`Status.Ingest` application can POST `{site, checkId, status, observedAt, detail}`
+to `/api/integrations/checks/{siteId}/{checkId}` for a configured telemetry check.
+Scope must match the definition; older observations cannot replace newer results.
+Details stay private. HTTP targets stay in reviewed configuration.
+
+Declared component or service impact overrides healthy checks and aggregates upward.
+Observed impact, scope and maintenance windows are retained separately from public
+messages, so resolving an incident or editing its scope does not recolour the past
+as healthy. Existing active incidents acquire a baseline when first observed by
+the upgraded service; unknown older severity is not invented. Percentages remain
+**check availability**, not declared service uptime. A degraded telemetry observation
+counts as a non-healthy check sample; its live declared status is still degraded.
+
 Public pages and idle incident/banner workspaces refresh every five seconds;
 manual incident updates normally reach both origins and the browser within
 15 seconds. Probe collection keeps its separate configured interval. GitHub
@@ -205,6 +234,27 @@ hidden from the management list unless **Show archived notices** is selected.
 
 ### GitHub incident publishing
 
+The incident editor defaults to GitHub. Operators can create, update and resolve
+issues here without knowing labels; service/component selection generates them.
+Saving an approved update publishes it locally first and transactionally queues
+GitHub delivery. GitHub downtime does not block public status publication.
+**Local only** remains available for independent emergency incidents.
+
+Draft messages and private evidence are never exported. Withdrawing an existing
+GitHub incident removes only its publication label, not its issue body or private
+draft wording. Previously approved history remains distinct from private edits.
+Once an incident has entered GitHub delivery, later edits retain that destination.
+
+The workspace shows pending, synced and review-required delivery states. Stable
+operation IDs recover lost replies without blindly repeating issue/comment writes.
+External changes stop automatic delivery; **Review GitHub delivery** shows the
+remote version and requires explicit confirmation before retrying it. Review is
+revision/fingerprint checked, not a last-write-wins overwrite. Permanent failures
+and ambiguous writes require review; transient failures retry without blocking
+other incidents. GitHub does not offer atomic issue compare-and-swap: coordinate
+simultaneous external metadata edits with operators. Existing issue bodies are never
+rewritten by the editor.
+
 The independent service polls the public `frasermolyneux/status-pages` repository
 every five minutes, separately from public publication and probe collection.
 Use that repository's incident templates and maintainer instructions.
@@ -229,8 +279,8 @@ public GitHub repository, regardless of rendering.
 
 Closing resolves the mapped incident; reopening restores its active state.
 Removing the publish label withdraws it without deleting its audit history.
-Source-owned incidents have stable IDs and are edited in GitHub, not in the
-local incident editor. Previously published incident links remain valid through
+Source-owned incidents have stable IDs and can be edited through either GitHub or
+the status editor. Previously published incident links remain valid through
 aliases when the selected brands change. Restoring a brand retains the source's
 latest approved history without copying private drafts.
 Label, closure and reopening transitions remain in the durable
@@ -242,12 +292,18 @@ API failures and incomplete pagination retain the last
 durable incident state and surface a private integration error. Missing issues
 are checked individually before withdrawal to avoid pagination races.
 
-`GitHubEnabled` (default `true`), `GitHubRepository`, `GitHubTrustedAuthors`, `GitHubRefreshSeconds` (60-3600)
-and an optional read-only `GitHubTokenFile` are runtime options. No token is
-needed for the current small public repository; anonymous GitHub API limits
-apply. Unchanged comments are cached for at most 30 minutes to constrain requests.
-If volume grows, provision a read-only token through platform-owned secret
-mounts rather than placing credentials in runtime JSON or source control.
+`GitHubEnabled` (default `true`), `GitHubRepository`, `GitHubTrustedAuthors` and
+`GitHubRefreshSeconds` (60-3600) configure synchronization. The dedicated
+**MX.IO Status** App is declared and bootstrapped by `platform-workloads`, installed
+only on `status-pages` with Issues read/write. `GitHubAppId`,
+`GitHubInstallationId` and the read-only `GitHubPrivateKeyFile` mount configure
+authentication; only the configured repository and issue-write permission are
+requested for short-lived installation tokens. The App bot must be explicitly
+trusted. The key remains in workload Key Vault and host secret mounts, not runtime
+JSON, Actions secrets or Terraform state. `GitHubTokenFile` is an alternative
+explicitly provisioned writer credential, not the normal deployment.
+Anonymous public reads remain possible without writer credentials, but exports
+stay visibly queued. Unchanged comments are cached for at most 30 minutes.
 
 During an Entra outage, a host administrator can submit an incident JSON command
 on standard input to the running service executable with

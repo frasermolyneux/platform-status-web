@@ -72,7 +72,6 @@ export function renderOverview(data: StatusResponse): void {
   html += '<section class="components-section panel"><div class="section-heading"><h2>Service availability</h2><span class="muted">Live observations</span></div>';
   for (const c of data.components) {
     html += renderComponentRow(c);
-    for (const child of flattenComponents(c.children || [])) html += renderComponentRow(child);
   }
   html += '</section>';
 
@@ -116,7 +115,7 @@ function renderComponentRow(c: ComponentDto): string {
   const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}%` : '—';
   return `<div class="component-row${c.kind === 'group' ? ' component-group' : ''}">
     <a href="/component/${escapeHtml(c.id)}" data-component-id="${escapeHtml(c.id)}" class="component-name">${escapeHtml(c.name)}</a>
-    <span class="component-uptime">${escapeHtml(uptime)}</span>
+    <span class="component-uptime" title="Observed check availability; declared incident impact is shown separately in history">${escapeHtml(uptime)}</span>
     <span class="component-status ${info.className}">${getStatusDotHtml(c.status)}${info.label}</span>
   </div>`;
 }
@@ -125,7 +124,7 @@ function affectedServices(ids: string[], data: StatusResponse): string {
   const components = flattenComponents(data.components).filter(component => ids.includes(component.id));
   const leaves = components.filter(component => component.kind === 'leaf');
   const affected = leaves.length ? leaves : components;
-  return `<p class="affected-services"><strong>Affected services:</strong> ${affected.map(component =>
+  return `<p class="affected-services"><strong>Affected components:</strong> ${affected.map(component =>
     `<a href="/component/${escapeHtml(component.id)}">${escapeHtml(component.name)}</a>`).join(', ') || 'See incident updates'}</p>`;
 }
 
@@ -157,7 +156,7 @@ function renderHistoryBars(c: ComponentDto): string {
     const uptime = d.uptime != null ? ` (${(d.uptime * 100).toFixed(1)}%)` : '';
     return `<div class="history-bar ${info.className}" title="${escapeHtml(d.date)}: ${info.label}${escapeHtml(uptime)}"></div>`;
   }).join('');
-  const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}% uptime` : '';
+  const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}% check availability` : '';
   return `<div class="history-component">
     <div class="history-label">${escapeHtml(c.name)} <span class="history-uptime">${escapeHtml(uptime)}</span></div>
     <div class="history-bars">${bars}</div>
@@ -174,16 +173,23 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     return;
   }
   const info = getStatusInfo(component.status);
+  const affectedIds = new Set(flattenComponents([component]).map(item => item.id));
+  const parent = flattenComponents(data.components).find(item => item.children?.some(child => child.id === component.id));
   app.innerHTML = safeHtml(`
     ${announcements(data)}
     <nav class="breadcrumb"><a href="/">← Back to overview</a></nav>
+    ${parent ? `<p><a href="/component/${escapeHtml(parent.id)}">${escapeHtml(parent.name)}</a></p>` : ''}
     <h2>${escapeHtml(component.name)}</h2>
     ${component.description ? `<p>${escapeHtml(component.description)}</p>` : ''}
     <div class="component-detail-status ${info.className}">${getStatusDotHtml(component.status)}${info.label}</div>
     ${component.link ? `<p><a href="${escapeHtml(component.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(component.link)}</a></p>` : ''}
     ${renderHistoryBars(component)}
-    <section class="incidents-section"><h3>Incidents affecting this service</h3>
-    ${data.incidents.filter(incident => incident.components.includes(component.id))
+    ${component.children?.length ? `<section class="panel"><h3>Components</h3>${component.children.map(child =>
+      renderComponentRow(child) + renderHistoryBars(child)).join('')}</section>` : ''}
+    ${component.checks?.length ? `<section class="panel"><h3>Checks</h3>${component.checks.map(check =>
+      `<article class="component-row"><span>${escapeHtml(check.name)}</span><span class="${getStatusInfo(check.status).className}">${getStatusDotHtml(check.status)}${getStatusInfo(check.status).label}</span><span>${check.observedAt ? formatRelative(check.observedAt) : 'Awaiting first observation'}</span></article>`).join('')}</section>` : ''}
+    <section class="incidents-section"><h3>Incidents affecting this ${component.kind === 'group' ? 'service' : 'component'}</h3>
+    ${data.incidents.filter(incident => incident.components.some(id => affectedIds.has(id)))
       .map(incident => renderIncidentCard(incident, data)).join('') || '<p>No published incidents for this service.</p>'}</section>
   `);
 }
@@ -239,9 +245,9 @@ export function renderHistory(data: StatusResponse): void {
     ${announcements(data)}
     <nav class="breadcrumb"><a href="/">Back to current status</a></nav>
     <h2>Incident and maintenance history</h2>
-    <p>Availability is based on observed checks. Grey periods have no data and are not counted as healthy.</p>
+    <p>History includes declared incident impact, even after resolution. Percentages measure observed check availability. Grey periods have no data and are not counted as healthy.</p>
     ${data.dataFreshness?.stale ? '<div class="stale-warning">Live collection is unavailable; showing the last publication.</div>' : ''}
-    <section>${flattenComponents(data.components).filter(c => c.kind === 'leaf').map(renderHistoryBars).join('')}</section>
+    <section>${data.components.map(renderHistoryBars).join('')}</section>
     <section>${incidents.length ? incidents.map(incident => renderIncidentCard(incident, data)).join('') : '<p>No published incidents.</p>'}</section>
   `);
 }

@@ -33,6 +33,7 @@ export interface ComponentDto {
   history: HistoryDayDto[];
   openIncidentIds?: number[];
   children?: ComponentDto[];
+  checks?: { id: string; name: string; kind: string; status: string; observedAt?: string | null }[];
 }
 
 export interface HistoryDayDto {

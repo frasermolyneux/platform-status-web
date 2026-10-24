@@ -25,7 +25,7 @@ public sealed class StatusMerger
         var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate)).ToArray();
         var summaryStatus = Summarize(componentDtos.Select(component => ParseStatus(component.Status)));
 
-        return new StatusApiResponse
+        return IncidentImpact.Apply(new StatusApiResponse
         {
             Site = new SiteInfo
             {
@@ -49,7 +49,7 @@ public sealed class StatusMerger
                 Status = summaryStatus.ToApiString(),
                 Message = BuildSummaryMessage(summaryStatus, componentDtos)
             }
-        };
+        }, incidentList);
     }
 
     private ComponentDto BuildComponent(
@@ -96,7 +96,10 @@ public sealed class StatusMerger
                 IncidentIds = incidents.Where(incident => incident.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase) && AffectsDate(incident, day.Date)).Select(incident => incident.Id).Distinct().OrderBy(id => id).ToArray()
             }).ToArray(),
             OpenIncidentIds = incidents.Where(incident => incident.ResolvedAt is null && incident.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase)).Select(incident => incident.Id).Distinct().OrderBy(id => id).ToArray(),
-            Children = children.Length == 0 ? null : children
+            Children = children.Length == 0 ? null : children,
+            Checks = liveData.TryGetValue(component.Id, out var observed) && observed.Checks.Count > 0
+                ? observed.Checks.Select(check => new CheckDto(check.Id, check.Name, check.Kind, check.Status.ToApiString(), check.ObservedAt)).ToArray()
+                : null
         };
     }
 
@@ -121,7 +124,9 @@ public sealed class StatusMerger
 
         if (liveData.TryGetValue(component.Id, out var telemetry))
         {
-            var liveStatus = telemetry.Regions.Count > 0
+            var liveStatus = telemetry.Checks.Count > 0
+                ? Summarize(telemetry.Checks.Select(check => check.Status))
+                : telemetry.Regions.Count > 0
                 ? ComponentStatusCalculator.ClassifyLiveStatusRegional(telemetry.Regions, component.Sla)
                 : ComponentStatusCalculator.ClassifyLiveStatus(telemetry.Samples, telemetry.Failures, telemetry.LastSeen, component.Sla);
             historicalDays[^1] = todayHistory with

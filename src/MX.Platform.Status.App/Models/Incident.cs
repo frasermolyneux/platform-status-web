@@ -14,10 +14,15 @@ public sealed record Incident
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset? ResolvedAt { get; init; }
     public IReadOnlyList<IncidentUpdate> Updates { get; init; } = [];
+    public IReadOnlyList<IncidentImpactObservation> ImpactHistory { get; init; } = [];
 }
+
+public sealed record IncidentImpactObservation(DateTimeOffset At, IncidentState State, Severity Severity,
+    IReadOnlyList<string> Components, DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null);
 
 public sealed record IncidentUpdate
 {
+    public Guid? OperationId { get; init; }
     public DateTimeOffset At { get; init; }
     public IncidentState State { get; init; }
     public Severity? Severity { get; init; }

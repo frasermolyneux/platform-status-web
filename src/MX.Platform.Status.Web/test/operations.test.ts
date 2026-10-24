@@ -8,6 +8,7 @@ let rejectSave = false;
 let loginCount = 0;
 let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
+let existingIncidents: unknown[] = [];
 let saveGate: Promise<void> | undefined;
 let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
@@ -60,6 +61,11 @@ beforeEach(() => {
   writes.length = loginCount = 0;
   existingBanners = [];
   existingHealth = [];
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
+    title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
+  }];
   saveGate = undefined;
   writerWritable = true;
   trafficRows = [trafficRow()];
@@ -95,6 +101,11 @@ beforeEach(() => {
       incidentReads++;
       await incidentReadGate;
     }
+    if (path === '/api/ops/incidents/1/github') return Response.json({
+      operationId: 'queued-operation', revision: 3, remoteVersion: 'reviewed-version',
+      localMessage: 'Approved local update', remote: { number: 1, title: 'Remote correction',
+        body: '<script>REMOTE_TEXT_ONLY</script>', labels: ['status:incident'], updatedAt: timestamp, comments: [] },
+    });
     const fixtures: Record<string, unknown> = {
       '/api/auth/config': { enabled: true, clientId: 'client', tenantId: 'tenant', scope: 'Status.Access' },
       '/api/status': {
@@ -102,11 +113,7 @@ beforeEach(() => {
         components: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website', kind: 'leaf', children: [] }],
       },
       '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
-      '/api/ops/incidents': [{
-        id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
-        title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
-        sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
-      }],
+      '/api/ops/incidents': existingIncidents,
       '/api/ops/banners': existingBanners,
       '/api/ops/health': existingHealth,
       '/api/ops/evidence': [{
@@ -281,6 +288,87 @@ test('operator dashboard renders useful private evidence, filters signals and li
   await renderOperations();
   assert.equal(document.querySelector<HTMLAnchorElement>('.management-row a')?.href, 'https://github.com/frasermolyneux/status-pages/issues/1');
   assert.equal(document.querySelector('#operator-evidence'), null);
+});
+
+test('new incidents default to GitHub and retain one operation across draft restoration and failed submissions', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  await renderOperations();
+  click('New incident');
+  setValue('title', 'Approved incident');
+  setValue('message', 'Approved public update');
+  setValue('components', 'mx.sitewatch.molyneux-me');
+  const operation = document.querySelector<HTMLInputElement>('[name="operationId"]')!.value;
+  assert.equal(document.querySelector<HTMLSelectElement>('[name="delivery"]')!.value, 'github');
+  await renderOperations();
+  click('New incident');
+  assert.equal(document.querySelector<HTMLInputElement>('[name="operationId"]')!.value, operation);
+  rejectSave = true;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLButtonElement>('form button[type="submit"]')?.disabled === false);
+  rejectSave = false;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 2);
+  assert.equal(writes[0].body.delivery, 'github');
+  assert.equal(writes[0].body.operationId, operation);
+  assert.equal(writes[1].body.operationId, operation);
+});
+
+test('local emergency publication does not send a GitHub operation', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  await renderOperations();
+  click('New incident');
+  setValue('title', 'Local incident');
+  setValue('message', 'Approved public update');
+  setValue('components', 'mx.sitewatch.molyneux-me');
+  setValue('delivery', 'local');
+  document.querySelector<HTMLInputElement>('[name="published"]')!.checked = true;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.equal(writes[0].body.delivery, 'local');
+  assert.equal(writes[0].body.published, true);
+  assert.equal(writes[0].body.operationId, undefined);
+});
+
+test('queued incidents cannot restore an old local-only destination from a saved draft', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'], title: 'Queued incident',
+    state: 'investigating', severity: 'outage', published: true, gitHub: { state: 'pending', error: 'GitHub is unavailable' },
+  }];
+  await renderOperations();
+  assert.match(document.body.textContent || '', /GitHub delivery: pending.*GitHub is unavailable/);
+  click('Edit incident');
+  setValue('delivery', 'local');
+  setValue('message', 'Next public update');
+  await renderOperations();
+  click('Edit incident');
+  const delivery = document.querySelector<HTMLSelectElement>('[name="delivery"]')!;
+  assert.equal(delivery.value, 'github');
+  assert.equal(delivery.disabled, true);
+});
+
+test('GitHub conflict review renders remote content safely and requires explicit version-pinned confirmation', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  existingIncidents = [{
+    id: 1, siteId: 'mx', revision: 3, components: ['mx.sitewatch.molyneux-me'], title: 'Conflicting incident',
+    state: 'investigating', severity: 'outage', published: true,
+    sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1', gitHub: { state: 'conflict' },
+  }];
+  await renderOperations();
+  click('Review GitHub delivery');
+  await until(() => document.querySelector('[name="confirmed"]') !== null);
+  assert.equal(document.querySelector('pre script'), null);
+  assert.match(document.body.textContent || '', /REMOTE_TEXT_ONLY/);
+  const confirmed = document.querySelector<HTMLInputElement>('[name="confirmed"]')!;
+  assert.equal(confirmed.checked, false);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.body.textContent?.includes('explicitly confirm') === true);
+  assert.equal(writes.length, 0);
+  confirmed.checked = true;
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => writes.length === 1);
+  assert.equal(writes[0].path, '/api/ops/incidents/1/github/retry');
+  assert.deepEqual(writes[0].body, { revision: 3, remoteVersion: 'reviewed-version', confirmed: true });
 });
 
 test('banner editor previews untrusted text safely and sends explicit brand-scoped publication', async () => {

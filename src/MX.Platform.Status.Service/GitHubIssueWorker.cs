@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using MX.Platform.Status.App.Incidents;
 using MX.Platform.Status.App.Models;
@@ -31,6 +30,7 @@ public static class GitHubIssueParser
             ? (DateTimeOffset?)null : issue.GetProperty("closed_at").GetDateTimeOffset();
         var published = labels.Contains("status:published");
         var body = issue.GetProperty("body").GetString() ?? "";
+        var sourceBody = GitHubIncidentDocument.Read(body);
         var title = issue.GetProperty("title").GetString() ?? "";
         var createdAt = issue.GetProperty(CreatedAtProperty).GetDateTimeOffset();
         var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
@@ -41,6 +41,8 @@ public static class GitHubIssueParser
             .ThenByDescending(record => record.PublicUpdates.LastOrDefault()?.At).FirstOrDefault());
         var aliases = previous?.SelectMany(record => record.PublicAliases.Append(record.Id))
             .Where(id => id > 0).Distinct().ToArray() ?? [];
+        var schedule = LatestMetadata(issue, comments, options);
+        if (severity != Severity.Maintenance) schedule = null;
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)
         {
@@ -57,7 +59,8 @@ public static class GitHubIssueParser
                 publicUpdates = PreserveHistory(current, sourceUpdates, approved, severity, updatedAt);
                 publicStateUpdates = transitions;
             }
-            var command = new IncidentCommand(title, components, severity, state, body, published);
+            var command = new IncidentCommand(title, components, severity, state, sourceBody.Text, published,
+                ScheduledStart: schedule?.ScheduledStart, ScheduledEnd: schedule?.ScheduledEnd);
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
             {
@@ -67,8 +70,10 @@ public static class GitHubIssueParser
                 Severity = severity,
                 State = state,
                 Published = published,
-                StartedAt = createdAt,
+                StartedAt = previousIncident?.StartedAt ?? sourceBody.Metadata?.StartedAt ?? createdAt,
                 ResolvedAt = resolvedAt,
+                ScheduledStart = command.ScheduledStart,
+                ScheduledEnd = command.ScheduledEnd,
                 Updates = updates,
                 PublicUpdates = publicUpdates,
                 SourceStateUpdates = stateUpdates,
@@ -77,11 +82,21 @@ public static class GitHubIssueParser
                 PublicSourceStateUpdates = publicStateUpdates,
                 PublicSourceSeverity = published ? severity : previousIncident?.PublicSourceSeverity,
                 PublicAliases = aliases.Where(id => id != own?.Id).ToArray(),
-                SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
+                SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}",
+                GitHub = previousIncident?.GitHub,
+                GitHubVersion = GitHubIncidentClient.Version(issue, comments.Where(comment =>
+                    IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)).ToArray()),
+                GitHubBaseVersion = own?.GitHubVersion,
+                Evidence = own?.Evidence
             });
         }
         return records;
     }
+
+    private static GitHubUpdateEnvelope? LatestMetadata(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options) =>
+        new[] { issue }.Concat(comments.Where(comment => IsTrusted(comment.GetProperty("user").GetProperty("login").GetString()!, options)))
+            .Select(item => GitHubIncidentDocument.Read(item.GetProperty("body").GetString() ?? "").Metadata)
+            .Where(metadata => metadata is not null).OrderBy(metadata => metadata!.At).LastOrDefault();
 
     private static IncidentRecord? ApprovedHistory(IncidentRecord? previous)
     {
@@ -121,9 +136,9 @@ public static class GitHubIssueParser
     private static Severity ReadSeverity(HashSet<string> labels)
     {
         var severities = labels.Where(label => label.StartsWith("severity:", StringComparison.Ordinal)).ToArray();
-        if (severities.Length != 1 || severities[0] is not ("severity:degraded" or "severity:outage"))
-            throw new InvalidDataException("Choose exactly one severity:degraded or severity:outage label.");
-        return severities[0] == "severity:outage" ? Severity.Outage : Severity.Degraded;
+        if (severities.Length != 1 || severities[0] is not ("severity:degraded" or "severity:outage" or "severity:maintenance"))
+            throw new InvalidDataException("Choose exactly one severity:degraded, severity:outage or severity:maintenance label.");
+        return Enum.Parse<Severity>(severities[0]["severity:".Length..], true);
     }
 
     private static IncidentState ReadState(HashSet<string> labels, DateTimeOffset? closedAt, IncidentState latest)
@@ -168,7 +183,7 @@ public static class GitHubIssueParser
         IReadOnlyList<SourceUpdateSnapshot> sourceUpdates, IncidentRecord? previous, Severity severity, DateTimeOffset updatedAt)
     {
         if (previous is null)
-            return incoming.Select(update => update with { Severity = update.At == updatedAt ? severity : null }).ToArray();
+            return incoming.Select(update => update with { Severity = update.Severity ?? (update.At == updatedAt ? severity : null) }).ToArray();
         var history = previous.Updates.ToList();
         foreach (var update in incoming)
         {
@@ -178,7 +193,7 @@ public static class GitHubIssueParser
             {
                 At = edited ? updatedAt : update.At,
                 State = edited ? incoming[^1].State : update.State,
-                Severity = edited || update.At == updatedAt ? severity : null
+                Severity = update.Severity ?? (edited || update.At == updatedAt ? severity : null)
             });
         }
         if (previous.Severity != severity)
@@ -194,6 +209,9 @@ public static class GitHubIssueParser
 
     private static bool UnchangedUpdate(IncidentUpdate update, IReadOnlyList<SourceUpdateSnapshot> sourceUpdates, IncidentRecord previous)
     {
+        if (update.OperationId is { } operation && !previous.SourceUpdates.Any(source => source.At == update.At)
+            && previous.Updates.Any(known => known.OperationId == operation && known.Body == update.Body
+                && known.State == update.State && known.Severity == update.Severity)) return true;
         var current = sourceUpdates.FirstOrDefault(source => source.At == update.At && source.Body == update.Body);
         if (previous.SourceUpdates.Count > 0 && current is not null)
             return previous.SourceUpdates.Any(source => source.At == current.At && source.Body == current.Body
@@ -212,7 +230,12 @@ public static class GitHubIssueParser
             .Select(comment => new UpdateEvent(comment.GetProperty(CreatedAtProperty).GetDateTimeOffset(), comment.GetProperty("body").GetString() ?? "")));
         events.AddRange((stateUpdates ?? []).Select(update => new UpdateEvent(update.At, update.Body, update.State)));
         var updates = new List<IncidentUpdate>();
-        foreach (var entry in events.OrderBy(entry => entry.At))
+        var sources = events.Select((entry, index) =>
+            (Entry: entry, Metadata: GitHubIncidentDocument.Read(entry.Body).Metadata, Index: index));
+        // An explicitly reviewed retry can restore an edited operation in a new comment.
+        foreach (var entry in sources.GroupBy(source =>
+                (Operation: source.Metadata?.OperationId, Unique: source.Metadata is null ? source.Index : 0))
+            .Select(group => group.Last()).OrderBy(source => source.Metadata?.At ?? source.Entry.At).Select(source => source.Entry))
         {
             if (entry.State is { } state) updates.Add(new() { At = entry.At, State = state, Body = entry.Body });
             else AddUpdate(updates, entry.Body, entry.At, updates.LastOrDefault()?.State ?? IncidentState.Investigating, snapshots);
@@ -227,7 +250,14 @@ public static class GitHubIssueParser
     {
         var state = fallback;
         IncidentState? explicitState = null;
-        var text = IncidentRenderer.Render(content);
+        var document = GitHubIncidentDocument.Read(content);
+        var text = IncidentRenderer.Render(document.Text);
+        if (document.Metadata is { } metadata)
+        {
+            at = metadata.At;
+            state = metadata.State;
+            explicitState = metadata.State;
+        }
         const string formHeading = "### Public update\n";
         if (text.StartsWith(formHeading, StringComparison.Ordinal))
             text = text[formHeading.Length..].TrimStart();
@@ -244,7 +274,14 @@ public static class GitHubIssueParser
         if (text.Length > 20000) throw new InvalidDataException("Incident updates cannot exceed 20000 characters.");
         if (text.Length > 0)
         {
-            var update = new IncidentUpdate { At = at, State = state, Body = WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal) };
+            var update = new IncidentUpdate
+            {
+                At = at,
+                State = state,
+                Severity = document.Metadata?.Severity,
+                OperationId = document.Metadata?.OperationId,
+                Body = WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal)
+            };
             updates.Add(update);
             snapshots?.Add(new(at, update.Body, explicitState));
         }
@@ -253,8 +290,9 @@ public static class GitHubIssueParser
 
 public sealed class GitHubIssueWorker(
     StatusCatalog catalog, RuntimeOptions options, PostgresStore database,
-    IHttpClientFactory clients, ILogger<GitHubIssueWorker> logger) : BackgroundService
+    IHttpClientFactory clients, ILogger<GitHubIssueWorker> logger, GitHubIncidentClient? github = null) : BackgroundService
 {
+    private readonly GitHubIncidentClient githubClient = github ?? new(options, catalog, clients);
     private const string NumberProperty = "number";
     private readonly Dictionary<int, (DateTimeOffset UpdatedAt, DateTimeOffset CheckedAt, List<JsonElement> Items)> commentCache = [];
     private sealed record IssueImport(int Number, DateTimeOffset UpdatedAt, IReadOnlyList<IncidentRecord> Records, string? Problem = null);
@@ -415,14 +453,6 @@ public sealed class GitHubIssueWorker(
         throw new InvalidDataException("GitHub import exceeded ten pages; no missing-source withdrawals were applied.");
     }
 
-    private async Task<HttpRequestMessage> RequestAsync(string path, CancellationToken ct)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{options.GitHubRepository}/{path}");
-        request.Headers.UserAgent.ParseAdd("MXStatus/1.0");
-        request.Headers.Accept.ParseAdd("application/vnd.github+json");
-        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-        if (options.GitHubTokenFile is not null)
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (await File.ReadAllTextAsync(options.GitHubTokenFile, ct)).Trim());
-        return request;
-    }
+    private Task<HttpRequestMessage> RequestAsync(string path, CancellationToken ct) =>
+        githubClient.RequestAsync(HttpMethod.Get, path, null, ct);
 }

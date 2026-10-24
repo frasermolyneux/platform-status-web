@@ -18,6 +18,7 @@ interface Incident {
   scheduledEnd?: string;
   sourceUrl?: string;
   evidence?: { source: string; id: string; observedAt: string; context: string };
+  gitHub?: { state: string; error?: string };
 }
 
 interface Banner {
@@ -35,7 +36,7 @@ interface Banner {
 interface Runtime {
   publisher: boolean;
   writable: boolean;
-  github: { enabled: boolean; repository: string; pollSeconds: number };
+  github: { enabled: boolean; repository: string; pollSeconds: number; writeConfigured?: boolean };
   workloads: Record<string, string[]>;
 }
 
@@ -253,7 +254,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       return { form, save, key: formDraftKey(kind, id) };
     }
 
-    function finishForm(form: HTMLFormElement, save: HTMLButtonElement, key: string, revision: number, submit: () => Promise<void>, onSaved?: () => void): void {
+    function finishForm(form: HTMLFormElement, save: HTMLButtonElement, key: string, revision: number, submit: () => Promise<void>, onSaved?: () => void,
+      savedMessage = 'Changes saved. Public pages refresh automatically; updates normally appear within 15 seconds.'): void {
       rememberDraft(form, key, revision);
       const controls = element('div', undefined, 'form-actions');
       controls.append(save, button('Close editor (keep draft)', () => { editor.hidden = true; }));
@@ -282,7 +284,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
           try {
             if (!current()) return;
             await refreshData();
-            message(`Changes saved. Public pages refresh automatically; updates normally appear within 15 seconds.${draftWarning}`, !!draftWarning);
+            message(`${savedMessage}${draftWarning}`, !!draftWarning);
           } catch {
             message(`Your changes were saved, but the workspace could not refresh. Refresh it before editing again.${draftWarning}`, true);
           }
@@ -310,15 +312,26 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       title.maxLength = 200;
       title.value = incident?.title || seed?.title || '';
       field(form, 'Title', title, 'title');
+      const delivery = element('select');
+      delivery.append(option('github', 'GitHub (recommended; public updates only)'), option('local', 'Local only (independent emergency fallback)'));
+      delivery.value = incident && !incident.sourceUrl && !incident.gitHub ? 'local' : 'github';
+      delivery.disabled = !!incident?.sourceUrl || !!incident?.gitHub;
+      field(form, 'Incident record', delivery, 'delivery');
+      const operation = element('input');
+      operation.type = 'hidden';
+      operation.name = 'operationId';
+      operation.value = crypto.randomUUID();
+      form.append(operation, element('p',
+        'GitHub issues, labels, updates and resolution are managed here. Public changes are saved locally first and queued if GitHub is unavailable. Private evidence and unpublished draft text are never sent to GitHub.', 'muted'));
       const components = element('select');
       components.multiple = components.required = true;
       components.size = Math.min(7, flatten(status.components).length);
       for (const component of flatten(status.components)) {
-        const item = option(component.id, component.name);
+        const item = option(component.id, `${component.kind === 'group' ? 'Service' : 'Component'}: ${component.name}`);
         item.selected = (incident?.components || seed?.components || []).includes(component.id);
         components.append(item);
       }
-      field(form, 'Affected services (hold Ctrl or Command to select several)', components, 'components');
+      field(form, 'Affected services or components (hold Ctrl or Command to select several)', components, 'components');
       const severity = element('select');
       severity.append(...['degraded', 'outage', 'maintenance'].map(value => option(value)));
       severity.value = incident?.severity || seed?.severity || 'degraded';
@@ -358,6 +371,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
             scheduledStart: severity.value === 'maintenance' && start.value ? new Date(start.value).toISOString() : null,
             scheduledEnd: severity.value === 'maintenance' && end.value ? new Date(end.value).toISOString() : null,
             evidence: seed ? { ...seed.evidence, context: seed.context } : undefined,
+            delivery: delivery.value,
+            operationId: delivery.value === 'github' ? operation.value : undefined,
           }),
         });
       }, () => {
@@ -366,10 +381,45 @@ export async function renderOperations(navigateTo: (path: string) => void = path
           if (current() && new URLSearchParams(location.search).get('draft') === draftId)
             history.replaceState(null, '', '/ops/incidents');
         }
-      });
+      }, 'Status changes saved locally. GitHub changes, when selected, are queued durably; check the incident sync state below. Public pages refresh automatically.');
       form.addEventListener('input', updatePreview);
+      if (incident?.sourceUrl || incident?.gitHub) delivery.value = 'github';
       updatePreview();
       if (seed) form.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    async function reviewGitHub(incident: Incident): Promise<void> {
+      try {
+        const response = await request(`/api/ops/incidents/${incident.id}/github`);
+        const review: { operationId: string; revision: number; remoteVersion: string | null; localMessage: string;
+          remote: { number: number; title: string; body: string; labels: string[]; updatedAt: string; comments: string[] } | null } = await response.json();
+        if (!current()) return;
+        const { form, save, key } = openForm(`Review GitHub delivery for incident #${incident.id}`,
+          `github-review:${review.remoteVersion || review.operationId}`, incident.id);
+        form.append(element('h4', 'Queued public change'), element('pre', review.localMessage));
+        if (review.remote) {
+          form.append(element('h4', `Current GitHub issue #${review.remote.number}: ${review.remote.title}`),
+            element('p', `${review.remote.labels.join(', ')} / ${formatDateTime(review.remote.updatedAt)}`),
+            element('pre', [review.remote.body, ...review.remote.comments].join('\n\n')));
+        } else {
+          form.append(element('p', 'No matching issue was found. Check the repository before retrying an uncertain creation.'),
+            link('Check GitHub for the original operation', `https://github.com/${runtime.github.repository}/issues?q=${encodeURIComponent(review.operationId)}`));
+        }
+        const confirmed = element('input');
+        confirmed.type = 'checkbox';
+        field(form, review.remote
+          ? 'I reviewed GitHub and want to apply the queued change to this version'
+          : 'I checked GitHub and confirmed that the original issue was not created', confirmed, 'confirmed');
+        finishForm(form, save, key, review.revision, async () => {
+          if (!confirmed.checked) throw new Error('Review GitHub and explicitly confirm before retrying.');
+          await request(`/api/ops/incidents/${incident.id}/github/retry`, {
+            method: 'POST', body: JSON.stringify({ revision: review.revision, remoteVersion: review.remoteVersion, confirmed: true }),
+          });
+        });
+        confirmed.checked = false;
+      } catch (error) {
+        message(error instanceof Error ? error.message : 'GitHub could not be reviewed. Local publication is unaffected.', true);
+      }
     }
 
     function openBanner(banner?: Banner, archiving?: boolean): void {
@@ -541,6 +591,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         } else {
           row.append(element('p', check.target ? 'No check result is available yet.' : 'No public HTTP check is configured. Azure evidence can be reviewed and promoted to an incident; absence of an alert does not prove availability.', 'muted'));
         }
+        for (const signal of check.checks || [])
+          row.append(element('p', `Check: ${signal.name} / ${signal.status}${signal.observedAt ? ` / ${formatDateTime(signal.observedAt)}` : ' / awaiting observation'}${signal.target ? ` / ${signal.target}` : ''}${signal.probe?.error ? ` / ${signal.probe.error}` : ''}${signal.detail ? ` / ${signal.detail}` : ''}`));
         for (const incident of check.incidents)
           row.append(element('p', `Incident #${incident.id}: ${incident.title} (${incident.severity}, ${incident.state})`));
         for (const maintenance of check.maintenance) row.append(element('p', `Maintenance #${maintenance.id}: ${maintenance.title}`));
@@ -569,24 +621,35 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       incidentSection.replaceChildren(element('h3', 'Incidents & maintenance'));
       const sourceUrl = `https://github.com/${runtime.github.repository}`;
       const sourceNote = element('p', undefined, 'muted');
-      sourceNote.append('GitHub-managed incidents are edited in ', link(runtime.github.repository, sourceUrl),
-        '. A trusted author, matching workload labels and status:published are required.',
-        runtime.github.enabled ? ` Synced every ${runtime.github.pollSeconds / 60} minutes.` : ' GitHub ingestion is disabled on this origin.');
-      incidentSection.append(sourceNote, link('Declare an incident in GitHub', `${sourceUrl}/issues/new/choose`));
+      sourceNote.append('Create and update GitHub-backed incidents here; service selection and issue labels are handled automatically. ',
+        link('Open issue repository', `${sourceUrl}/issues`),
+        ' Local publishing remains available when GitHub is unavailable.',
+        runtime.github.enabled ? ` External GitHub edits are checked every ${runtime.github.pollSeconds / 60} minutes.` : ' GitHub synchronization is disabled; changes remain queued.');
+      incidentSection.append(sourceNote);
+      if (runtime.github.writeConfigured === false)
+        incidentSection.append(element('p', 'GitHub writer credentials are not configured. Public updates can still be published locally; GitHub changes remain queued until the integration is restored.', 'stale-warning'));
       if (!incidents.length) incidentSection.append(element('p', 'No incidents or maintenance windows yet.', 'empty-state'));
       for (const incident of incidents) {
         const row = element('article', undefined, 'management-row');
         const copy = element('div');
         copy.append(element('h4', incident.title), element('p', `${incident.state} / ${incident.severity} / ${incident.published ? 'public' : 'draft'}`, 'muted'));
-        copy.append(element('p', `Affected services: ${flatten(status.components).filter(component => incident.components.includes(component.id)).map(component => component.name).join(', ')}`));
+        copy.append(element('p', `Affected services or components: ${flatten(status.components).filter(component => incident.components.includes(component.id)).map(component => component.name).join(', ')}`));
+        if (incident.gitHub)
+          copy.append(element('p', `GitHub delivery: ${incident.gitHub.state}${incident.gitHub.error ? ` / ${incident.gitHub.error}` : ''}`,
+            incident.gitHub.state === 'synced' || incident.gitHub.state === 'draft' ? 'muted' : 'stale-warning'));
         const sourceSite = incident.siteId && incident.siteId !== status.site.id ? incident.siteId : null;
         let control: HTMLAnchorElement | HTMLButtonElement;
-        if (incident.sourceUrl) control = link('Manage in GitHub', incident.sourceUrl);
-        else if (sourceSite) control = link('Manage on the originating status site',
+        if (incident.sourceUrl) copy.append(link('View GitHub issue', incident.sourceUrl));
+        if (sourceSite) control = link('Manage on the originating status site',
           `${sourceSite === 'mx' ? 'https://mxstatus.io' : 'https://status.xtremeidiots.com'}/ops/incidents`);
         else control = button('Edit incident', () => openIncident(incident));
         if (control instanceof HTMLButtonElement) control.disabled = !canWrite || !runtime.writable;
         row.append(copy, control);
+        if (!sourceSite && incident.gitHub && ['conflict', 'review', 'uncertain'].includes(incident.gitHub.state)) {
+          const review = button('Review GitHub delivery', () => { void reviewGitHub(incident); });
+          review.disabled = !canWrite || !runtime.writable;
+          row.append(review);
+        }
         incidentSection.append(row);
       }
       bannerSection.replaceChildren(element('h3', 'Manual banners'),

@@ -5,7 +5,11 @@ namespace MX.Platform.Status.Service;
 public sealed record ComponentHealth(
     string Id, string Name, string Status, string Source, string? Target,
     int ExpectedIntervalSeconds, DateTimeOffset? LastSampleAt, ProbeObservation? Probe, ProbeObservation? LastFailure,
-    bool MatchesPublication, IReadOnlyList<IncidentDto> Incidents, IReadOnlyList<MaintenanceDto> Maintenance);
+    bool MatchesPublication, IReadOnlyList<IncidentDto> Incidents, IReadOnlyList<MaintenanceDto> Maintenance,
+    IReadOnlyList<CheckHealth>? Checks = null);
+
+public sealed record CheckHealth(string Id, string Name, string Kind, string Status, DateTimeOffset? ObservedAt,
+    string? Target, ProbeObservation? Probe, string? Detail = null);
 
 public static class HealthDiagnostics
 {
@@ -13,11 +17,13 @@ public static class HealthDiagnostics
         SiteDefinition site, PublicationStore files, PostgresStore database, CancellationToken ct)
     {
         var publication = await files.ReadAsync(site.Site.Id, ct);
-        return Build(site, publication, await database.ReadProbesAsync(site.Site.Id, ct));
+        return Build(site, publication, await database.ReadProbesAsync(site.Site.Id, ct),
+            await database.ReadChecksAsync(site.Site.Id, ct));
     }
 
     internal static IReadOnlyList<ComponentHealth> Build(
-        SiteDefinition site, StatusApiResponse publication, IReadOnlyList<ProbeObservation> probes)
+        SiteDefinition site, StatusApiResponse publication, IReadOnlyList<ProbeObservation> probes,
+        IReadOnlyList<CheckResult>? signals = null)
     {
         var siteProbes = probes.Where(probe => probe.Site == site.Site.Id).ToArray();
         var byId = siteProbes.GroupBy(probe => probe.Component)
@@ -30,14 +36,24 @@ public static class HealthDiagnostics
             publicComponents.TryGetValue(component.Id, out var published);
             byId.TryGetValue(component.Id, out var probe);
             failures.TryGetValue(component.Id, out var failure);
-            site.Probes.TryGetValue(component.Id, out var target);
+            var configured = site.EffectiveChecks.Where(check => check.Component == component.Id).ToArray();
+            var target = configured.FirstOrDefault(check => check.Kind == "http")?.Target;
+            var checks = published?.Checks?.Select(check =>
+            {
+                var definition = configured.SingleOrDefault(definition => (definition.SharedId ?? definition.Id) == check.Id);
+                var result = signals?.Where(signal => signal.CheckId == definition?.Id).MaxBy(signal => signal.ObservedAt);
+                return new CheckHealth(check.Id, check.Name, check.Kind, check.Status, check.ObservedAt, definition?.Target,
+                    siteProbes.Where(observation => definition?.Id == (observation.CheckId ?? observation.Component))
+                        .MaxBy(observation => observation.ObservedAt), result?.Detail);
+            }).ToArray() ?? [];
             return new ComponentHealth(component.Id, component.Name, published?.Status ?? "unknown",
-                target is null ? "Incident-based; no public HTTP check" : "Independent HTTP probe (publisher)",
+                component.Kind == "group" ? "Service aggregate from components"
+                    : target is null ? "Telemetry checks and declared incidents" : "Independent HTTP checks (publisher)",
                 target, component.Sla.ExpectedIntervalSeconds, published?.LastSampleAt, probe, failure,
                 probe is not null && published?.LastSampleAt == probe.ObservedAt,
                 publication.Incidents.Where(incident => incident.Severity != "maintenance"
                     && published?.OpenIncidentIds?.Contains(incident.Id) == true).ToArray(),
-                publication.Maintenance.Where(window => window.Components.Contains(component.Id) && window.State == "in-progress").ToArray());
+                publication.Maintenance.Where(window => window.Components.Contains(component.Id) && window.State == "in-progress").ToArray(), checks);
         }).ToArray();
     }
 
