@@ -2,7 +2,7 @@ const STATUS_MAP: Record<string, { className: string; label: string; color: stri
   operational: { className: 'status-operational', label: 'Operational', color: '#2da44e' },
   degraded: { className: 'status-degraded', label: 'Degraded Performance', color: '#d4a72c' },
   outage: { className: 'status-outage', label: 'Major Outage', color: '#cf222e' },
-  maintenance: { className: 'status-maintenance', label: 'Under Maintenance', color: '#0969da' },
+  maintenance: { className: 'status-maintenance', label: 'Under Maintenance', color: '#d4a72c' },
   unknown: { className: 'status-unknown', label: 'Unknown', color: '#656d76' },
 };
 

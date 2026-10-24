@@ -10,11 +10,12 @@
     "components": {
       "components": [
         {"id": "mx.sitewatch.molyneux-me", "name": "Molyneux website", "kind": "leaf", "source": {"kind": "probe"}},
-        {"id": "mx.sitewatch.geo-location-web", "name": "GeoLocation website", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "mx.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "mx.sitewatch.geo-location-api", "name": "GeoLocation API", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "mx.sitewatch.bishopsbees", "name": "Bishops Bees", "kind": "leaf", "source": {"kind": "probe"}}
       ]
     },
+    "sharedComponents": {"mx.sitewatch.geo-location-web": "geo-location-web"},
     "workloads": {
       "molyneux-me": ["mx.sitewatch.molyneux-me"],
       "geo-location": ["mx.sitewatch.geo-location-web", "mx.sitewatch.geo-location-api"],
@@ -38,16 +39,16 @@
     "components": {
       "components": [
         {"id": "xi.sitewatch.forums-web", "name": "Community Forums", "kind": "leaf", "source": {"kind": "probe"}},
-        {"id": "xi.sitewatch.geo-location-web", "name": "GeoLocation website", "kind": "leaf", "source": {"kind": "probe"}},
+        {"id": "xi.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "xi.sitewatch.portal-web", "name": "XtremeIdiots Portal", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "xi.sitewatch.repository-api-v1", "name": "Repository API v1", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "xi.sitewatch.repository-api-v2", "name": "Repository API v2", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "xi.sitewatch.servers-integration-api", "name": "Servers Integration API", "kind": "leaf", "source": {"kind": "probe"}},
         {"id": "xi.sitewatch.server-events", "name": "Server Events", "kind": "leaf", "source": {"kind": "probe"}},
-        {"id": "xi.server-agent", "name": "Server Agent", "description": "Game-server log processing and event publishing.", "kind": "leaf", "source": {"kind": "manual"}},
         {"id": "xi.sitewatch.redirect", "name": "XI Redirect", "kind": "leaf", "source": {"kind": "probe"}}
       ]
     },
+    "sharedComponents": {"xi.sitewatch.geo-location-web": "geo-location-web"},
     "workloads": {
       "xi-forums": ["xi.sitewatch.forums-web"],
       "geo-location": ["xi.sitewatch.geo-location-web"],
@@ -55,8 +56,7 @@
       "portal-repository": ["xi.sitewatch.repository-api-v1", "xi.sitewatch.repository-api-v2"],
       "xi-redirect": ["xi.sitewatch.redirect"],
       "portal-servers-integration": ["xi.sitewatch.servers-integration-api"],
-      "portal-server-events": ["xi.sitewatch.server-events"],
-      "portal-server-agent": ["xi.server-agent"]
+      "portal-server-events": ["xi.sitewatch.server-events"]
     },
     "probes": {
       "xi.sitewatch.forums-web": "https://www.xtremeidiots.com/",

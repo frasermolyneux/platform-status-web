@@ -33,15 +33,30 @@ public static class GitHubIssueParser
         var body = issue.GetProperty("body").GetString() ?? "";
         var title = issue.GetProperty("title").GetString() ?? "";
         var createdAt = issue.GetProperty(CreatedAtProperty).GetDateTimeOffset();
-        var sourceUpdates = ReadUpdates(issue, comments, options);
-        var state = ReadState(labels, closedAt, sourceUpdates[^1].State);
+        var updatedAt = issue.GetProperty("updated_at").GetDateTimeOffset();
+        var sourceUpdates = new List<SourceUpdateSnapshot>();
+        var sourceTimeline = ReadUpdates(issue, comments, options, snapshots: sourceUpdates);
+        var state = ReadState(labels, closedAt, sourceTimeline[^1].State);
+        var approved = ApprovedHistory(previous?.OrderByDescending(record => record.PublicUpdates.Count)
+            .ThenByDescending(record => record.PublicUpdates.LastOrDefault()?.At).FirstOrDefault());
+        var aliases = previous?.SelectMany(record => record.PublicAliases.Append(record.Id))
+            .Where(id => id > 0).Distinct().ToArray() ?? [];
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)
         {
-            var previousIncident = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id);
-            var resolvedAt = ResolutionTime(state, closedAt, issue.GetProperty("updated_at").GetDateTimeOffset(),
-                previousIncident);
+            var own = previous?.SingleOrDefault(record => record.SiteId == site.Site.Id);
+            var previousIncident = own ?? approved;
+            var resolvedAt = ResolutionTime(state, closedAt, updatedAt, previousIncident);
             var (updates, stateUpdates) = ReconcileUpdates(issue, comments, options, state, closedAt, previousIncident);
+            updates = PreserveHistory(updates, sourceUpdates, previousIncident, severity, updatedAt);
+            var publicUpdates = previousIncident?.PublicUpdates ?? [];
+            var publicStateUpdates = previousIncident?.PublicSourceStateUpdates ?? [];
+            if (published)
+            {
+                var (current, transitions) = ReconcileUpdates(issue, comments, options, state, closedAt, approved);
+                publicUpdates = PreserveHistory(current, sourceUpdates, approved, severity, updatedAt);
+                publicStateUpdates = transitions;
+            }
             var command = new IncidentCommand(title, components, severity, state, body, published);
             if (command.Validate(site) is { } error) throw new InvalidDataException(error);
             records.Add(new()
@@ -55,12 +70,32 @@ public static class GitHubIssueParser
                 StartedAt = createdAt,
                 ResolvedAt = resolvedAt,
                 Updates = updates,
-                PublicUpdates = published ? updates : [],
+                PublicUpdates = publicUpdates,
                 SourceStateUpdates = stateUpdates,
+                SourceUpdates = sourceUpdates,
+                PublicSourceUpdates = published ? sourceUpdates : previousIncident?.PublicSourceUpdates ?? [],
+                PublicSourceStateUpdates = publicStateUpdates,
+                PublicSourceSeverity = published ? severity : previousIncident?.PublicSourceSeverity,
+                PublicAliases = aliases.Where(id => id != own?.Id).ToArray(),
                 SourceUrl = $"https://github.com/{options.GitHubRepository}/issues/{issue.GetProperty("number").GetInt32()}"
             });
         }
         return records;
+    }
+
+    private static IncidentRecord? ApprovedHistory(IncidentRecord? previous)
+    {
+        if (previous is not { PublicUpdates.Count: > 0 }) return null;
+        return previous with
+        {
+            Updates = previous.PublicUpdates,
+            SourceUpdates = previous.PublicSourceUpdates,
+            SourceStateUpdates = previous.PublicSourceStateUpdates.Count > 0 ? previous.PublicSourceStateUpdates
+                : previous.SourceStateUpdates.Where(source => previous.PublicUpdates.Any(approved =>
+                    approved.At == source.At && approved.Body == source.Body && approved.State == source.State)).ToArray(),
+            Severity = previous.PublicSourceSeverity ?? previous.Severity,
+            State = previous.PublicUpdates[^1].State
+        };
     }
 
     private static (SiteDefinition Site, string[] Components)[] ReadTargets(HashSet<string> labels, StatusCatalog catalog)
@@ -129,8 +164,45 @@ public static class GitHubIssueParser
     private static IncidentUpdate StateUpdate(DateTimeOffset at, IncidentState state) =>
         new() { At = at, State = state, Body = $"Incident marked {state.ToApiString()} in GitHub." };
 
+    private static IReadOnlyList<IncidentUpdate> PreserveHistory(IReadOnlyList<IncidentUpdate> incoming,
+        IReadOnlyList<SourceUpdateSnapshot> sourceUpdates, IncidentRecord? previous, Severity severity, DateTimeOffset updatedAt)
+    {
+        if (previous is null)
+            return incoming.Select(update => update with { Severity = update.At == updatedAt ? severity : null }).ToArray();
+        var history = previous.Updates.ToList();
+        foreach (var update in incoming)
+        {
+            if (UnchangedUpdate(update, sourceUpdates, previous)) continue;
+            var edited = history.Any(known => known.At == update.At);
+            history.Add(update with
+            {
+                At = edited ? updatedAt : update.At,
+                State = edited ? incoming[^1].State : update.State,
+                Severity = edited || update.At == updatedAt ? severity : null
+            });
+        }
+        if (previous.Severity != severity)
+            history.Add(new()
+            {
+                At = updatedAt,
+                State = incoming[^1].State,
+                Severity = severity,
+                Body = $"Incident impact changed to {severity.ToApiString()} in GitHub."
+            });
+        return history.Distinct().OrderBy(update => update.At).ToArray();
+    }
+
+    private static bool UnchangedUpdate(IncidentUpdate update, IReadOnlyList<SourceUpdateSnapshot> sourceUpdates, IncidentRecord previous)
+    {
+        var current = sourceUpdates.FirstOrDefault(source => source.At == update.At && source.Body == update.Body);
+        if (previous.SourceUpdates.Count > 0 && current is not null)
+            return previous.SourceUpdates.Any(source => source.At == current.At && source.Body == current.Body
+                && source.ExplicitState == current.ExplicitState);
+        return previous.Updates.Any(known => known.At == update.At && known.Body == update.Body && known.State == update.State);
+    }
+
     private static List<IncidentUpdate> ReadUpdates(JsonElement issue, IReadOnlyList<JsonElement> comments, RuntimeOptions options,
-        IReadOnlyList<IncidentUpdate>? stateUpdates = null)
+        IReadOnlyList<IncidentUpdate>? stateUpdates = null, List<SourceUpdateSnapshot>? snapshots = null)
     {
         var events = new List<UpdateEvent>
         {
@@ -143,16 +215,18 @@ public static class GitHubIssueParser
         foreach (var entry in events.OrderBy(entry => entry.At))
         {
             if (entry.State is { } state) updates.Add(new() { At = entry.At, State = state, Body = entry.Body });
-            else AddUpdate(updates, entry.Body, entry.At, updates.LastOrDefault()?.State ?? IncidentState.Investigating);
+            else AddUpdate(updates, entry.Body, entry.At, updates.LastOrDefault()?.State ?? IncidentState.Investigating, snapshots);
         }
         if (updates.Count == 0)
             throw new InvalidDataException("An incident needs a public description, not only internal notes.");
         return updates;
     }
 
-    private static void AddUpdate(List<IncidentUpdate> updates, string content, DateTimeOffset at, IncidentState fallback)
+    private static void AddUpdate(List<IncidentUpdate> updates, string content, DateTimeOffset at, IncidentState fallback,
+        List<SourceUpdateSnapshot>? snapshots)
     {
         var state = fallback;
+        IncidentState? explicitState = null;
         var text = IncidentRenderer.Render(content);
         const string formHeading = "### Public update\n";
         if (text.StartsWith(formHeading, StringComparison.Ordinal))
@@ -164,11 +238,16 @@ public static class GitHubIssueParser
             if (value is not ("investigating" or "identified" or "monitoring" or "resolved"))
                 throw new InvalidDataException("Comment state headers must use investigating, identified, monitoring or resolved.");
             state = Enum.Parse<IncidentState>(value, true);
+            explicitState = state;
             text = text.Contains('\n') ? text[(text.IndexOf('\n') + 1)..].Trim() : "";
         }
         if (text.Length > 20000) throw new InvalidDataException("Incident updates cannot exceed 20000 characters.");
         if (text.Length > 0)
-            updates.Add(new() { At = at, State = state, Body = WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal) });
+        {
+            var update = new IncidentUpdate { At = at, State = state, Body = WebUtility.HtmlEncode(text).Replace("\n", "<br>", StringComparison.Ordinal) };
+            updates.Add(update);
+            snapshots?.Add(new(at, update.Body, explicitState));
+        }
     }
 }
 

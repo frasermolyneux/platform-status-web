@@ -136,7 +136,7 @@ public static class ServiceProgram
             scope = options.ClientId is null ? null : $"api://{options.ClientId}/Status.Access"
         }));
         app.MapGet("/api/ops/incidents", async (HttpContext context, PostgresStore database, CancellationToken ct) =>
-            Results.Json(await database.ReadIncidentsAsync(catalog.FindHost(context.Request.Host.Host)!.Site.Id, ct), StatusJson.Options))
+            Results.Json(await database.ReadIncidentsAsync(catalog, catalog.FindHost(context.Request.Host.Host)!, false, ct), StatusJson.Options))
             .RequireAuthorization(ReaderPolicy);
         app.MapGet("/api/ops/evidence", async (PostgresStore database, CancellationToken ct) =>
             Results.Ok(await database.ReadEvidenceAsync(ct))).RequireAuthorization(ReaderPolicy);

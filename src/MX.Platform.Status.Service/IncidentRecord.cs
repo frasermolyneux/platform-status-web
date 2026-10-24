@@ -4,6 +4,7 @@ using MX.Platform.Status.App.Models;
 namespace MX.Platform.Status.Service;
 
 public sealed record IncidentEvidence(string Source, string Id, DateTimeOffset ObservedAt, string Context);
+public sealed record SourceUpdateSnapshot(DateTimeOffset At, string Body, IncidentState? ExplicitState);
 
 public sealed record IncidentRecord
 {
@@ -22,6 +23,11 @@ public sealed record IncidentRecord
     public IReadOnlyList<IncidentUpdate> Updates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> PublicUpdates { get; init; } = [];
     public IReadOnlyList<IncidentUpdate> SourceStateUpdates { get; init; } = [];
+    public IReadOnlyList<SourceUpdateSnapshot> SourceUpdates { get; init; } = [];
+    public IReadOnlyList<SourceUpdateSnapshot> PublicSourceUpdates { get; init; } = [];
+    public IReadOnlyList<IncidentUpdate> PublicSourceStateUpdates { get; init; } = [];
+    public Severity? PublicSourceSeverity { get; init; }
+    public IReadOnlyList<int> PublicAliases { get; init; } = [];
     public string? SourceUrl { get; init; }
     public IncidentEvidence? Evidence { get; init; }
 
@@ -33,6 +39,8 @@ public sealed record IncidentRecord
         Severity = Severity,
         State = State,
         Url = $"/incident/{Id}",
+        SourceUrl = SourceUrl,
+        Aliases = PublicAliases,
         CreatedAt = StartedAt,
         StartedAt = StartedAt,
         ResolvedAt = ResolvedAt,
@@ -92,6 +100,7 @@ public sealed record IncidentCommand(
         {
             At = now,
             State = State,
+            Severity = Severity,
             Body = WebUtility.HtmlEncode(Message.Trim()).Replace("\n", "<br>", StringComparison.Ordinal)
         };
         return new()

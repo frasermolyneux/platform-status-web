@@ -140,6 +140,13 @@ public sealed record HistoryDayDto
 
 public sealed record IncidentDto
 {
+    [JsonPropertyName("aliases")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<int>? Aliases { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceUrl { get; init; }
+
     [JsonPropertyName("id")]
     public int Id { get; init; }
 
@@ -174,6 +181,9 @@ public sealed record IncidentDto
 
 public sealed record IncidentUpdateDto
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Severity { get; init; }
+
     [JsonPropertyName("at")]
     public DateTimeOffset At { get; init; }
 

@@ -15,8 +15,12 @@ public sealed class StatusMerger
         bool stale = false)
     {
         var publicIds = PublicIds(snapshot.Components.Components).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var incidentList = incidents.Where(item => item.Components.All(publicIds.Contains)).OrderByDescending(item => item.CreatedAt).ToArray();
-        var maintenanceList = maintenance.Where(item => item.Components.All(publicIds.Contains)).OrderBy(item => item.ScheduledStart).ToArray();
+        var incidentList = incidents.Where(item => item.Components.All(publicIds.Contains))
+            .Select(item => item with { Components = ExpandAffected(snapshot.Components.Components, item.Components) })
+            .OrderByDescending(item => item.CreatedAt).ToArray();
+        var maintenanceList = maintenance.Where(item => item.Components.All(publicIds.Contains))
+            .Select(item => item with { Components = ExpandAffected(snapshot.Components.Components, item.Components) })
+            .OrderBy(item => item.ScheduledStart).ToArray();
         var nowDate = DateOnly.FromDateTime(DateTime.UtcNow);
         var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate)).ToArray();
         var summaryStatus = Summarize(componentDtos.Select(component => ParseStatus(component.Status)));
@@ -43,7 +47,7 @@ public sealed class StatusMerger
             Summary = new Summary
             {
                 Status = summaryStatus.ToApiString(),
-                Message = BuildSummaryMessage(summaryStatus)
+                Message = BuildSummaryMessage(summaryStatus, componentDtos)
             }
         };
     }
@@ -188,6 +192,8 @@ public sealed class StatusMerger
         Id = incident.Id,
         Title = incident.Title,
         Url = incident.Url,
+        SourceUrl = incident.SourceUrl,
+        Aliases = incident.Aliases.Count > 0 ? incident.Aliases : null,
         Components = incident.Components,
         Severity = incident.Severity.ToApiString(),
         State = incident.State.ToApiString(),
@@ -198,6 +204,7 @@ public sealed class StatusMerger
         {
             At = update.At,
             State = update.State.ToApiString(),
+            Severity = update.Severity?.ToApiString(),
             Body = update.Body,
             Author = update.Author
         }).ToArray()
@@ -241,12 +248,32 @@ public sealed class StatusMerger
         return ComponentStatus.Unknown;
     }
 
-    private static string BuildSummaryMessage(ComponentStatus status) => status switch
+    private static IReadOnlyList<string> ExpandAffected(IEnumerable<Component> components, IEnumerable<string> affected)
     {
-        ComponentStatus.Outage => "One or more components are experiencing an outage.",
-        ComponentStatus.Degraded => "Some components are experiencing degraded performance.",
-        ComponentStatus.Maintenance => "Scheduled maintenance is in progress.",
-        ComponentStatus.Operational => "All systems operational.",
-        _ => "Status information is currently incomplete."
+        var ids = affected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return components.Where(component => !component.Hidden).SelectMany(component =>
+            ids.Contains(component.Id) ? PublicIds([component]) : ExpandAffected(component.Children, ids))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IEnumerable<ComponentDto> Leaves(IEnumerable<ComponentDto> components) =>
+        components.SelectMany(component => component.Children is { Count: > 0 } ? Leaves(component.Children) : [component]);
+
+    private static string BuildSummaryMessage(ComponentStatus status, IEnumerable<ComponentDto> components)
+    {
+        if (status == ComponentStatus.Operational) return "All systems operational.";
+        var affected = Leaves(components).Where(component => component.Status != "operational")
+            .GroupBy(component => component.Status).Select(group =>
+                $"{SummaryLabel(group.Key)}: {string.Join(", ", group.Select(component => component.Name))}.");
+        var message = string.Join(" ", affected);
+        return message.Length > 0 ? message : "No public service status is available.";
+    }
+
+    private static string SummaryLabel(string status) => status switch
+    {
+        "outage" => "Outage",
+        "degraded" => "Degraded service",
+        "maintenance" => "Maintenance",
+        _ => "Awaiting status"
     };
 }

@@ -7,6 +7,7 @@ import { renderTraffic } from './traffic';
 
 interface Incident {
   id: number;
+  siteId?: string;
   revision: number;
   title: string;
   components: string[];
@@ -26,6 +27,7 @@ interface Banner {
   message: string;
   tone: string;
   published: boolean;
+  archived?: boolean;
   startsAt?: string;
   expiresAt?: string;
 }
@@ -39,6 +41,7 @@ interface Runtime {
 
 type EvidenceDraft = ReturnType<typeof incidentSeed>;
 let authentication: PublicClientApplication | undefined;
+let removeWorkspaceRefresh: (() => void) | undefined;
 
 function readEvidenceDraft(saved: string): EvidenceDraft {
   const seed: EvidenceDraft = JSON.parse(saved);
@@ -60,6 +63,7 @@ function toLocal(value?: string): string {
 }
 
 export async function renderOperations(navigateTo: (path: string) => void = path => location.assign(path)): Promise<void> {
+  removeWorkspaceRefresh?.();
   const root = document.getElementById('app');
   if (!root) return;
   const path = location.pathname;
@@ -77,7 +81,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     notice.className = `operator-notice${error ? ' error' : ''}`;
   };
   try {
-    const configuration = await fetch('/api/auth/config', { cache: 'no-store' });
+    const configuration = await fetch('/api/auth/config', { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
     if (!configuration.ok) throw new Error('Authentication configuration is unavailable. Public status is unaffected.');
     const config: { enabled: boolean; clientId: string; tenantId: string; scope: string } = await configuration.json();
     if (!config.enabled) {
@@ -133,7 +137,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       const headers = new Headers(init?.headers);
       headers.set('Authorization', `Bearer ${token}`);
       headers.set('Content-Type', 'application/json');
-      const response = await fetch(path, { ...init, headers, cache: 'no-store' });
+      const response = await fetch(path, { ...init, headers, cache: 'no-store',
+        signal: init?.signal ?? (init?.method && init.method !== 'GET' ? undefined : AbortSignal.timeout(10_000)) });
       if (!response.ok) {
         if (response.status === 401) reauthenticate();
         if (response.status === 403) throw new Error('Your account does not have the required status role. Contact an administrator.');
@@ -161,6 +166,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     let evidence: EvidenceRecord[] = await evidenceResponse.json();
     let health: ComponentHealth[] = await healthResponse.json();
     let refreshTraffic: (() => Promise<void>) | undefined;
+    let showArchived = false;
     const evidenceDraftPrefix = `status-evidence-draft:${account.homeAccountId}:${status.site.id}:`;
     const overview = element('div', undefined, 'operator-stats');
     const editor = element('section', undefined, 'editor-panel');
@@ -276,7 +282,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
           try {
             if (!current()) return;
             await refreshData();
-            message(`Changes saved. Public updates appear after the next publication, normally within one minute.${draftWarning}`, !!draftWarning);
+            message(`Changes saved. Public pages refresh automatically; updates normally appear within 15 seconds.${draftWarning}`, !!draftWarning);
           } catch {
             message(`Your changes were saved, but the workspace could not refresh. Refresh it before editing again.${draftWarning}`, true);
           }
@@ -337,6 +343,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       published.type = 'checkbox';
       published.checked = incident?.published || false;
       field(form, 'Publish this incident and the new update to the public page', published, 'published');
+      form.append(element('p', 'Incidents affecting shared services, including GeoLocation Website, also appear on the other status site.', 'muted'));
       const preview = element('article', undefined, 'incident-preview');
       const updatePreview = (): void => {
         preview.replaceChildren(element('h4', title.value || 'Incident preview'), element('p', update.value || 'Your public update will appear here.'));
@@ -365,7 +372,7 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       if (seed) form.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    function openBanner(banner?: Banner): void {
+    function openBanner(banner?: Banner, archiving?: boolean): void {
       const { form, save, key } = openForm(banner ? `Edit announcement #${banner.id}` : 'Create a public announcement', 'banner', banner?.id);
       const title = element('input');
       title.required = true;
@@ -391,7 +398,18 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       const published = element('input');
       published.type = 'checkbox';
       published.checked = banner?.published || false;
-      field(form, 'Publish on this brand only (uncheck to withdraw)', published, 'published');
+      field(form, 'Show this notice on the public status page', published, 'published');
+      form.append(element('p', `Shown on ${status.site.displayName}. Leave unchecked to keep a draft or withdraw the notice.`, 'muted'));
+      const archived = element('input');
+      archived.type = 'checkbox';
+      archived.checked = archiving ?? banner?.archived ?? false;
+      if (banner) field(form, 'Archive this notice (withdraw it and keep its record)', archived, 'archived');
+      const updateArchive = (): void => {
+        if (archived.checked) published.checked = false;
+        published.disabled = archived.checked;
+      };
+      archived.addEventListener('change', updateArchive);
+      updateArchive();
       const preview = element('article');
       const updatePreview = (): void => {
         preview.className = `announcement announcement-${tone.value}`;
@@ -405,10 +423,18 @@ export async function renderOperations(navigateTo: (path: string) => void = path
             title: title.value, message: body.value, tone: tone.value, published: published.checked, revision: banner?.revision || 0,
             startsAt: start.value ? new Date(start.value).toISOString() : null,
             expiresAt: end.value ? new Date(end.value).toISOString() : null,
+            archived: archived.checked,
           }),
         });
       });
       form.addEventListener('input', updatePreview);
+      form.addEventListener('input', updateArchive);
+      if (archiving !== undefined) {
+        archived.checked = archiving;
+        published.checked = false;
+        form.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      updateArchive();
       updatePreview();
     }
 
@@ -552,23 +578,40 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         const row = element('article', undefined, 'management-row');
         const copy = element('div');
         copy.append(element('h4', incident.title), element('p', `${incident.state} / ${incident.severity} / ${incident.published ? 'public' : 'draft'}`, 'muted'));
-        const control = incident.sourceUrl ? link('Manage in GitHub', incident.sourceUrl) : button('Edit incident', () => openIncident(incident));
+        copy.append(element('p', `Affected services: ${flatten(status.components).filter(component => incident.components.includes(component.id)).map(component => component.name).join(', ')}`));
+        const sourceSite = incident.siteId && incident.siteId !== status.site.id ? incident.siteId : null;
+        let control: HTMLAnchorElement | HTMLButtonElement;
+        if (incident.sourceUrl) control = link('Manage in GitHub', incident.sourceUrl);
+        else if (sourceSite) control = link('Manage on the originating status site',
+          `${sourceSite === 'mx' ? 'https://mxstatus.io' : 'https://status.xtremeidiots.com'}/ops/incidents`);
+        else control = button('Edit incident', () => openIncident(incident));
         if (control instanceof HTMLButtonElement) control.disabled = !canWrite || !runtime.writable;
         row.append(copy, control);
         incidentSection.append(row);
       }
       bannerSection.replaceChildren(element('h3', 'Manual banners'),
         element('p', `Banners appear on ${status.site.displayName} only. You can publish immediately or set a start and expiry time.`, 'muted'));
+      const archivedFilter = element('input');
+      archivedFilter.type = 'checkbox';
+      archivedFilter.checked = showArchived;
+      archivedFilter.addEventListener('change', () => {
+        showArchived = archivedFilter.checked;
+        renderLists();
+        bannerSection.querySelector<HTMLInputElement>('[name="showArchived"]')?.focus();
+      });
+      field(bannerSection, 'Show archived notices', archivedFilter, 'showArchived');
       if (!banners.length) bannerSection.append(element('p', 'No announcements. Create a banner for important notices that do not need an incident.', 'empty-state'));
-      for (const banner of banners) {
+      for (const banner of banners.filter(banner => showArchived || !banner.archived)) {
         const row = element('article', undefined, 'management-row');
         const copy = element('div');
-        const phase = !banner.published ? 'draft' : banner.expiresAt && new Date(banner.expiresAt) <= new Date() ? 'expired'
+        const phase = banner.archived ? 'archived' : !banner.published ? 'draft' : banner.expiresAt && new Date(banner.expiresAt) <= new Date() ? 'expired'
           : banner.startsAt && new Date(banner.startsAt) > new Date() ? 'scheduled' : 'public';
         copy.append(element('h4', banner.title), element('p', `${phase} / ${banner.tone}${banner.expiresAt ? ` / expires ${formatDateTime(banner.expiresAt)}` : ''}`, 'muted'));
         const edit = button('Edit banner', () => openBanner(banner));
         edit.disabled = !canWrite || !runtime.writable;
-        row.append(copy, edit);
+        const archive = button(banner.archived ? 'Restore notice as draft' : 'Archive notice', () => openBanner(banner, !banner.archived));
+        archive.disabled = !canWrite || !runtime.writable;
+        row.append(copy, edit, archive);
         bannerSection.append(row);
       }
       message(`${status.site.displayName}. ${runtime.writable ? 'Writer connected.' : 'Writer unavailable; publishing is read-only.'} ${canWrite ? 'You can publish public communications.' : 'Your access is read-only.'}`);
@@ -577,13 +620,19 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       if (page === 'incidents') renderEvidenceDrafts();
     }
 
-    async function refreshData(): Promise<void> {
+    function interactingWithWorkspace(): boolean {
+      return !editor.hidden || [incidentSection, bannerSection, draftsSection].some(section => section.contains(document.activeElement));
+    }
+
+    async function refreshData(automatic = false): Promise<void> {
       refresh.disabled = true;
       try {
         const responses = await Promise.all([
           request('/api/ops/incidents'), request('/api/ops/banners'), request('/api/ops/runtime'), request('/api/ops/evidence'), request('/api/ops/health'),
         ]);
-        [incidents, banners, runtime, evidence, health] = await Promise.all(responses.map(response => response.json()));
+        const latest = await Promise.all(responses.map(response => response.json()));
+        if (automatic && interactingWithWorkspace()) return;
+        [incidents, banners, runtime, evidence, health] = latest;
         if (current()) {
           renderLists();
           await refreshTraffic?.();
@@ -594,6 +643,12 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       } finally { refresh.disabled = false; }
     }
     renderLists();
+    const autoRefresh = (): void => {
+      if (current() && !interactingWithWorkspace() && !refresh.disabled && (page === 'incidents' || page === 'banners'))
+        void refreshData(true).catch(error => message(error instanceof Error ? error.message : 'Automatic refresh failed.', true));
+    };
+    root.addEventListener('status:refresh-workspace', autoRefresh);
+    removeWorkspaceRefresh = () => root.removeEventListener('status:refresh-workspace', autoRefresh);
     if (page === 'traffic') {
       const trafficSection = element('section', undefined, 'panel');
       root.append(trafficSection);

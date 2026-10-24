@@ -122,6 +122,34 @@ def verify_publisher_fencing(container):
                 """)
 
 
+def verify_probe_retry_interval(container):
+    database_sql(container, """
+        CREATE SEQUENCE status_failed_probe_attempt;
+        CREATE FUNCTION reject_status_probe() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            PERFORM nextval('status_failed_probe_attempt');
+            RAISE EXCEPTION 'Injected probe persistence failure';
+        END $$;
+        CREATE TRIGGER reject_status_probe BEFORE INSERT OR UPDATE ON status_evidence
+            FOR EACH ROW WHEN (NEW.source='independent-probe')
+            EXECUTE FUNCTION reject_status_probe();
+        """)
+    try:
+        wait_for(lambda: database_sql(container, "SELECT is_called FROM status_failed_probe_attempt;") == "t",
+                 "injected post-HTTP probe persistence failure", seconds=60)
+        first = database_sql(container, "SELECT last_value FROM status_failed_probe_attempt;")
+        time.sleep(12)
+        assert database_sql(container, "SELECT last_value FROM status_failed_probe_attempt;") == first, \
+            "Persistence retries increased probe frequency above the configured 30-second interval"
+        print("Probe persistence failure did not cause five-second HTTP re-probing.")
+    finally:
+        database_sql(container, """
+            DROP TRIGGER reject_status_probe ON status_evidence;
+            DROP FUNCTION reject_status_probe();
+            DROP SEQUENCE status_failed_probe_attempt;
+            """)
+
+
 def verify_historic_thresholds(container, urls):
     day = database_sql(container, "SELECT ((now() AT TIME ZONE 'UTC')::date-1)::text;")
     expected = {
@@ -244,6 +272,7 @@ def main():
                 assert request(url, "/api/status", "unexpected.example")[0] == 404
             verify_database_restart_recovery(f"{name}-primary", f"{name}-standby", urls)
             verify_publisher_fencing(f"{name}-primary")
+            verify_probe_retry_interval(f"{name}-primary")
             verify_historic_thresholds(f"{name}-primary", urls)
             connection_port = docker("port", f"{name}-primary", "5432/tcp").split(":")[-1]
             integration_environment = dict(os.environ)
@@ -267,7 +296,7 @@ def main():
                 assert len(matches) == 1 and matches[0].attrib["outcome"] == "Passed", case_name
             print(f"All {len(native_cases)} required native PostgreSQL cases executed and passed without skips.")
             command = {
-                "title": "Integration incident", "components": ["mx.sitewatch.molyneux-me"],
+                "title": "Integration incident", "components": ["mx.sitewatch.geo-location-web"],
                 "severity": "outage", "state": "investigating",
                 "message": "RESTRICTED_DRAFT_MARKER", "published": False,
             }
@@ -276,10 +305,36 @@ def main():
                                        input=json.dumps(command)))
             assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(request(urls["public"], "/api/status")[1])
             command.update(published=True, revision=record["revision"], message="Approved public update")
-            docker("exec", "--interactive", f"{name}-replica", "dotnet", "MX.Platform.Status.Service.dll",
+            started = time.monotonic()
+            record = json.loads(docker("exec", "--interactive", f"{name}-replica", "dotnet", "MX.Platform.Status.Service.dll",
+                                      "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command)))
+            for label, url in urls.items():
+                for host, site in (("mxstatus.io", "mx"), ("status.xtremeidiots.com", "xi")):
+                    wait_for(lambda: any(item["id"] == record["id"]
+                             for item in request(url, "/api/status", host)[1].get("incidents", [])),
+                             f"{label}/{site} shared incident replication", seconds=30)
+                    publication = request(url, "/api/status", host)[1]
+                    component = next(item for item in publication["components"]
+                                     if item["id"] == f"{site}.sitewatch.geo-location-web")
+                    assert component["status"] == "outage"
+                    assert record["id"] in component["openIncidentIds"]
+                    assert "GeoLocation Website" in publication["summary"]["message"]
+            assert time.monotonic() - started < 30, "Shared incident publication must not wait for the probe interval."
+            command.update(revision=record["revision"], severity="degraded", state="identified",
+                           message="Identified the cause; service remains degraded")
+            docker("exec", "--interactive", f"{name}-public", "dotnet", "MX.Platform.Status.Service.dll",
                    "--emergency-publish", "mx", str(record["id"]), input=json.dumps(command))
             for label, url in urls.items():
-                wait_for(lambda: bool(request(url, "/api/status")[1].get("incidents")), f"{label} incident replication")
+                for host in ("mxstatus.io", "status.xtremeidiots.com"):
+                    def updated():
+                        incident = next(item for item in request(url, "/api/status", host)[1]["incidents"]
+                                        if item["id"] == record["id"])
+                        return incident["severity"] == "degraded" and incident["updates"][-1]["state"] == "identified"
+                    wait_for(updated, f"{label}/{host} changed impact and description", seconds=30)
+                    incident = next(item for item in request(url, "/api/status", host)[1]["incidents"]
+                                    if item["id"] == record["id"])
+                    assert [update["severity"] for update in incident["updates"]] == ["outage", "degraded"]
+                    assert [update["state"] for update in incident["updates"]] == ["investigating", "identified"]
             now = datetime.now(timezone.utc)
             maintenance = {
                 "title": "Integration maintenance", "components": ["mx.sitewatch.molyneux-me"],

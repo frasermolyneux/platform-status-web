@@ -105,11 +105,20 @@ is shown separately and retained with a private source reference, not copied int
 and preview, then explicitly choose whether to publish. Promotion alone makes no
 server-side changes.
 
-GeoLocation's website is listed on both brands. XI also includes Servers
-Integration API, Server Events and Server Agent. Server Agent uses private
-Container Apps ingress, so it has no independent public HTTP probe: its status is
-unknown unless an approved incident or maintenance window reports an impact.
-Do not infer healthy availability from the absence of an Azure alert.
+GeoLocation Website is listed on both brands. Approved incidents affecting it
+appear on both sites through explicit shared-component mappings, including when
+declared on only one brand. Other services and private evidence remain isolated.
+Shared incidents are managed on their originating site, or in their source GitHub
+issue. XI also includes Servers Integration API and Server Events. Server Agent
+is omitted until it has a suitable availability signal.
+
+Public pages and idle incident/banner workspaces refresh every five seconds;
+manual incident updates normally reach both origins and the browser within
+15 seconds. Probe collection keeps its separate configured interval. GitHub
+changes still require the source polling interval below. Open editors are not
+replaced by automatic refresh. Incident pages list affected services, source
+issues where applicable, and recorded state/impact changes alongside descriptions.
+Older updates without recorded impact levels are identified as such.
 
 ### Hostname traffic controls
 
@@ -189,6 +198,10 @@ available, with optional local-time start and expiry. Drafts remain private.
 Writes are revision-checked and audited, including writes forwarded from the
 standby application to the primary writer. Public scheduling and expiry are
 evaluated against cached publications even if PostgreSQL is unavailable.
+The publication checkbox controls public visibility. **Archive notice** opens the
+existing text for confirmation and withdraws it when saved; archived notices are
+hidden from the management list unless **Show archived notices** is selected.
+**Restore notice as draft** retains the text without automatically republishing.
 
 ### GitHub incident publishing
 
@@ -217,8 +230,14 @@ public GitHub repository, regardless of rendering.
 Closing resolves the mapped incident; reopening restores its active state.
 Removing the publish label withdraws it without deleting its audit history.
 Source-owned incidents have stable IDs and are edited in GitHub, not in the
-local incident editor. Label, closure and reopening transitions remain in the durable
+local incident editor. Previously published incident links remain valid through
+aliases when the selected brands change. Restoring a brand retains the source's
+latest approved history without copying private drafts.
+Label, closure and reopening transitions remain in the durable
 timeline; unrelated edits and untrusted comments do not rewrite those transitions.
+Observed description edits, reversions and impact changes are retained rather
+than replacing older public updates. Historic impact is not inferred from the
+issue's current labels.
 API failures and incomplete pagination retain the last
 durable incident state and surface a private integration error. Missing issues
 are checked individually before withdrawal to avoid pagination races.

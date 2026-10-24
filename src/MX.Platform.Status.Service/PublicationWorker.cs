@@ -2,6 +2,8 @@ using MX.Platform.Status.App.Contracts;
 using MX.Platform.Status.App.Merging;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.App.Telemetry;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace MX.Platform.Status.Service;
 
@@ -9,6 +11,9 @@ public sealed class PublicationWorker(
     StatusCatalog catalog, RuntimeOptions options, PublicationStore files, PostgresStore database,
     IHttpClientFactory clients, ILogger<PublicationWorker> logger) : BackgroundService
 {
+    private DateTimeOffset nextProbeAt;
+    private readonly Dictionary<string, (string Fingerprint, DateTimeOffset At)> published = [];
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (options.DatabaseConnectionFile is null && options.DatabaseHost is null) return;
@@ -25,7 +30,7 @@ public sealed class PublicationWorker(
             {
                 logger.LogError(exception, "Status background refresh failed; retaining locally persisted publications.");
             }
-            try { await Task.Delay(TimeSpan.FromSeconds(options.Publisher ? options.RefreshSeconds : 10), stoppingToken); }
+            try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
         }
     }
@@ -34,10 +39,15 @@ public sealed class PublicationWorker(
     {
         if (!options.Publisher)
         {
-            foreach (var site in catalog.Sites)
+            foreach (var siteId in catalog.Sites.Select(definition => definition.Site.Id))
             {
-                var publication = await database.ReadPublicationAsync(site.Site.Id, ct);
-                if (publication is not null) await files.WriteAsync(publication, ct);
+                var publication = await database.ReadPublicationAsync(siteId, ct);
+                if (publication is not null && (!published.TryGetValue(siteId, out var previous)
+                    || previous.At != publication.GeneratedAt))
+                {
+                    await files.WriteAsync(publication, ct);
+                    RememberPublication(publication);
+                }
             }
             return;
         }
@@ -51,30 +61,17 @@ public sealed class PublicationWorker(
 
     private async Task PublishAsync(PublisherLease publisherLock, CancellationToken ct)
     {
+        if (DateTimeOffset.UtcNow >= nextProbeAt)
+        {
+            nextProbeAt = DateTimeOffset.UtcNow.AddSeconds(options.RefreshSeconds);
+            await RefreshProbesAsync(publisherLock, ct);
+        }
         foreach (var site in catalog.Sites)
         {
             var publicIds = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
-            var incidents = (await database.ReadPublicationIncidentsAsync(site.Site.Id, ct))
+            var incidents = (await database.ReadIncidentsAsync(catalog, site, true, ct))
                 .Where(i => i.Published && i.Components.All(publicIds.Contains)).ToArray();
-            var live = new Dictionary<string, ComponentLiveTelemetry>();
-            foreach (var (component, target) in site.Probes)
-            {
-                var name = StatusCatalog.Flatten(site.Components.Components).Single(item => item.Id == component).Name;
-                var observation = await IndependentProbe.ObserveAsync(
-                    clients.CreateClient("probe"), site.Site.Id, component, name, target, ct);
-                if (!observation.Success)
-                    logger.LogWarning("Independent probe failed for {Site}/{Component}: {Reason}.",
-                        site.Site.Id, component, observation.Error);
-                await publisherLock.SaveProbeEvidenceAsync(observation, ct);
-                var now = observation.ObservedAt;
-                var maintenance = incidents.Any(i => i.Severity == Severity.Maintenance
-                    && i.State != IncidentState.Resolved && i.ScheduledStart <= now && i.ScheduledEnd > now
-                    && i.Components.Any(id => StatusCatalog.Flatten(site.Components.Components)
-                        .Where(c => c.Id == id).SelectMany(c => StatusCatalog.Flatten([c])).Any(c => c.Id == component)));
-                if (!maintenance) await publisherLock.RecordProbeAsync(site.Site.Id, component, observation.Success, ct);
-                live[component] = new ComponentLiveTelemetry(1, observation.Success ? 0 : 1, now, null);
-            }
-
+            var live = LatestTelemetry(site, await database.ReadProbesAsync(site.Site.Id, ct));
             var history = await database.ReadHistoryAsync(site, ct);
             var publication = new StatusMerger().Merge(site.Snapshot, live, history,
                 incidents.Select(i => i.ToPublicIncident()),
@@ -83,13 +80,68 @@ public sealed class PublicationWorker(
             publication = publication with
             {
                 Banners = (await database.ReadBannersAsync(site.Site.Id, ct))
-                    .Where(banner => banner.Published && (!banner.ExpiresAt.HasValue || banner.ExpiresAt > DateTimeOffset.UtcNow))
+                    .Where(banner => banner.Published && !banner.Archived
+                        && (!banner.ExpiresAt.HasValue || banner.ExpiresAt > DateTimeOffset.UtcNow))
                     .Select(banner => banner.ToPublicBanner()).ToArray()
             };
-            await publisherLock.SavePublicationAsync(publication, ct);
-            await files.WriteAsync(publication, ct);
+            if (RequiresPublication(publication))
+            {
+                await publisherLock.SavePublicationAsync(publication, ct);
+                await files.WriteAsync(publication, ct);
+                RememberPublication(publication);
+            }
         }
     }
+
+    private static string Fingerprint(StatusApiResponse publication) => Convert.ToHexString(SHA256.HashData(
+        JsonSerializer.SerializeToUtf8Bytes(publication with { GeneratedAt = DateTimeOffset.UnixEpoch, DataFreshness = null },
+            StatusJson.Options)));
+
+    private bool RequiresPublication(StatusApiResponse publication) =>
+        !published.TryGetValue(publication.Site.Id, out var previous)
+        || previous.Fingerprint != Fingerprint(publication)
+        || publication.GeneratedAt - previous.At >= TimeSpan.FromSeconds(options.RefreshSeconds);
+
+    private void RememberPublication(StatusApiResponse publication) =>
+        published[publication.Site.Id] = (Fingerprint(publication), publication.GeneratedAt);
+
+    internal static Dictionary<string, ComponentLiveTelemetry> LatestTelemetry(
+        SiteDefinition site, IReadOnlyList<ProbeObservation> probes) =>
+        probes.Where(probe => probe.Site == site.Site.Id && site.Probes.ContainsKey(probe.Component))
+            .GroupBy(probe => probe.Component).Select(group => group.MaxBy(probe => probe.ObservedAt)!)
+            .ToDictionary(probe => probe.Component, probe =>
+                new ComponentLiveTelemetry(1, probe.Success ? 0 : 1, probe.ObservedAt, null));
+
+    private async Task RefreshProbesAsync(PublisherLease lease, CancellationToken ct)
+    {
+        var observations = await Task.WhenAll(catalog.Sites.SelectMany(site => site.Probes.Select(async probe =>
+        {
+            var name = StatusCatalog.Flatten(site.Components.Components).Single(component => component.Id == probe.Key).Name;
+            return await IndependentProbe.ObserveAsync(clients.CreateClient("probe"),
+                site.Site.Id, probe.Key, name, probe.Value, ct);
+        })));
+        foreach (var site in catalog.Sites)
+        {
+            var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);
+            foreach (var observation in observations.Where(observation => observation.Site == site.Site.Id))
+            {
+                if (!observation.Success)
+                    logger.LogWarning("Independent probe failed for {Site}/{Component}: {Reason}.",
+                        site.Site.Id, observation.Component, observation.Error);
+                await lease.SaveProbeEvidenceAsync(observation, ct);
+                if (!IsMaintained(site, observation, incidents))
+                    await lease.RecordProbeAsync(site.Site.Id, observation.Component, observation.Success, ct);
+            }
+        }
+    }
+
+    private static bool IsMaintained(SiteDefinition site, ProbeObservation observation, IReadOnlyList<IncidentRecord> incidents) =>
+        incidents.Any(incident => incident.Published && incident.Severity == Severity.Maintenance
+            && incident.State != IncidentState.Resolved && incident.ScheduledStart <= observation.ObservedAt
+            && incident.ScheduledEnd > observation.ObservedAt
+            && incident.Components.Any(id => StatusCatalog.PublicComponents(site.Components.Components)
+                .Where(component => component.Id == id).SelectMany(component => StatusCatalog.PublicComponents([component]))
+                .Any(component => component.Id == observation.Component)));
 
     internal static StatusApiResponse CorrectTodayHistory(StatusApiResponse publication, HistoryDocument history) =>
         publication with { Components = publication.Components.Select(c => CorrectComponent(c, history)).ToArray() };

@@ -3,6 +3,8 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using MX.Platform.Status.App.Contracts;
 using MX.Platform.Status.App.Models;
+using MX.Platform.Status.App.Merging;
+using MX.Platform.Status.App.Telemetry;
 using MX.Platform.Status.Service;
 
 namespace MX.Platform.Status.Tests;
@@ -11,6 +13,254 @@ public sealed class StatusExperienceTests
 {
     private static StatusCatalog Catalogue() => new(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
     private static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
+
+    [Theory]
+    [InlineData(Severity.Outage, "outage")]
+    [InlineData(Severity.Degraded, "degraded")]
+    [InlineData(Severity.Maintenance, "maintenance")]
+    public void SharedIncidentsOverrideHealthyChecksOnBothBrandsWithoutSharingPrivateDrafts(Severity severity, string expected)
+    {
+        var catalog = Catalogue();
+        var now = DateTimeOffset.UtcNow;
+        var command = new IncidentCommand("GeoLocation disruption", ["mx.sitewatch.geo-location-web"], severity,
+            IncidentState.Identified, "Public update", true,
+            ScheduledStart: severity == Severity.Maintenance ? now.AddMinutes(-1) : null,
+            ScheduledEnd: severity == Severity.Maintenance ? now.AddMinutes(10) : null);
+        var source = command.Apply(27, "mx", null, now);
+        foreach (var site in catalog.Sites)
+        {
+            var projected = Assert.Single(catalog.ProjectIncidents(site, [source]));
+            Assert.Equal([$"{site.Site.Id}.sitewatch.geo-location-web"], projected.Components);
+            var live = site.Probes.ToDictionary(probe => probe.Key, _ => new ComponentLiveTelemetry(1, 0, now, null));
+            var result = new StatusMerger().Merge(site.Snapshot, live, null, [projected.ToPublicIncident()],
+                severity == Severity.Maintenance ? [projected.ToMaintenance(now)] : []);
+            var component = Assert.Single(result.Components, component => component.Id == projected.Components[0]);
+            Assert.Equal(expected, component.Status);
+            Assert.Contains(27, component.OpenIncidentIds!);
+            Assert.Contains("GeoLocation Website", result.Summary.Message);
+        }
+        Assert.Empty(catalog.ProjectIncidents(catalog.Get("xi"), [source with { Published = false }]));
+        Assert.Empty(catalog.ProjectIncidents(catalog.Get("xi"), [source with { Components = ["mx.sitewatch.bishopsbees"] }]));
+        var reverse = source with { SiteId = "xi", Components = ["xi.sitewatch.geo-location-web"] };
+        Assert.Equal(["mx.sitewatch.geo-location-web"], Assert.Single(catalog.ProjectIncidents(catalog.Get("mx"), [reverse])).Components);
+    }
+
+    [Fact]
+    public void SharedSourceIncidentsAreDeduplicatedAndDoNotExposePrivateUpdates()
+    {
+        var catalog = Catalogue();
+        var first = new IncidentCommand("Shared incident", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Investigating, "Approved description", true).Apply(30, "mx", null, Created);
+        first = first with
+        {
+            SourceUrl = "https://github.com/frasermolyneux/status-pages/issues/42",
+            Updates = [new() { At = Created, Body = "PRIVATE_DRAFT" }],
+            Evidence = new("source", "private", Created, "PRIVATE_CONTEXT")
+        };
+        var projected = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [first]));
+        Assert.Null(projected.Evidence);
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(projected, StatusJson.Options));
+        var local = first with { Id = 31, SiteId = "xi", Components = ["xi.sitewatch.geo-location-web"] };
+        var preferred = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [first, local]));
+        Assert.Equal(31, preferred.Id);
+        Assert.Contains(30, preferred.PublicAliases);
+        var publication = new StatusMerger().Merge(catalog.Get("xi").Snapshot, new Dictionary<string, ComponentLiveTelemetry>(),
+            null, [preferred.ToPublicIncident()], []);
+        Assert.Contains(30, Assert.Single(publication.Incidents).Aliases!);
+        Assert.True(Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [first, local with { Published = false }])).Published);
+        var apiOnly = first with { Components = ["mx.sitewatch.geo-location-api"] };
+        var combined = Assert.Single(catalog.ProjectIncidents(catalog.Get("mx"), [apiOnly, local]));
+        Assert.Contains("mx.sitewatch.geo-location-api", combined.Components);
+        Assert.Contains("mx.sitewatch.geo-location-web", combined.Components);
+    }
+
+    [Fact]
+    public void IncidentHistoryRetainsEachPublishedStateImpactAndDescription()
+    {
+        var command = new IncidentCommand("Incident", ["mx.sitewatch.geo-location-web"], Severity.Degraded,
+            IncidentState.Investigating, "Investigating", true);
+        var first = command.Apply(3, "mx", null, Created);
+        var second = (command with { State = IncidentState.Identified, Severity = Severity.Outage, Message = "Impact confirmed" })
+            .Apply(3, "mx", first, Created.AddMinutes(1));
+        Assert.Equal([Severity.Degraded, Severity.Outage], second.PublicUpdates.Select(update => update.Severity));
+        Assert.Equal([IncidentState.Investigating, IncidentState.Identified], second.PublicUpdates.Select(update => update.State));
+        Assert.Equal(["Investigating", "Impact confirmed"], second.PublicUpdates.Select(update => update.Body));
+    }
+
+    [Fact]
+    public void GitHubDescriptionAndSeverityEditsRemainInHistoryWithoutRepeatingOnEverySync()
+    {
+        var catalog = Catalogue();
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(body: "Original description"), [], catalog, new()));
+        Assert.Null(first.PublicUpdates[0].Severity);
+        var labels = new[] { "status:incident", "status:published", "site:mx", "workload:geo-location", "severity:degraded" };
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: "Revised description", updatedMinutes: 10),
+            [], catalog, new(), [first]));
+        Assert.Contains(edited.PublicUpdates, update => update.Body == "Original description");
+        Assert.Contains(edited.PublicUpdates, update => update.Body == "Revised description" && update.At == Created.AddMinutes(10));
+        Assert.Contains(edited.PublicUpdates, update => update.Severity == Severity.Degraded);
+        var repeated = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: "Revised description", updatedMinutes: 15, title: "Renamed"),
+            [], catalog, new(), [edited]));
+        Assert.Equal(edited.PublicUpdates, repeated.PublicUpdates);
+        Assert.Equal(first.SourceUrl, repeated.ToPublicIncident().SourceUrl);
+        var reverted = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: "Original description", updatedMinutes: 20),
+            [], catalog, new(), [repeated]));
+        Assert.Equal("Original description", reverted.PublicUpdates[^1].Body);
+        Assert.Equal(Created.AddMinutes(20), reverted.PublicUpdates[^1].At);
+        var identifiedLabels = labels.Append("state:identified").ToArray();
+        var identified = Assert.Single(GitHubIssueParser.Parse(Issue(identifiedLabels, body: "Original description", updatedMinutes: 25),
+            [], catalog, new(), [reverted]));
+        var editedAfterIdentification = Assert.Single(GitHubIssueParser.Parse(Issue(identifiedLabels, body: "Identified cause", updatedMinutes: 30),
+            [], catalog, new(), [identified]));
+        Assert.Equal(IncidentState.Identified, editedAfterIdentification.PublicUpdates[^1].State);
+        Assert.Equal("Identified cause", editedAfterIdentification.PublicUpdates[^1].Body);
+    }
+
+    [Fact]
+    public void GitHubPublicHistoryNeverIncludesSupersededDraftsOrUnapprovedStateTransitions()
+    {
+        var catalog = Catalogue();
+        string[] draftLabels = ["status:incident", "site:mx", "workload:geo-location", "severity:outage", "state:identified"];
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(draftLabels, body: "PRIVATE_FIRST"), [], catalog, new()));
+        var draft = Assert.Single(GitHubIssueParser.Parse(Issue(draftLabels, body: "PRIVATE_REPLACEMENT", updatedMinutes: 10),
+            [], catalog, new(), [first]));
+        var approvedLabels = draftLabels.Select(label => label == "state:identified" ? "state:monitoring" : label)
+            .Append("status:published").ToArray();
+        var approved = Assert.Single(GitHubIssueParser.Parse(Issue(approvedLabels, body: "Approved update", updatedMinutes: 15),
+            [], catalog, new(), [draft]));
+        var withdrawn = Assert.Single(GitHubIssueParser.Parse(Issue(draftLabels, body: "PRIVATE_WITHDRAWN", updatedMinutes: 20),
+            [], catalog, new(), [approved]));
+        var republished = Assert.Single(GitHubIssueParser.Parse(Issue(approvedLabels, body: "Approved correction", updatedMinutes: 25),
+            [], catalog, new(), [withdrawn]));
+        Assert.Contains(republished.Updates, update => update.Body == "PRIVATE_FIRST");
+        Assert.Contains(republished.PublicUpdates, update => update.Body == "Approved update");
+        Assert.Contains(republished.PublicUpdates, update => update.Body == "Approved correction");
+        Assert.DoesNotContain(republished.PublicUpdates, update => update.State == IncidentState.Identified);
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(republished.ToPublicIncident(), StatusJson.Options));
+        var shared = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [republished]));
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(shared, StatusJson.Options));
+    }
+
+    [Fact]
+    public void AddingAGitHubSiteRetainsTheAlreadySharedApprovedHistoryWithoutCopyingPrivateDrafts()
+    {
+        var catalog = Catalogue();
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(body: "Original update"), [], catalog, new()));
+        string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:degraded", "state:identified"];
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: "Corrected update", updatedMinutes: 10),
+            [], catalog, new(), [first]));
+        edited = edited with { Updates = [.. edited.Updates, new() { At = Created.AddMinutes(11), Body = "PRIVATE_DRAFT" }] };
+        var both = GitHubIssueParser.Parse(Issue([.. labels, "site:xi"], body: "Corrected update", updatedMinutes: 15),
+            [], catalog, new(), [edited]);
+        var xi = Assert.Single(both, record => record.SiteId == "xi");
+        Assert.Equal(edited.PublicUpdates, xi.PublicUpdates);
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(xi, StatusJson.Options));
+        Assert.Equal(xi.PublicUpdates, Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), both)).PublicUpdates);
+    }
+
+    [Fact]
+    public void RestoringAGitHubSiteKeepsIntermediateApprovedUpdatesAndPreviouslyPublishedLinks()
+    {
+        var catalog = Catalogue();
+        string[] bothLabels = ["status:incident", "status:published", "site:mx", "site:xi", "workload:geo-location", "severity:outage"];
+        var initial = GitHubIssueParser.Parse(Issue(bothLabels, body: "Original"), [], catalog, new());
+        var mx = Assert.Single(initial, record => record.SiteId == "mx") with { Id = 30 };
+        var withdrawn = Assert.Single(initial, record => record.SiteId == "xi") with { Id = 31, Published = false };
+        var mxLabels = bothLabels.Where(label => label != "site:xi").ToArray();
+        mx = Assert.Single(GitHubIssueParser.Parse(Issue(mxLabels, body: "Intermediate correction", updatedMinutes: 10),
+            [], catalog, new(), [mx, withdrawn])) with
+        { Id = 30 };
+        mx = Assert.Single(GitHubIssueParser.Parse(Issue(mxLabels, body: "Latest correction", updatedMinutes: 15),
+            [], catalog, new(), [mx, withdrawn])) with
+        { Id = 30 };
+        var restored = GitHubIssueParser.Parse(Issue(bothLabels, body: "Latest correction", updatedMinutes: 20),
+            [], catalog, new(), [mx, withdrawn]);
+        var xi = Assert.Single(restored, record => record.SiteId == "xi") with { Id = 31 };
+        Assert.Equal(mx.PublicUpdates, xi.PublicUpdates);
+        Assert.Contains(xi.PublicUpdates, update => update.Body == "Intermediate correction" && update.At == Created.AddMinutes(10));
+        Assert.Contains(xi.PublicUpdates, update => update.Body == "Latest correction" && update.At == Created.AddMinutes(15));
+        Assert.Contains(30, xi.PublicAliases);
+        var projected = Assert.Single(catalog.ProjectIncidents(catalog.Get("xi"), [mx with { Published = false }, xi]));
+        Assert.Contains(30, projected.ToPublicIncident().Aliases);
+    }
+
+    [Fact]
+    public void GitHubUpdatesDiscoveredBeforeAnImpactChangeKeepTheirHistoricSeverityUnknown()
+    {
+        var catalog = Catalogue();
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(), [], catalog, new()));
+        var comment = JsonSerializer.SerializeToElement(new
+        {
+            body = "An earlier update",
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(6)
+        });
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(
+            ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:degraded"], updatedMinutes: 10),
+            [comment], catalog, new(), [first]));
+        Assert.Null(Assert.Single(edited.PublicUpdates, update => update.Body == "An earlier update").Severity);
+        Assert.Equal(Severity.Degraded, edited.PublicUpdates[^1].Severity);
+        Assert.Equal(Created.AddMinutes(10), edited.PublicUpdates[^1].At);
+    }
+
+    [Fact]
+    public void GitHubStateOnlyCommentEditsCreateOneObservedHistoryEntry()
+    {
+        var catalog = Catalogue();
+        static JsonElement Comment(string state) => JsonSerializer.SerializeToElement(new
+        {
+            body = $"state: {state}\nSame description",
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(1)
+        });
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(), [Comment("investigating")], catalog, new()));
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(updatedMinutes: 10),
+            [Comment("identified")], catalog, new(), [first]));
+        Assert.Equal(IncidentState.Identified, edited.State);
+        Assert.Equal(IncidentState.Identified, edited.PublicUpdates[^1].State);
+        Assert.Equal(Created.AddMinutes(10), edited.PublicUpdates[^1].At);
+        var repeated = Assert.Single(GitHubIssueParser.Parse(Issue(updatedMinutes: 15, title: "Renamed"),
+            [Comment("identified")], catalog, new(), [edited]));
+        Assert.Equal(edited.PublicUpdates, repeated.PublicUpdates);
+    }
+
+    [Fact]
+    public void EditingAnEarlierStateHeaderDoesNotRewriteUnchangedLaterComments()
+    {
+        var catalog = Catalogue();
+        static JsonElement Comment(string body, int minute) => JsonSerializer.SerializeToElement(new
+        {
+            body,
+            user = new { login = "frasermolyneux" },
+            created_at = Created.AddMinutes(minute)
+        });
+        string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "severity:outage", "state:monitoring"];
+        var later = Comment("Unchanged later comment", 2);
+        var first = Assert.Single(GitHubIssueParser.Parse(Issue(labels),
+            [Comment("state: investigating\nEarlier update", 1), later], catalog, new()));
+        var edited = Assert.Single(GitHubIssueParser.Parse(Issue(labels, updatedMinutes: 10),
+            [Comment("state: identified\nEarlier update", 1), later], catalog, new(), [first]));
+        var unchanged = Assert.Single(edited.PublicUpdates, update => update.Body == "Unchanged later comment");
+        Assert.Equal(Created.AddMinutes(2), unchanged.At);
+        Assert.Equal(IncidentState.Investigating, unchanged.State);
+        Assert.Equal(IncidentState.Monitoring, edited.PublicUpdates[^1].State);
+        Assert.Equal(2, edited.PublicUpdates.Count(update => update.Body == "Earlier update"));
+    }
+
+    [Fact]
+    public void PublicationUsesTheLatestObservationWithoutMakingPersistedEvidenceAppearFresh()
+    {
+        var site = Catalogue().Get("mx");
+        const string id = "mx.sitewatch.geo-location-web";
+        var first = new ProbeObservation("mx", id, "GeoLocation Website", site.Probes[id], "publisher",
+            Created, false, 503, 10, "HTTP 503");
+        var latest = first with { ObservedAt = Created.AddMinutes(1), Success = true, HttpStatus = 200, Error = null };
+        var result = PublicationWorker.LatestTelemetry(site, [latest, first,
+            latest with { Site = "xi" }, latest with { Component = "removed-component" }]);
+        var observation = Assert.Single(result).Value;
+        Assert.Equal(latest.ObservedAt, observation.LastSeen);
+        Assert.Equal(0, observation.Failures);
+    }
 
     [Fact]
     public void EvidencePromotionKeepsItsSourcePrivatelyAcrossEditsAndNeverAddsItToPublicUpdates()
@@ -81,10 +331,7 @@ public sealed class StatusExperienceTests
         Assert.True(forums.MatchesPublication);
         Assert.Equal(7, Assert.Single(forums.Incidents).Id);
         Assert.DoesNotContain(checks, check => check.Id.StartsWith("mx.", StringComparison.Ordinal));
-        var agent = Assert.Single(checks, check => check.Id == "xi.server-agent");
-        Assert.Null(agent.Target);
-        Assert.Null(agent.Probe);
-        Assert.Equal("unknown", agent.Status);
+        Assert.DoesNotContain(checks, check => check.Id == "xi.server-agent");
         var failure = probe with { Success = false, HttpStatus = 503, Error = "HTTP 503", ObservedAt = Created.AddMinutes(-1) };
         var nextCycle = HealthDiagnostics.Build(Catalogue().Get("xi"), publication,
             [failure, probe with { ObservedAt = Created.AddMinutes(1) }]);
@@ -103,7 +350,7 @@ public sealed class StatusExperienceTests
         Assert.Equal(2, both.Count);
         Assert.Equal(["xi.sitewatch.geo-location-web"], Assert.Single(both, record => record.SiteId == "xi").Components);
         var xi = Catalogue().Get("xi");
-        foreach (var workload in new[] { "portal-servers-integration", "portal-server-events", "portal-server-agent" })
+        foreach (var workload in new[] { "portal-servers-integration", "portal-server-events" })
         {
             var record = Assert.Single(GitHubIssueParser.Parse(Issue([
                 "status:incident", "status:published", "site:xi", $"workload:{workload}", "severity:degraded"
@@ -240,6 +487,13 @@ public sealed class StatusExperienceTests
         var monitoringLabels = identifiedLabels.Select(label => label == "state:identified" ? "state:monitoring" : label).ToArray();
         var monitoring = Assert.Single(GitHubIssueParser.Parse(
             Issue(monitoringLabels, updatedMinutes: 10), [], Catalogue(), new(), [identified]));
+        var persisted = JsonSerializer.SerializeToNode(monitoring, StatusJson.Options)!.AsObject();
+        foreach (var name in new[] { "publicSourceUpdates", "publicSourceStateUpdates", "publicSourceSeverity" })
+            persisted.Remove(name);
+        var legacy = persisted.Deserialize<IncidentRecord>(StatusJson.Options)!;
+        var upgraded = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels, updatedMinutes: 15, title: "Corrected title"), [], Catalogue(), new(), [legacy]));
+        Assert.Equal(monitoring.PublicUpdates, upgraded.PublicUpdates);
         Assert.Equal([IncidentState.Investigating, IncidentState.Identified, IncidentState.Monitoring],
             monitoring.PublicUpdates.Select(update => update.State));
         var edited = Assert.Single(GitHubIssueParser.Parse(

@@ -13,6 +13,8 @@ let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
 let trafficReadStarted = 0;
 let rejectTrafficRead = false;
+let incidentReadGate: Promise<void> | undefined;
+let incidentReads = 0;
 function trafficRow(mode = 'normal', revision = 0,
   lastOperation: { actor: string; reason: string; updatedAt: string; phase: string; mode: string } | null = null) {
   return { hostname: 'bishopsbees.co.uk', mode, revision, state: mode === 'normal' ? 'normal' : 'active',
@@ -64,6 +66,8 @@ beforeEach(() => {
   trafficReadGate = undefined;
   trafficReadStarted = 0;
   rejectTrafficRead = false;
+  incidentReadGate = undefined;
+  incidentReads = 0;
   globalThis.fetch = async (input, init) => {
     const path = String(input);
     if (init?.method === 'POST' || init?.method === 'PUT') {
@@ -87,6 +91,10 @@ beforeEach(() => {
       return Response.json({ enabled: true, hosts,
         quota: { requests: 85000, freeDailyAllowance: 100000, warning: true, observedAt: timestamp, error: null } });
     }
+    if (path === '/api/ops/incidents') {
+      incidentReads++;
+      await incidentReadGate;
+    }
     const fixtures: Record<string, unknown> = {
       '/api/auth/config': { enabled: true, clientId: 'client', tenantId: 'tenant', scope: 'Status.Access' },
       '/api/status': {
@@ -95,7 +103,8 @@ beforeEach(() => {
       },
       '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
       '/api/ops/incidents': [{
-        id: 1, title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
+        id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
+        title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
         sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/1',
       }],
       '/api/ops/banners': existingBanners,
@@ -290,6 +299,89 @@ test('banner editor previews untrusted text safely and sends explicit brand-scop
   assert.equal(writes[0].body.published, true);
   assert.equal(writes[0].body.message, '<img src=x onerror=alert(1)> Plain text notice');
   assert.equal(sessionStorage.length, 0);
+});
+
+test('notices can be archived without deleting their text and restored only as drafts', async () => {
+  existingBanners = [
+    { id: 7, revision: 2, title: 'Current notice', message: 'Retain this text', tone: 'warning', published: true },
+    { id: 8, revision: 3, title: 'Archived notice', message: 'Older text', tone: 'info', published: false, archived: true },
+  ];
+  await renderOperations();
+  assert.doesNotMatch(document.querySelector('#operator-banners')?.textContent || '', /Archived notice/);
+  sessionStorage.setItem('status-draft:test-account:mx:banner:7',
+    JSON.stringify({ revision: 2, values: { archived: false, published: true } }));
+  click('Archive notice');
+  assert.equal(document.querySelector<HTMLInputElement>('[name="archived"]')?.checked, true);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="published"]')?.checked, false);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="published"]')?.disabled, true);
+  assert.match(document.querySelector('form')?.textContent || '', /Show this notice on the public status page/);
+  document.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => document.querySelector<HTMLElement>('.editor-panel')!.hidden === true);
+  assert.equal(writes[0].body.archived, true);
+  assert.equal(writes[0].body.published, false);
+  assert.equal(writes[0].body.message, 'Retain this text');
+  const filter = document.querySelector<HTMLInputElement>('[name="showArchived"]')!;
+  filter.checked = true;
+  filter.dispatchEvent(new window.Event('change'));
+  assert.match(document.querySelector('#operator-banners')?.textContent || '', /Archived notice/);
+  click('Restore notice as draft');
+  assert.equal(document.querySelector<HTMLInputElement>('[name="archived"]')?.checked, false);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="published"]')?.checked, false);
+});
+
+test('incident workspaces refresh automatically without replacing an unsaved editor', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  await renderOperations();
+  const root = document.querySelector('#app')!;
+  writerWritable = false;
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await until(() => (document.querySelector('[role="status"]')?.textContent || '').includes('Writer unavailable'));
+  writerWritable = true;
+  click('Refresh workspace');
+  await until(() => !Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New incident')!.disabled);
+  click('New incident');
+  setValue('title', 'Keep this unsaved title');
+  const editor = document.querySelector('form');
+  writerWritable = false;
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(document.querySelector('form'), editor);
+  assert.equal(document.querySelector<HTMLInputElement>('[name="title"]')?.value, 'Keep this unsaved title');
+  assert.ok(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New incident')!.disabled === false);
+});
+
+for (const section of ['incidents', 'evidence-drafts']) test(`automatic workspace refresh preserves ${section} keyboard focus before and during a pending read`, async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  sessionStorage.setItem('status-evidence-draft:test-account:mx:focus-draft', JSON.stringify({
+    title: 'Evidence draft', message: 'Review this update', context: 'Private context',
+    components: ['mx.sitewatch.molyneux-me'], severity: 'degraded', state: 'investigating',
+    evidence: { source: 'azure-alert', id: 'alert-1', observedAt: timestamp },
+  }));
+  await renderOperations();
+  const root = document.querySelector('#app')!;
+  const selector = section === 'incidents' ? '#operator-incidents a[href*="/issues/1"]' : '#operator-evidence-drafts a';
+  const management = document.querySelector<HTMLAnchorElement>(selector)!;
+  const refreshButton = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Refresh workspace')!;
+  management.focus();
+  const initialReads = incidentReads;
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(incidentReads, initialReads);
+  assert.equal(document.activeElement, management);
+  management.blur();
+  let finish!: () => void;
+  incidentReadGate = new Promise(resolve => { finish = resolve; });
+  writerWritable = false;
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await until(() => incidentReads > initialReads);
+  management.focus();
+  finish();
+  await until(() => !refreshButton.disabled);
+  assert.equal(document.activeElement, management);
+  assert.ok(management.isConnected);
+  management.blur();
+  root.dispatchEvent(new window.Event('status:refresh-workspace'));
+  await until(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'New incident')!.disabled);
 });
 
 test('conflicts and expired sessions preserve the unsaved form and its tab-scoped draft', async () => {

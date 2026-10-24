@@ -131,6 +131,17 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     public Task<IReadOnlyList<IncidentRecord>> ReadIncidentsAsync(string site, CancellationToken ct) =>
         ReadIncidentDocumentsAsync(site, "SELECT document::text FROM status_incidents WHERE site_id=$1 ORDER BY id DESC LIMIT 1000", ct);
 
+    public async Task<IReadOnlyList<IncidentRecord>> ReadIncidentsAsync(StatusCatalog catalog, SiteDefinition site,
+        bool publication, CancellationToken ct)
+    {
+        var records = new List<IncidentRecord>();
+        foreach (var sourceId in catalog.Sites.Select(definition => definition.Site.Id))
+            records.AddRange(publication || sourceId != site.Site.Id
+                ? await ReadPublicationIncidentsAsync(sourceId, ct)
+                : await ReadIncidentsAsync(sourceId, ct));
+        return catalog.ProjectIncidents(site, records);
+    }
+
     public Task<IReadOnlyList<IncidentRecord>> ReadPublicationIncidentsAsync(string site, CancellationToken ct) =>
         ReadIncidentDocumentsAsync(site, """
             SELECT document::text FROM (

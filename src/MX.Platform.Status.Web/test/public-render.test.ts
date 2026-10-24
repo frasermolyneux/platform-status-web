@@ -2,6 +2,48 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { affectedComponents, evidenceCards, incidentSeed } from '../src/client/evidence';
+import type { StatusResponse } from '../src/client/api';
+
+test('incidents identify affected services on cards and component pages, and link their actual GitHub source', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderOverview, renderComponent, renderIncident, renderHistory } = await import('../src/client/render');
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'mx', displayName: 'MX status' }, generatedAt: new Date().toISOString(),
+    summary: { status: 'outage', message: 'Outage: GeoLocation Website.' }, maintenance: [],
+    components: [{ id: 'geo', name: 'GeoLocation Website', kind: 'leaf', status: 'outage', uptimeWindowDays: 90, uptimeRatio: 1, history: [], openIncidentIds: [2] }],
+    incidents: [{ id: 2, title: 'Email delays', components: ['geo'], severity: 'outage', state: 'identified',
+      url: '/incident/2', sourceUrl: 'https://github.com/frasermolyneux/status-pages/issues/42', createdAt: '2026-10-23T08:00:00Z',
+      updates: [
+        { at: '2026-10-23T08:00:00Z', state: 'investigating', severity: 'degraded', body: 'Investigating email delivery' },
+        { at: '2026-10-23T09:00:00Z', state: 'identified', severity: 'outage', body: 'Confirmed impact' },
+      ] }],
+  };
+  for (const render of [renderOverview, renderHistory]) {
+    render(data);
+    assert.match(document.querySelector('.affected-services')?.textContent || '', /GeoLocation Website/);
+    assert.equal(document.querySelector<HTMLAnchorElement>('.affected-services a')?.getAttribute('href'), '/component/geo');
+  }
+  for (const severity of ['outage', 'degraded', 'maintenance']) {
+    data.components[0].status = severity;
+    renderComponent(data, 'geo');
+    assert.ok(document.querySelector(`.component-detail-status.status-${severity} .status-dot`));
+    assert.match(document.querySelector('.incidents-section')?.textContent || '', /Email delays/);
+  }
+  renderIncident(data, '2');
+  assert.equal(document.querySelector<HTMLAnchorElement>('a[href*="/issues/42"]')?.href, data.incidents[0].sourceUrl);
+  const entries = document.querySelectorAll('.timeline-entry');
+  assert.match(entries[0].textContent || '', /identified.*outage/s);
+  assert.match(entries[1].textContent || '', /investigating.*degraded/s);
+  data.incidents[0].aliases = [20];
+  renderIncident(data, '20');
+  assert.match(document.querySelector('#app h2')?.textContent || '', /Email delays/);
+  data.incidents[0].sourceUrl = 'javascript:alert(1)';
+  renderIncident(data, '2');
+  assert.equal(document.querySelector('a[href^="javascript:"]'), null);
+  assert.doesNotMatch(document.querySelector('#app')?.textContent || '', /View GitHub issue/);
+});
 
 test('public rendering keeps announcements plain text and incident excerpts readable', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
