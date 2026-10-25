@@ -28,6 +28,7 @@ public sealed record CheckResult(string Site, string CheckId, [property: JsonReq
     public string? Name { get; init; }
     public MonitoringReference? Monitoring { get; init; }
     public string? ObservationKey { get; init; }
+    internal string HistoryKey => ObservationKey ?? $"{ObservedAt:O}/{Status}";
     public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
     public IReadOnlyDictionary<string, string> RegionMessages { get; init; } = new Dictionary<string, string>();
 

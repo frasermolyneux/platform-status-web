@@ -478,6 +478,9 @@ public sealed partial class IndependentServiceTests : IDisposable
                     new("mx", $"{fixture}.one-sided", ComponentStatus.Operational, observedAt) { ObservationKey = "one-sided-1" }
                 ];
                 await database.SaveMonitoringChecksAsync(initial, default);
+                await database.SaveMonitoringChecksAsync(initial, default);
+                Assert.Single(await lease.ReadPendingMonitoringAsync(default),
+                    batch => batch.Signals.Any(signal => signal.CheckId == $"{fixture}.fast"));
                 for (var restart = 0; restart < 2; restart++)
                 {
                     using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
@@ -538,11 +541,50 @@ public sealed partial class IndependentServiceTests : IDisposable
                         $"ALTER TABLE status_probe_days DROP CONSTRAINT {constraint}", lease.Connection);
                     await restore.ExecuteNonQueryAsync();
                 }
+                await database.SaveMonitoringChecksAsync(initial.Where(result =>
+                        result.CheckId == $"{fixture}.fast" || result.CheckId == $"{fixture}.slow")
+                    .Select(result => result with
+                    {
+                        Status = ComponentStatus.Operational,
+                        ObservedAt = observedAt.AddMilliseconds(300),
+                        ObservationKey = $"recovery/{result.CheckId}"
+                    }).ToArray(), default);
+                Assert.Equal(2, (await lease.ReadPendingMonitoringAsync(default))
+                    .Count(batch => batch.Signals.Any(signal => signal.CheckId == $"{fixture}.fast")));
                 await normal.PublishAsync(lease, default);
                 await normal.PublishAsync(lease, default);
+                Assert.Empty(await lease.ReadPendingMonitoringAsync(default));
                 foreach (var site in catalog.Sites)
-                    Assert.Equal(3, Assert.Single((await database.ReadHistoryAsync(site, default))
-                        .ComponentsById[$"{site.Site.Id}.{fixture}"].Days).Total);
+                {
+                    var day = Assert.Single((await database.ReadHistoryAsync(site, default))
+                        .ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
+                    Assert.Equal(4, day.Total);
+                    Assert.Equal(3, day.Failed);
+                }
+
+                for (var index = 0; index < PublisherLease.MonitoringBatchLimit + 2; index++)
+                    await database.SaveMonitoringChecksAsync(refreshed.Select(result => result with
+                    {
+                        Status = index % 2 == 0 ? ComponentStatus.Outage : ComponentStatus.Operational,
+                        ObservedAt = observedAt.AddMilliseconds(400 + index),
+                        ObservationKey = $"backlog-{index}"
+                    }).ToArray(), default);
+                await normal.PublishAsync(lease, default);
+                Assert.Equal(2, (await lease.ReadPendingMonitoringAsync(default)).Count);
+                foreach (var site in catalog.Sites)
+                    Assert.Equal(4 + PublisherLease.MonitoringBatchLimit,
+                        Assert.Single((await database.ReadHistoryAsync(site, default))
+                            .ComponentsById[$"{site.Site.Id}.{fixture}"].Days).Total);
+                await normal.PublishAsync(lease, default);
+                await normal.PublishAsync(lease, default);
+                Assert.Empty(await lease.ReadPendingMonitoringAsync(default));
+                foreach (var site in catalog.Sites)
+                {
+                    var day = Assert.Single((await database.ReadHistoryAsync(site, default))
+                        .ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
+                    Assert.Equal(6 + PublisherLease.MonitoringBatchLimit, day.Total);
+                    Assert.Equal(4 + PublisherLease.MonitoringBatchLimit / 2, day.Failed);
+                }
 
                 await using (var reset = new Npgsql.NpgsqlCommand("""
                     WITH days AS (DELETE FROM status_probe_days WHERE component_id IN ($1,$2)),
@@ -655,9 +697,16 @@ public sealed partial class IndependentServiceTests : IDisposable
                 incidentCleanup.Parameters.AddWithValue(id);
                 await incidentCleanup.ExecuteNonQueryAsync();
             }
-            await using var cleanup = source.CreateCommand("DELETE FROM status_evidence WHERE source='check-result' AND event_id=ANY($1)");
+            await using var cleanup = source.CreateCommand("""
+                WITH pending AS (
+                    DELETE FROM status_monitoring_pending WHERE EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(document) AS signal(value)
+                        WHERE starts_with(signal.value->>'checkId',$2)))
+                DELETE FROM status_evidence WHERE source='check-result' AND event_id=ANY($1)
+                """);
             cleanup.Parameters.AddWithValue(new[] { $"mx/{fixture}.fast", $"mx/{fixture}.slow", $"xi/{fixture}.fast", $"xi/{fixture}.slow", $"mx/{fixture}.one-sided" }
                 .Concat(Enumerable.Range(0, 20).Select(index => $"mx/{fixture}.queued-{index}")).ToArray());
+            cleanup.Parameters.AddWithValue($"{fixture}.");
             await cleanup.ExecuteNonQueryAsync();
             await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4)");
             counters.Parameters.AddWithValue($"mx.{fixture}");

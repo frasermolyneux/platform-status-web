@@ -67,7 +67,7 @@ public sealed class PublicationWorker(
             signals[definition.Site.Id] = await database.ReadChecksAsync(definition.Site.Id, ct);
             telemetry[definition.Site.Id] = ComponentChecks.Build(definition, [], signals[definition.Site.Id]);
         }
-        await RecordHistoryAsync(publisherLock, telemetry, signals, ct);
+        await RecordHistoryAsync(publisherLock, ct);
         foreach (var site in catalog.Sites)
         {
             var publicIds = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
@@ -107,10 +107,28 @@ public sealed class PublicationWorker(
     private void RememberPublication(StatusApiResponse publication) =>
         published[publication.Site.Id] = (Fingerprint(publication), publication.GeneratedAt);
 
-    private async Task RecordHistoryAsync(PublisherLease lease, Dictionary<string, Dictionary<string, ComponentLiveTelemetry>> telemetry,
-        IReadOnlyDictionary<string, IReadOnlyList<CheckResult>> signals, CancellationToken ct)
+    private async Task RecordHistoryAsync(PublisherLease lease, CancellationToken ct)
     {
-        await using var transaction = await lease.Connection.BeginTransactionAsync(ct);
+        await using var transaction = await lease.Connection.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
+        var pending = await lease.ReadPendingMonitoringAsync(ct);
+        foreach (var batch in pending)
+        {
+            await RecordHistorySnapshotAsync(lease, batch.Signals, ct);
+            await lease.AcknowledgeMonitoringAsync(batch.Id, ct);
+        }
+        // A newer cache vector must not advance cursors past queued outages.
+        if (pending.Count < PublisherLease.MonitoringBatchLimit)
+            await RecordHistorySnapshotAsync(lease, await lease.ReadCheckSnapshotAsync(ct), ct);
+        await transaction.CommitAsync(ct);
+    }
+
+    private async Task RecordHistorySnapshotAsync(PublisherLease lease, IReadOnlyList<CheckResult> observations,
+        CancellationToken ct)
+    {
+        var signals = catalog.Sites.ToDictionary(site => site.Site.Id,
+            site => observations.Where(signal => signal.Site == site.Site.Id).ToArray());
+        var telemetry = catalog.Sites.ToDictionary(site => site.Site.Id,
+            site => ComponentChecks.Build(site, [], signals[site.Site.Id]));
         foreach (var site in catalog.Sites)
         {
             var incidents = await database.ReadIncidentsAsync(catalog, site, true, ct);
@@ -131,8 +149,7 @@ public sealed class PublicationWorker(
                     new
                     {
                         input.Identity,
-                        Key = input.Signal.ObservationKey
-                        ?? $"{input.Signal.ObservedAt:O}/{input.Signal.Status}"
+                        Key = input.Signal.HistoryKey
                     }), StatusJson.Options)));
                 var observedAt = inputs.Max(input => input.Signal.ObservedAt);
                 var measured = catalog.Sites.ToDictionary(source => source.Site.Id,
@@ -143,7 +160,6 @@ public sealed class PublicationWorker(
                     IsMaintained(site, component, observedAt, incidents) ? null : sample.Failures == 0, ct);
             }
         }
-        await transaction.CommitAsync(ct);
     }
 
     private static string InputIdentity(SiteDefinition site, CheckDefinition check) =>

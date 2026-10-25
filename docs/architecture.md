@@ -48,10 +48,15 @@ An unavailable resource retains its prior cache without preventing
 unrelated resources from refreshing. Public requests and publication never await
 Azure queries, GitHub or target HTTP requests.
 
-Cached brand aliases commit together. History advances once per changed source
-observation vector, not every publication/poll; cursor and daily counter changes
-share a transaction. A failed history write rolls back the cursor, and restart
-does not recount cached inputs. Historical outcomes are classified at measurement
+Cached brand aliases and a durable history snapshot commit together. Independent
+refreshes may advance the live cache while unconsumed snapshots remain queued.
+History consumes snapshots in order, in bounded batches; snapshot acknowledgement,
+cursor and daily counter changes share a transaction. A failed history write
+retains its snapshot even if a recovery replaces the live cache before retry.
+The history transaction uses a repeatable-read snapshot and never jumps to the
+latest cache ahead of a queued backlog. History advances once per changed source
+observation vector, not every publication/poll, and restart does not recount
+cached inputs. Historical outcomes are classified at measurement
 time, so an unconsumed sample still retries after live freshness expires. Monitoring
 checks reject cached results without matching canonical provenance and regional
 observations. Known slow failures survive faster inputs.

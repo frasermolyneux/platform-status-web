@@ -47,7 +47,9 @@ terraform -chdir=terraform validate
 - Reject legacy probe/target definitions at startup, including HTTP definitions
   mislabelled as telemetry. Monitoring-owned checks cannot be overwritten through
   generic check ingestion. Preserve unknown/stale semantics and atomic, deduplicated
-  sampling cursors/history across repolls, failures and restarts.
+  sampling cursors/history across repolls, failures and restarts. Cache refresh
+  must durably queue full history snapshots; acknowledge them only with the
+  history/cursor transaction, in order, without skipping a pending backlog.
 - Backend KQL/telemetry conventions are documented in `docs/architecture.md` — read it
   before touching `src/MX.Platform.Status.App/`.
 - `staticwebapp.config.json` and `src/MX.Platform.Status.Web/dist/` are frontend build

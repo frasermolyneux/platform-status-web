@@ -25,7 +25,10 @@ reuse and legacy state; its architecture below does not describe the new host.
   Stale/absent inputs are not healthy, and repolls must not advance sampling history.
 - **Enforcement**: retain startup rejection of legacy probes/HTTP targets, protected
   monitored-check ingestion, producer/consumer binding tests and transactional
-  sampling cursors. Verify fresh regional input with `--refresh-monitoring` before
+  sampling cursors and ordered durable history snapshots. A recovery refresh must
+  never overwrite an unconsumed outage; acknowledge snapshots in the history
+  transaction and never advance past a queued backlog.
+  Verify fresh regional input with `--refresh-monitoring` before
   consumer cutover. Cost/coverage conflicts require approval, not an architectural bypass.
 
 ## Key conventions

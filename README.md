@@ -111,9 +111,10 @@ only operators can write. Draft forms stay in the signed-in user's browser tab
 across reauthentication. Conflicts preserve the form, and an older draft is never
 silently restored over a newer saved revision.
 
-Service diagnostics distinguish the live HTTP check from public incident and
-maintenance overrides. Each check records its target, observer, HTTP status,
-duration, failure reason and observation time privately. The dashboard flags stale
+Service diagnostics distinguish monitoring-owned measurements from public incident
+and maintenance overrides. Canonical source identities, regional results, failure
+reasons and measurement times remain private. Sitewatch owns endpoint request
+policy and raw request telemetry. The dashboard flags stale
 results and checks that do not yet match the public publication, including during
 replication lag. Azure alerts and advisories are context, not automatic public
 availability signals.
@@ -146,18 +147,15 @@ service. Explicit shared identities retain the same GeoLocation status and incid
 across those different presentations. `sharedId` identifies the same logical check
 on both brands without changing existing private evidence IDs.
 
-`checks` supports independent `http` and authenticated `telemetry` definitions,
+`checks` supports monitoring-backed and authenticated `telemetry` definitions,
 each with its own ID, component, name and expected interval. A permitted
 `Status.Ingest` application can POST `{site, checkId, status, observedAt, detail}`
 to `/api/integrations/checks/{siteId}/{checkId}` for a configured telemetry check.
 Scope must match the definition; older observations cannot replace newer results.
-Details stay private. HTTP targets stay in reviewed configuration.
-HTTP checks default to `GET`; `method: "HEAD"` is also supported. Other methods
-are rejected, and shared definitions must agree on the method.
-
-Legacy `probes` remain in the production catalogue for rolling compatibility with
-the previous image. Explicit `checks` take precedence for each component; legacy
-probes are used only for components without explicit checks.
+Details stay private. Monitoring-owned checks reject generic ingestion; their
+canonical identities, resource aliases, regions and producer intervals must match
+the Sitewatch contract. Startup rejects legacy `probes`, HTTP check definitions
+and endpoint targets, including targets disguised as telemetry.
 
 ### Bounded-cost observability coverage
 
@@ -167,31 +165,29 @@ XI adds the CDN under Community Forums, Maps Manager under XI Redirect,
 Community Games & Points (Arcade, Casino, Daily Games, Powerball and Wallet),
 and the published FreezeTag statistics page.
 
-New checks run at five-minute intervals. GeoLocation Website and Portal Website
+Sitewatch owns 21 additional baselines: 20 at five-minute intervals and Server
+Events at one minute. GeoLocation Website and Portal Website
 combine origin liveness with public-hostname routing; Repository APIs combine
-liveness with database readiness. These existing App Service liveness checks,
-including GeoLocation API, run every two minutes to offset the additional Azure
-HTTP request budget. Shared GeoLocation checks execute once, not once per brand.
-The publisher reads durable observations before scheduling, retains results for
-checks not yet due, and collects at most five overdue checks per round, oldest
-deadline first. Collection and its history sample commit in one transaction.
-Each round leaves time for incident and banner publication rather than awaiting
-the entire due backlog. Restarting does not
-reset a check's schedule. HTTP-only history records components when they are
-actually observed, not on skipped collection rounds.
-Intervals are minimums; due checks run on the next publisher collection round.
-New Azure website baselines use `HEAD` to avoid downloading response bodies.
+liveness with database readiness. Existing Sitewatch targets retain their request
+semantics and cadence. Shared GeoLocation measurements are projected to both brands,
+not collected separately by each status view.
+
+The status reader queries existing Application Insights resources independently of
+public publication. Cache refresh atomically queues a full history snapshot.
+History consumes and acknowledges snapshots transactionally, retaining an outage
+through rollback even if a later refresh has already observed recovery. Repeated
+polls and restarts do not recount unchanged source vectors.
+New baselines use headers-only requests, no redirects and no retries.
 Trip Side Kick Application uses its dependency-free liveness endpoint, not its
 database-backed readiness endpoint or an authenticated application page.
 
-This pass uses existing host limits, workspaces, telemetry and alert resources;
-it does not add Sitewatch tests, alert series, log ingestion pipelines, paid
-delivery canaries, MaxMind requests, or serverless-SQL readiness probes.
-Existing Azure HTTP checks plus the additional App Service checks have a lower
-configured request rate than the previous Azure checks alone. This is a request
-budget, not a guarantee about metered telemetry bytes or the final Azure invoice;
-request telemetry, log sizes and consumption costs must still be observed after
-release. Existing Functions checks retain their previous cadence.
+Existing host limits, workspaces and compute remain unchanged. The additional
+Sitewatch observations and 21 availability alert rules have metered ingestion and
+alert-series costs within the approved US$15/month incremental normal-operation
+planning allowance, not a hard cap. Request and telemetry estimates are not an
+invoice guarantee; observe actual usage after release. Cost or coverage conflicts
+must be raised explicitly, never solved by moving active collection into status.
+No paid delivery canaries, MaxMind lookups or serverless-SQL readiness probes are added.
 
 These are availability baselines, not transaction monitoring: login redirects
 are accepted without following them; CDN liveness does not prove every asset is
@@ -199,9 +195,8 @@ available; a published statistics page does not prove updater freshness. Those
 signals, scheduled-job freshness, queue depth and private host/backup evidence
 remain strategic monitoring concerns owned by `platform-monitoring` and workload
 producers. Raw alerts remain private until an operator publishes an incident.
-Server Agent, protocol-aware TeamSpeak checks, additional consumption-Function
-probes, weekly-job missed-run state and new Azure alert resources are deferred
-pending a meaningful signal and an approved cost envelope.
+Server Agent, protocol-aware TeamSpeak checks and weekly-job missed-run state
+remain deferred pending meaningful strategic monitoring signals and cost review.
 
 Declared component or service impact overrides healthy checks and aggregates upward.
 Observed impact, scope and maintenance windows are retained separately from public
@@ -336,7 +331,7 @@ permanently deleted, resolve the existing incident locally through its editor
 and create a new incident; delivery failure never blocks those local updates.
 
 The independent service polls the public `frasermolyneux/status-pages` repository
-every five minutes, separately from public publication and probe collection.
+every five minutes, separately from public publication and monitoring consumption.
 Use that repository's incident templates and maintainer instructions.
 
 An eligible issue needs `status:incident`, `site:mx` and/or `site:xi`, exactly one
