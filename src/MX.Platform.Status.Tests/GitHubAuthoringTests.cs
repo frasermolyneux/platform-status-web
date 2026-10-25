@@ -382,8 +382,7 @@ public sealed partial class IndependentServiceTests
             }, "operator", default))!;
             Assert.True(await worker.RunOnceAsync(default));
             var revision = record.Revision;
-            await using (var lease = await database.TryPublisherLockAsync(default)
-                ?? throw new InvalidOperationException("Fixture publisher is busy."))
+            await using (var lease = await WaitForFixturePublisherAsync(database))
                 await database.SaveGitHubIncidentAsync(lease, options.GitHubRepository, 42, remote.UpdatedAt, incoming, default);
             record = await Read();
             Assert.Equal(revision, record.Revision);
@@ -507,8 +506,7 @@ public sealed partial class IndependentServiceTests
 
             async Task Save(IncidentRecord incoming, DateTimeOffset observedAt)
             {
-                await using var lease = await database.TryPublisherLockAsync(default)
-                    ?? throw new InvalidOperationException("Fixture publisher is busy.");
+                await using var lease = await WaitForFixturePublisherAsync(database);
                 await database.SaveGitHubIncidentAsync(lease, fixtureOptions.GitHubRepository, 42,
                     observedAt, incoming, default);
             }

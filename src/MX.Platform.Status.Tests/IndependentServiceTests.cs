@@ -31,6 +31,17 @@ public sealed partial class IndependentServiceTests : IDisposable
 
     public IndependentServiceTests() => Directory.CreateDirectory(_directory);
 
+    private static async Task<PublisherLease> WaitForFixturePublisherAsync(PostgresStore database)
+    {
+        for (var attempt = 0; attempt < 130; attempt++)
+        {
+            var lease = await database.TryPublisherLockAsync(default);
+            if (lease is not null) return lease;
+            await Task.Delay(TimeSpan.FromSeconds(1));
+        }
+        throw new TimeoutException("The native fixture could not acquire the publisher lease.");
+    }
+
     [Fact]
     public async Task PublicRequestsAndFeedsWorkWithoutAzureGithubEntraOrDatabase()
     {
@@ -365,15 +376,8 @@ public sealed partial class IndependentServiceTests : IDisposable
             })).StatusCode);
             Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(path, new CheckResult("mx", component,
                 ComponentStatus.Outage, DateTimeOffset.UtcNow), StatusJson.Options)).StatusCode);
-            PublisherLease? lease = null;
-            for (var attempt = 0; lease is null && attempt < 130; attempt++)
+            await using (var lease = await WaitForFixturePublisherAsync(database))
             {
-                lease = await database.TryPublisherLockAsync(default);
-                if (lease is null) await Task.Delay(TimeSpan.FromSeconds(1));
-            }
-            await using (lease)
-            {
-                Assert.NotNull(lease);
                 await lease.SaveProbeEvidenceAsync(probe, default);
                 var catalog = app.Services.GetRequiredService<StatusCatalog>();
                 using var publisher = new PublicationWorker(catalog, app.Services.GetRequiredService<RuntimeOptions>(),
@@ -458,15 +462,8 @@ public sealed partial class IndependentServiceTests : IDisposable
         int? maintenanceId = null;
         try
         {
-            PublisherLease? lease = null;
-            for (var attempt = 0; lease is null && attempt < 130; attempt++)
+            await using (var lease = await WaitForFixturePublisherAsync(database))
             {
-                lease = await database.TryPublisherLockAsync(default);
-                if (lease is null) await Task.Delay(TimeSpan.FromSeconds(1));
-            }
-            await using (lease)
-            {
-                Assert.NotNull(lease);
                 var observedAt = DateTimeOffset.UtcNow;
                 CheckResult[] initial =
                 [
