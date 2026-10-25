@@ -83,13 +83,19 @@ public sealed class StatusExperienceTests
             IncidentState.Identified, "Investigating", true, Delivery: "github", OperationId: Guid.NewGuid());
         var initial = command.Apply(19, "mx", null, Created);
         var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, initial, command, null, false, "pending"));
-        command = command with { State = IncidentState.Monitoring, Severity = Severity.Degraded,
-            Message = "Recovery underway", OperationId = Guid.NewGuid() };
+        command = command with
+        {
+            State = IncidentState.Monitoring,
+            Severity = Severity.Degraded,
+            Message = "Recovery underway",
+            OperationId = Guid.NewGuid()
+        };
         var recovered = command.Apply(19, "mx", initial, Created.AddMinutes(20));
         var comment = JsonSerializer.SerializeToElement(new
         {
             body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, recovered, command, null, false, "pending")),
-            created_at = Created.AddMinutes(20), user = new { login = "frasermolyneux" }
+            created_at = Created.AddMinutes(20),
+            user = new { login = "frasermolyneux" }
         });
         string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "state:monitoring"];
         foreach (var description in new[] { body, "Initial description without an authoring envelope" })
@@ -115,10 +121,13 @@ public sealed class StatusExperienceTests
                 new() { At = Created.AddMinutes(20), State = IncidentState.Monitoring, Body = "Still healthy" }]
         };
         Assert.Equal(Created.AddMinutes(10), recovered.ObserveImpact(active, Created.AddHours(1)).ImpactHistory[^1].At);
-        recovered = recovered with { PublicUpdates = [.. recovered.PublicUpdates,
+        recovered = recovered with
+        {
+            PublicUpdates = [.. recovered.PublicUpdates,
             new() { At = Created.AddMinutes(25), State = IncidentState.Identified, Body = "Failed again" },
             new() { At = Created.AddMinutes(30), State = IncidentState.Monitoring, Body = "Restored again" },
-            new() { At = Created.AddMinutes(40), State = IncidentState.Monitoring, Body = "Still healthy again" }] };
+            new() { At = Created.AddMinutes(40), State = IncidentState.Monitoring, Body = "Still healthy again" }]
+        };
         Assert.Equal(Created.AddMinutes(30), recovered.ObserveImpact(active, Created.AddHours(1)).ImpactHistory[^1].At);
     }
 
@@ -126,12 +135,20 @@ public sealed class StatusExperienceTests
     public void DetailedLegacyMaintenanceUsesItsKnownWindowAndStopsAtResolution()
     {
         var now = DateTimeOffset.Parse("2026-10-25T15:40:00Z");
-        var incident = new Incident { Id = 9, Severity = Severity.Maintenance, State = IncidentState.Resolved,
-            Components = ["tasks"], ResolvedAt = now.AddMinutes(-25), Updates = [
-                new() { At = now.AddHours(-2), Severity = Severity.Maintenance, State = IncidentState.Investigating }] };
+        var incident = new Incident
+        {
+            Id = 9,
+            Severity = Severity.Maintenance,
+            State = IncidentState.Resolved,
+            Components = ["tasks"],
+            ResolvedAt = now.AddMinutes(-25),
+            Updates = [
+                new() { At = now.AddHours(-2), Severity = Severity.Maintenance, State = IncidentState.Investigating }]
+        };
         var publication = RecentHistory.Apply(new()
         {
-            GeneratedAt = now, Components = [new() { Id = "tasks" }],
+            GeneratedAt = now,
+            Components = [new() { Id = "tasks" }],
             Maintenance = [new() { Id = 9, ScheduledStart = now.AddMinutes(-55), ScheduledEnd = now.AddMinutes(20) }]
         }, [], [incident]);
         var history = Assert.Single(publication.Components).RecentHistory!.Last24Hours;
