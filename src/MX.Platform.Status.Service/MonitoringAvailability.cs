@@ -69,8 +69,13 @@ internal static class MonitoringAvailability
                 DateTime at => new DateTimeOffset(DateTime.SpecifyKind(at, DateTimeKind.Utc)),
                 _ => throw new InvalidDataException("Monitoring observation timestamp is invalid.")
             },
-            row[indices["success"]] is bool success ? success
-                : throw new InvalidDataException("Monitoring observation outcome is invalid."),
+            row[indices["success"]] switch
+            {
+                bool success => success,
+                "1" => true,
+                "0" => false,
+                _ => throw new InvalidDataException("Monitoring observation outcome is invalid.")
+            },
             row[indices["message"]] as string)).ToArray();
     }
 
