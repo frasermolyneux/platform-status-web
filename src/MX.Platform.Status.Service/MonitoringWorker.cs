@@ -69,9 +69,9 @@ public sealed class MonitoringWorker(
         var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
         var observations = batches.SelectMany(batch => batch.Rows).ToArray();
         var cached = new Dictionary<string, CheckResult>();
-        foreach (var site in catalog.Sites.Select(site => site.Site))
-            foreach (var result in await database.ReadChecksAsync(site.Id, ct))
-                cached[$"{site.Id}/{result.CheckId}"] = result;
+        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
+            foreach (var result in await database.ReadChecksAsync(siteId, ct))
+                cached[$"{siteId}/{result.CheckId}"] = result;
         var now = DateTimeOffset.UtcNow;
         var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null)
             .Select(check => MonitoringAvailability.Project(site.Site.Id, check,
