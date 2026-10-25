@@ -83,10 +83,11 @@ public sealed class MonitoringWorker(
             ValidateCoverage(unavailable, observations, now);
             if (processBatches.Any(batch => !batch.Succeeded))
                 throw new InvalidOperationException("Process preflight could not query every required source.");
-            foreach (var source in processReferences.Where(source => !processObservations.Any(observation =>
+            var missing = processReferences.FirstOrDefault(source => !processObservations.Any(observation =>
                 observation.Source.Identity == source.Identity
-                && now - observation.ObservedAt <= TimeSpan.FromSeconds(ProcessReference.FreshnessSeconds))))
-                throw new InvalidOperationException($"Fresh process monitoring coverage is incomplete for {source.CheckId}.");
+                && now - observation.ObservedAt <= TimeSpan.FromSeconds(ProcessReference.FreshnessSeconds)));
+            if (missing is not null)
+                throw new InvalidOperationException($"Fresh process monitoring coverage is incomplete for {missing.CheckId}.");
         }
         return results.Length;
     }
