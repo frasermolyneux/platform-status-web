@@ -120,7 +120,8 @@ public sealed class StatusExperienceTests
                 new() { At = Created.AddMinutes(10), State = IncidentState.Monitoring, Body = "Restored" },
                 new() { At = Created.AddMinutes(20), State = IncidentState.Monitoring, Body = "Still healthy" }]
         };
-        Assert.Equal(Created.AddMinutes(10), recovered.ObserveImpact(active, Created.AddHours(1)).ImpactHistory[^1].At);
+        var firstRecovery = recovered.ObserveImpact(active, Created.AddHours(1));
+        Assert.Equal(Created.AddMinutes(10), firstRecovery.ImpactHistory[^1].At);
         recovered = recovered with
         {
             PublicUpdates = [.. recovered.PublicUpdates,
@@ -128,7 +129,17 @@ public sealed class StatusExperienceTests
             new() { At = Created.AddMinutes(30), State = IncidentState.Monitoring, Body = "Restored again" },
             new() { At = Created.AddMinutes(40), State = IncidentState.Monitoring, Body = "Still healthy again" }]
         };
-        Assert.Equal(Created.AddMinutes(30), recovered.ObserveImpact(active, Created.AddHours(1)).ImpactHistory[^1].At);
+        foreach (var previous in new[] { active, firstRecovery })
+        {
+            var delayed = recovered.ObserveImpact(previous, Created.AddHours(1));
+            Assert.Equal(Created.AddMinutes(30), delayed.ImpactHistory[^1].At);
+            Assert.Equal(4, delayed.ImpactHistory.Count);
+            var scope = new HashSet<string> { "tasks" };
+            Assert.Empty(IncidentImpact.ForRange(delayed.ToPublicIncident(), scope, Created.AddMinutes(10), Created.AddMinutes(25)));
+            Assert.Equal("outage", Assert.Single(IncidentImpact.ForRange(delayed.ToPublicIncident(), scope,
+                Created.AddMinutes(25), Created.AddMinutes(30))));
+            Assert.Empty(IncidentImpact.ForRange(delayed.ToPublicIncident(), scope, Created.AddMinutes(30), Created.AddHours(1)));
+        }
     }
 
     [Fact]

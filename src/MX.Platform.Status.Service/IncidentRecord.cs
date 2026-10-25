@@ -65,6 +65,7 @@ public sealed record IncidentRecord
         var history = previous?.ImpactHistory ?? ImpactHistory;
         if (history.Count == 0 && previous is { Published: true, State: IncidentState.Resolved })
             history = previous.RecordedLegacyImpact();
+        history = ObserveGitHubTransitions(previous, history);
         if (!Published || State == IncidentState.Resolved && history.Count == 0
             || history.LastOrDefault() is { } last
             && last.State == State && last.Severity == Severity
@@ -80,6 +81,23 @@ public sealed record IncidentRecord
         {
             ImpactHistory = [.. history, new(at, State, Severity, Components, ScheduledStart, ScheduledEnd)]
         };
+    }
+
+    private IReadOnlyList<IncidentImpactObservation> ObserveGitHubTransitions(IncidentRecord? previous,
+        IReadOnlyList<IncidentImpactObservation> history)
+    {
+        if (!Published || SourceUrl is null || previous is not { Published: true } || history.Count == 0)
+            return history;
+        var observations = history.ToList();
+        foreach (var update in PublicUpdates.Where(update => update.At >= history[^1].At
+            && !previous.PublicUpdates.Contains(update)).OrderBy(update => update.At))
+        {
+            var latest = observations[^1];
+            var severity = update.Severity ?? latest.Severity;
+            if (latest.State == update.State && latest.Severity == severity) continue;
+            observations.Add(latest with { At = update.At, State = update.State, Severity = severity });
+        }
+        return observations;
     }
 
     private IReadOnlyList<IncidentImpactObservation> RecordedLegacyImpact()
