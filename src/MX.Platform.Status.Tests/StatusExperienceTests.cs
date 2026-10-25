@@ -77,6 +77,47 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void GitHubRecoveryUsesTheStartOfItsCurrentMonitoringSequence()
+    {
+        var active = new IncidentCommand("Unavailable", ["tasks"], Severity.Outage,
+            IncidentState.Identified, "Investigating", true).Apply(3, "xi", null, Created);
+        var recovered = active with
+        {
+            SourceUrl = "https://github.com/frasermolyneux/status-pages/issues/3",
+            State = IncidentState.Monitoring,
+            PublicUpdates = [.. active.PublicUpdates,
+                new() { At = Created.AddMinutes(10), State = IncidentState.Monitoring, Body = "Restored" },
+                new() { At = Created.AddMinutes(20), State = IncidentState.Monitoring, Body = "Still healthy" }]
+        };
+        Assert.Equal(Created.AddMinutes(10), recovered.ObserveImpact(active, Created.AddHours(1)).ImpactHistory[^1].At);
+        recovered = recovered with { PublicUpdates = [.. recovered.PublicUpdates,
+            new() { At = Created.AddMinutes(25), State = IncidentState.Identified, Body = "Failed again" },
+            new() { At = Created.AddMinutes(30), State = IncidentState.Monitoring, Body = "Restored again" },
+            new() { At = Created.AddMinutes(40), State = IncidentState.Monitoring, Body = "Still healthy again" }] };
+        Assert.Equal(Created.AddMinutes(30), recovered.ObserveImpact(active, Created.AddHours(1)).ImpactHistory[^1].At);
+    }
+
+    [Fact]
+    public void DetailedLegacyMaintenanceUsesItsKnownWindowAndStopsAtResolution()
+    {
+        var now = DateTimeOffset.Parse("2026-10-25T15:40:00Z");
+        var incident = new Incident { Id = 9, Severity = Severity.Maintenance, State = IncidentState.Resolved,
+            Components = ["tasks"], ResolvedAt = now.AddMinutes(-25), Updates = [
+                new() { At = now.AddHours(-2), Severity = Severity.Maintenance, State = IncidentState.Investigating }] };
+        var publication = RecentHistory.Apply(new()
+        {
+            GeneratedAt = now, Components = [new() { Id = "tasks" }],
+            Maintenance = [new() { Id = 9, ScheduledStart = now.AddMinutes(-55), ScheduledEnd = now.AddMinutes(20) }]
+        }, [], [incident]);
+        var history = Assert.Single(publication.Components).RecentHistory!.Last24Hours;
+        Assert.Equal("maintenance", history[^3].Status);
+        Assert.Equal([9], history[^3].IncidentIds);
+        Assert.Equal("unknown", history[^2].Status);
+        Assert.Empty(history[^2].IncidentIds);
+        Assert.Equal("unknown", history[^6].Status);
+    }
+
+    [Fact]
     public void RecentHistoryShowsRealBucketsMissingPeriodsAndBoundedIncidentRecovery()
     {
         var now = DateTimeOffset.Parse("2026-10-25T15:40:00Z");

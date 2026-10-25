@@ -624,7 +624,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     function renderLists(): void {
       const githubSync = evidence.find(record => record.source === 'github-issues');
       const sync = githubSync ? evidenceCards([githubSync])[0] : undefined;
-      const syncStale = githubSync && Date.now() - new Date(githubSync.observedAt).getTime() > 10 * 60_000;
+      const syncStale = githubSync && Date.now() - new Date(githubSync.observedAt).getTime()
+        > Math.max(600, runtime.github.pollSeconds * 2) * 1000;
       syncWarning.hidden = !runtime.github.enabled || (sync?.state === 'healthy' && !syncStale);
       syncWarning.textContent = syncWarning.hidden ? '' : `GitHub incident synchronisation needs attention. ${sync?.summary || 'The last sync is stale.'} Published incidents may not reflect the latest issue changes. Review monitoring evidence.`;
       createBanner.disabled = createIncident.disabled = !canWrite || !runtime.writable;

@@ -10,6 +10,8 @@ let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
 let existingIncidents: unknown[] = [];
 let githubSyncStatus = 'healthy';
+let githubPollSeconds = 300;
+let githubSyncAgeMinutes = 0;
 let saveGate: Promise<void> | undefined;
 let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
@@ -64,6 +66,8 @@ beforeEach(() => {
   existingBanners = [];
   existingHealth = [];
   githubSyncStatus = 'healthy';
+  githubPollSeconds = 300;
+  githubSyncAgeMinutes = 0;
   existingIncidents = [{
     id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
     title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
@@ -119,7 +123,7 @@ beforeEach(() => {
         site: { id: 'mx', displayName: 'MX status' }, summary: { status: 'operational' },
         components: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website', kind: 'leaf', children: [] }],
       },
-      '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: 300 }, workloads: {} },
+      '/api/ops/runtime': { publisher: true, writable: writerWritable, github: { enabled: true, repository: 'frasermolyneux/status-pages', pollSeconds: githubPollSeconds }, workloads: {} },
       '/api/ops/incidents': existingIncidents,
       '/api/ops/banners': existingBanners,
       '/api/ops/health': existingHealth,
@@ -127,7 +131,7 @@ beforeEach(() => {
         source: 'azure-alert', id: 'alert-1', observedAt: timestamp,
         evidence: { data: { essentials: { alertRule: 'Database availability', description: 'The database needs attention.', severity: 'Sev1', monitorCondition: 'Fired' } } },
       }, {
-        source: 'github-issues', id: 'github', observedAt: new Date().toISOString(),
+        source: 'github-issues', id: 'github', observedAt: new Date(Date.now() - githubSyncAgeMinutes * 60000).toISOString(),
         evidence: { repository: 'frasermolyneux/status-pages', status: githubSyncStatus,
           summary: githubSyncStatus === 'healthy' ? 'GitHub issues are synchronized.' : 'Issue 3 needs metadata corrections.' },
       }],
@@ -147,6 +151,13 @@ test('incident pages surface rejected GitHub synchronisation and clear the warni
   githubSyncStatus = 'healthy';
   await renderOperations();
   assert.equal(document.querySelector<HTMLElement>('aside[role="status"]')?.hidden, true);
+  githubPollSeconds = 3600;
+  githubSyncAgeMinutes = 50;
+  await renderOperations();
+  assert.equal(document.querySelector<HTMLElement>('aside[role="status"]')?.hidden, true);
+  githubSyncAgeMinutes = 125;
+  await renderOperations();
+  assert.equal(document.querySelector<HTMLElement>('aside[role="status"]')?.hidden, false);
 });
 
 test('traffic changes require an additional role and exact-host confirmation, without publishing an announcement', async () => {

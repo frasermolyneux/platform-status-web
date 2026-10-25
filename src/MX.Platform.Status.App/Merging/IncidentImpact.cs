@@ -118,10 +118,13 @@ public static class IncidentImpact
     }
 
     public static IEnumerable<string> ForRange(Incident incident, ISet<string> components,
-        DateTimeOffset start, DateTimeOffset end)
+        DateTimeOffset start, DateTimeOffset end, MaintenanceDto? maintenance = null)
     {
         var observations = incident.ImpactHistory;
-        if (observations.Count == 0)
+        if (observations.Count == 0 && incident.Severity == Severity.Maintenance && maintenance is not null)
+            observations = [new(maintenance.ScheduledStart, IncidentState.Investigating, Severity.Maintenance,
+                incident.Components, maintenance.ScheduledStart, maintenance.ScheduledEnd)];
+        else if (observations.Count == 0)
         {
             Severity? severity = null;
             observations = incident.Updates.OrderBy(update => update.At).Select(update =>

@@ -39,7 +39,8 @@ internal static class RecentHistory
                     var end = to < now ? to : now;
                     var observed = samples.Where(bucket => bucket.At >= from && bucket.At < to).ToArray();
                     var impacts = incidents.Select(incident => (incident.Id,
-                        Statuses: IncidentImpact.ForRange(incident, scope, from, end).ToArray()))
+                        Statuses: IncidentImpact.ForRange(incident, scope, from, end,
+                            publication.Maintenance.FirstOrDefault(window => window.Id == incident.Id)).ToArray()))
                         .Where(impact => impact.Statuses.Length > 0).ToArray();
                     var statuses = observed.Select(bucket => bucket.Status).Concat(impacts.SelectMany(impact => impact.Statuses));
                     if (leaves.Any(leaf => !observed.Any(bucket => bucket.Component == leaf)))
