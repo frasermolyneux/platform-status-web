@@ -30,8 +30,8 @@ not complete Azure or subscription health. Secure Azure common-schema alert
 ingestion stores private evidence; it does not create public incidents.
 
 The producer and consumer share versioned telemetry/binding contracts. Production
-producer validation and status catalogue tests enforce the 31 canonical inputs
-(33 brand projections). Legacy endpoint/HTTP-check configuration is rejected at
+producer validation and status catalogue tests enforce the 32 canonical inputs
+(34 brand projections). Legacy endpoint/HTTP-check configuration is rejected at
 startup. Existing identifiers containing `.probe.` remain stable identifiers,
 not permission for status-owned collection.
 
@@ -141,6 +141,12 @@ opening one shows its components and their histories. Opening a component shows 
 individual checks. A service aggregates component status, and a component aggregates
 its configured checks. Checks report operational, degraded, outage or unknown;
 missing or stale observations remain unknown, not healthy.
+
+Community Forums includes its Website, Background Tasks and Community CDN.
+Background Tasks consumes Sitewatch's existing scheduled-task endpoint result,
+independently of homepage availability, and affects the service's aggregate status.
+This reports the task runner's HTTP outcome, not delivery confirmation for each
+email or notification.
 
 XtremeIdiots Portal groups its Website, Repository APIs v1/v2, Servers Integration
 API, Server Events and GeoLocation Website. GeoLocation remains a top-level MX

@@ -84,6 +84,7 @@
       "components": [
         {"id": "xi.service.forums", "name": "Community Forums", "kind": "group", "children": [
           {"id": "xi.sitewatch.forums-web", "name": "Community Forums Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.forums-tasks", "name": "Background Tasks", "kind": "leaf", "source": {"kind": "monitoring"}},
           {"id": "xi.probe.cdn", "name": "Community CDN", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "xi.service.portal", "name": "XtremeIdiots Portal", "kind": "group", "children": [
@@ -112,7 +113,7 @@
     },
     "sharedComponents": {"xi.sitewatch.geo-location-web": "geo-location-web"},
     "workloads": {
-      "xi-forums": ["xi.sitewatch.forums-web"],
+      "xi-forums": ["xi.sitewatch.forums-web", "xi.sitewatch.forums-tasks"],
       "geo-location": ["xi.sitewatch.geo-location-web"],
       "portal-web": ["xi.sitewatch.portal-web"],
       "portal-repository": ["xi.sitewatch.repository-api-v1", "xi.sitewatch.repository-api-v2"],
@@ -130,6 +131,7 @@
     },
     "checks": [
       {"id": "xi.sitewatch.forums-web", "component": "xi.sitewatch.forums-web", "name": "Website HTTP availability", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.forums-web", "checkId": "xi.sitewatch.forums-web", "resources": ["sitewatch-uksouth", "sitewatch-eastus", "sitewatch-westeurope"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.sitewatch.forums-tasks", "component": "xi.sitewatch.forums-tasks", "name": "Scheduled task execution", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.forums-tasks", "checkId": "xi.sitewatch.forums-tasks", "resources": ["sitewatch-uksouth", "sitewatch-eastus", "sitewatch-westeurope"], "regions": ["uksouth", "eastus", "westeurope"]}},
       {"id": "xi.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "xi.sitewatch.geo-location-web", "name": "Website liveness", "kind": "telemetry", "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-web", "checkId": "mx.sitewatch.geo-location-web", "resources": ["geolocation"], "regions": ["uksouth", "eastus", "westeurope"]}},
       {"id": "xi.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "xi.sitewatch.geo-location-web", "name": "Public hostname routing", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-web", "checkId": "mx.geo-location-web.routing", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
       {"id": "xi.sitewatch.portal-web", "component": "xi.sitewatch.portal-web", "name": "Website liveness", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.portal-web", "checkId": "xi.sitewatch.portal-web", "resources": ["portal"], "regions": ["uksouth", "eastus", "westeurope"]}},
