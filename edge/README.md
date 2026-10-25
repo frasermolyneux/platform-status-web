@@ -100,7 +100,7 @@ The edge backend reuses the approved storage location, **not its state key**.
 Both backend files must be passed in this order:
 
 ```powershell
-terraform -chdir=edge init -backend-config=..\terraform\backends\prd.backend.hcl -backend-config=backends\prd.backend.hcl
+terraform -chdir=edge init -lockfile=readonly -backend-config=..\terraform\backends\prd.backend.hcl -backend-config=backends\prd.backend.hcl
 ```
 
 The second file selects `status-edge-prd.tfstate`; CI checks that effective key
@@ -108,7 +108,7 @@ before planning. Never initialize this stack using only the legacy backend file.
 Do not run local state-backed plans or applies. For local schema validation:
 
 ```powershell
-terraform -chdir=edge init -backend=false
+terraform -chdir=edge init -lockfile=readonly -backend=false
 terraform -chdir=edge validate
 terraform -chdir=edge fmt -check -recursive
 ```

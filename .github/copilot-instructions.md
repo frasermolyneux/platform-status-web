@@ -57,3 +57,7 @@ rules, and `AGENTS.md` for build commands and repo boundaries.
 - `platform-monitoring` — central Log Analytics workspace (consumed via Terraform remote state)
 - `platform-workloads` — workload provisioning (RBAC grants)
 - `status-pages` — content repo with site.yaml + components.yaml (future)
+
+## Terraform toolchain
+
+Commit each root's `.terraform-version` and `.terraform.lock.hcl`. Select the exact root CLI pin before invoking Terraform; normal initialization uses `-lockfile=readonly`. Regenerate provider selections only in a reviewed dependency-update PR; never commit state, plans, or `.terraform/`.

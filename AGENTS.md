@@ -56,7 +56,7 @@ terraform -chdir=terraform validate
   artifacts, not hand-maintained files.
 - `terraform/tfvars/*.tfvars` and `terraform/backends/*.backend.hcl` are environment
   config affecting real Azure deployment behavior.
-- `.terraform.lock.hcl` and `.terraform/` are gitignored — keep untracked.
+- Commit each root's `.terraform-version` and `.terraform.lock.hcl`. Select the exact root CLI pin before invoking Terraform; normal initialization uses `-lockfile=readonly`. Regenerate provider selections only in a reviewed dependency-update PR; never commit state, plans, or `.terraform/`.
 
 ## Do NOT
 

@@ -55,22 +55,24 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+      - uses: frasermolyneux/actions/terraform-setup@terraform-setup/v1.0.0
+        id: setup
         with:
-          terraform_version: "1.15.8"
-          terraform_wrapper: false
+          terraform-folder: edge
+          terraform_wrapper: "false"
       - name: Check edge formatting
         run: terraform -chdir=edge fmt -check -recursive
       - name: Initialize isolated edge state
         run: |
           set -euo pipefail
-          terraform -chdir=edge init -input=false \
+          terraform -chdir=edge init -lockfile=readonly -input=false \
             -backend-config=../terraform/backends/prd.backend.hcl \
             -backend-config=backends/prd.backend.hcl
           jq -e '.backend.config.key == "status-edge-prd.tfstate"' edge/.terraform/terraform.tfstate
       - name: Validate edge configuration
         run: terraform -chdir=edge validate
       - name: Plan only Cloudflare edge resources
+        id: plan
         if: github.event_name == 'pull_request' || inputs.operation != 'verify'
         run: |
           set -euo pipefail
@@ -96,10 +98,19 @@ jobs:
             mode=--prepare-activation
           fi
           terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py "$mode"
+      - name: Retain bounded edge plan execution evidence
+        if: always() && !cancelled() && contains(fromJSON('["success","failure"]'), steps.plan.outcome)
+        uses: frasermolyneux/actions/terraform-receipt@terraform-receipt/v1.0.0
+        with:
+          context-directory: ${{ steps.setup.outputs.directory }}
+          operation: plan
+          outcome: ${{ steps.plan.outcome == 'success' && 'success' || 'failure' }}
+          environment: prd
       - name: Enable only the existing healthy shared load balancer
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'activate'
         run: python3 deployment/activate_edge.py
       - name: Reconcile Terraform after the enablement-only API patch
+        id: reconcile-apply
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'activate'
         run: |
           set -euo pipefail
@@ -107,8 +118,20 @@ jobs:
           terraform -chdir=edge show -json edge.tfplan | python3 deployment/validate_edge_plan.py --activate
           terraform -chdir=edge apply -input=false edge.tfplan
       - name: Apply reviewed main configuration
+        id: reviewed-apply
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && contains(fromJSON('["apply","maps-tls"]'), inputs.operation)
         run: terraform -chdir=edge apply -input=false edge.tfplan
+      - name: Retain bounded edge apply execution evidence
+        if: >-
+          always() && !cancelled() &&
+          (contains(fromJSON('["success","failure"]'), steps.reconcile-apply.outcome) ||
+           contains(fromJSON('["success","failure"]'), steps.reviewed-apply.outcome))
+        uses: frasermolyneux/actions/terraform-receipt@terraform-receipt/v1.0.0
+        with:
+          context-directory: ${{ steps.setup.outputs.directory }}
+          operation: apply
+          outcome: ${{ (steps.reconcile-apply.outcome == 'success' || steps.reviewed-apply.outcome == 'success') && 'success' || 'failure' }}
+          environment: prd
       - name: Publish edge verification identifiers
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && contains(fromJSON('["apply","activate","verify"]'), inputs.operation)
         run: terraform -chdir=edge output -json status_edge >> "$GITHUB_STEP_SUMMARY"
