@@ -1,13 +1,47 @@
+using Azure.Core;
+using Azure.Core.Pipeline;
+using Azure.Monitor.Query;
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.Service;
+using NSubstitute;
+using System.Net;
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 
 namespace MX.Platform.Status.Tests;
 
 public sealed class MonitoringAvailabilityTests
 {
+    [Theory]
+    [InlineData("string", "1", true)]
+    [InlineData("string", "0", false)]
+    [InlineData("bool", true, true)]
+    [InlineData("bool", false, false)]
+    public async Task DecodesLegacyAndBooleanAvailabilityOutcomesThroughTheRealLogsSdk(
+        string columnType, object outcome, bool expected)
+    {
+        using var http = OutcomeHttpClient(columnType, outcome);
+        var rows = await MonitoringAvailability.QueryAsync(OutcomeClient(http),
+            "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/fixture/providers/Microsoft.Insights/components/fixture",
+            [Check.Monitoring!], CancellationToken.None);
+        Assert.Equal(expected, Assert.Single(rows).Success);
+    }
+
+    [Theory]
+    [InlineData("string", null)]
+    [InlineData("string", "unexpected")]
+    [InlineData("long", 2L)]
+    public async Task InvalidAvailabilityOutcomesFailClosedInsteadOfBecomingHealthyOrOutage(
+        string columnType, object? outcome)
+    {
+        using var http = OutcomeHttpClient(columnType, outcome);
+        await Assert.ThrowsAsync<InvalidDataException>(() => MonitoringAvailability.QueryAsync(OutcomeClient(http),
+            "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/fixture/providers/Microsoft.Insights/components/fixture",
+            [Check.Monitoring!], CancellationToken.None));
+    }
+
     [Fact]
     public void ReaderLoadsAnExtensionlessPemBundleWithAUsableMatchingPrivateKey()
     {
@@ -277,4 +311,44 @@ public sealed class MonitoringAvailabilityTests
 
     private static MonitoringObservation Row(string region, bool success, DateTimeOffset? at = null) =>
         new("mx", "mx.shared", "mx.shared.routing", region, at ?? Now, success, success ? "OK" : "HTTP 503 (5xx)");
+
+    private static LogsQueryClient OutcomeClient(HttpClient http)
+    {
+        var credential = Substitute.For<TokenCredential>();
+        credential.GetTokenAsync(Arg.Any<TokenRequestContext>(), Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult(new AccessToken("fixture", DateTimeOffset.UtcNow.AddHours(1))));
+        return new LogsQueryClient(credential, new LogsQueryClientOptions { Transport = new HttpClientTransport(http) });
+    }
+
+    private static HttpClient OutcomeHttpClient(string columnType, object? outcome) => new(new LogsResponseHandler(
+        JsonSerializer.Serialize(new
+        {
+            tables = new[]
+            {
+                new
+                {
+                    name = "PrimaryResult",
+                    columns = new[]
+                    {
+                        new { name = "siteId", type = "string" },
+                        new { name = "componentId", type = "string" },
+                        new { name = "checkId", type = "string" },
+                        new { name = "region", type = "string" },
+                        new { name = "observedAt", type = "datetime" },
+                        new { name = "success", type = columnType },
+                        new { name = "message", type = "string" }
+                    },
+                    rows = new object?[][] { ["mx", "mx.shared", "mx.shared.routing", "uksouth", Now, outcome, "Native availability"] }
+                }
+            }
+        })));
+
+    private sealed class LogsResponseHandler(string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            });
+    }
 }
