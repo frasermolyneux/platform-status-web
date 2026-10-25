@@ -36,6 +36,18 @@ updates:
         patterns:
           - "*"
 
+  - package-ecosystem: "terraform"
+    assignees: ["frasermolyneux"]
+    directory: "/edge"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "08:15"
+    groups:
+      all-updates:
+        patterns:
+          - "*"
+
   - package-ecosystem: "github-actions"
     assignees: ["frasermolyneux"]
     directory: "/"

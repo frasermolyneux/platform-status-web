@@ -55,16 +55,16 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+      - uses: frasermolyneux/actions/terraform-setup@terraform-setup/v1.0.0
         with:
-          terraform_version: "1.15.8"
-          terraform_wrapper: false
+          terraform-folder: edge
+          terraform_wrapper: "false"
       - name: Check edge formatting
         run: terraform -chdir=edge fmt -check -recursive
       - name: Initialize isolated edge state
         run: |
           set -euo pipefail
-          terraform -chdir=edge init -input=false \
+          terraform -chdir=edge init -lockfile=readonly -input=false \
             -backend-config=../terraform/backends/prd.backend.hcl \
             -backend-config=backends/prd.backend.hcl
           jq -e '.backend.config.key == "status-edge-prd.tfstate"' edge/.terraform/terraform.tfstate
