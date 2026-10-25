@@ -84,7 +84,8 @@ Monitoring configuration adds `AzureCollectorClientId`, `AzureCertificatePath` a
 `AzureMonitoringResources` (logical aliases to exact Application Insights resource
 IDs). Materialize the reader's PEM certificate/private key from Key Vault as a
 read-only service-only secret; never mount deployment credentials or grant
-workspace-wide read access. Azure/credential failures retain cached observations
+workspace-wide read access. The reader loads PEM explicitly, rather than relying
+on a filename extension on the approved secret mount. Azure/credential failures retain cached observations
 without changing their measurement timestamps, then age them to unknown.
 Deploy the producer first and run the new image's `--refresh-monitoring` command
 against the writable database before cutover. It fails unless every configured

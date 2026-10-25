@@ -1,11 +1,34 @@
 using MX.Platform.Status.App.Models;
 using MX.Platform.Status.Service;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 
 namespace MX.Platform.Status.Tests;
 
 public sealed class MonitoringAvailabilityTests
 {
+    [Fact]
+    public void ReaderLoadsAnExtensionlessPemBundleWithAUsableMatchingPrivateKey()
+    {
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=status-reader-test", key, HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+        var path = Path.Combine(Path.GetTempPath(), $"status-reader-{Guid.NewGuid():N}");
+        try
+        {
+            File.WriteAllText(path, certificate.ExportCertificatePem() + "\n" + key.ExportPkcs8PrivateKeyPem());
+            using var loaded = MonitoringWorker.LoadReaderCertificate(path);
+            using var privateKey = loaded.GetRSAPrivateKey();
+            Assert.NotNull(privateKey);
+            byte[] assertion = [1, 2, 3];
+            var signature = privateKey.SignData(assertion, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            Assert.True(key.VerifyData(assertion, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
+        }
+        finally { File.Delete(path); }
+    }
+
     [Fact]
     public void CatalogueMatchesTheProducerOwnedBindingContractWithoutEndpointCollectionCapability()
     {
