@@ -9,7 +9,7 @@
   "services": [
     {
       "name": "platform-status-service",
-      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/service@sha256:176d71ce6a68685ab0c9ec6dd2f36173c69c5b1c4ad18463a957c58234aeba9e",
+      "image": "acr7ca0fd3326df.azurecr.io/workloads/platform-status-web/service@sha256:177fad2e43bc95aa39dd3ce73c1283bd31985100566399cffc0407dfbacf0e63",
       "runAs": "10001:10001",
       "environment": {
         "STATUS_RUNTIME_FILE": "/node/runtime.json"
