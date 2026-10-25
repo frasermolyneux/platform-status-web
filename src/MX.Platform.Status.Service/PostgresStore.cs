@@ -568,7 +568,8 @@ public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233
         command.Parameters.AddWithValue(fingerprint);
         command.Parameters.AddWithValue(observedAt);
         command.Parameters.AddWithValue(DateOnly.FromDateTime(observedAt.UtcDateTime));
-        command.Parameters.AddWithValue(NpgsqlDbType.Integer, success is null ? DBNull.Value : success.Value ? 0 : 1);
+        object failures = success switch { true => 0, false => 1, _ => DBNull.Value };
+        command.Parameters.AddWithValue(NpgsqlDbType.Integer, failures);
         await command.ExecuteNonQueryAsync(ct);
     }
     public async Task SaveProbeEvidenceAsync(ProbeObservation observation, CancellationToken ct)

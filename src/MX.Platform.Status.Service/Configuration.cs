@@ -166,25 +166,27 @@ public sealed class StatusCatalog
     {
         foreach (var site in Sites)
             foreach (var check in site.Checks.Where(check => check.Monitoring is not null))
-            {
-                var reference = check.Monitoring!;
-                var source = Sites.SingleOrDefault(candidate => candidate.Site.Id == reference.SiteId)
-                    ?? throw new InvalidOperationException("Monitoring references must name a configured owning site.");
-                if (source.Site.Id == site.Site.Id)
-                {
-                    if (reference.ComponentId != check.Component)
-                        throw new InvalidOperationException("Monitoring references must name their own component.");
-                }
-                else if (check.SharedId is null || !site.SharedComponents.TryGetValue(check.Component, out var identity)
-                    || source.SharedComponents.GetValueOrDefault(reference.ComponentId) != identity)
-                    throw new InvalidOperationException("Cross-site monitoring inputs require an explicitly shared component.");
-            }
-        foreach (var shared in Sites.SelectMany(site => site.Checks.Where(check => check.SharedId is not null))
-            .GroupBy(check => check.SharedId))
-            if (shared.Select(check => check.Monitoring is { } source
+                ValidateMonitoringOwner(site, check);
+        if (Sites.SelectMany(site => site.Checks.Where(check => check.SharedId is not null))
+            .GroupBy(check => check.SharedId).Any(shared => shared.Select(check => check.Monitoring is { } source
                 ? $"{source.Identity}|{source.IntervalSeconds}|{string.Join(',', source.Resources.Order())}|{string.Join(',', source.Regions.Order())}"
-                : null).Distinct().Count() != 1)
-                throw new InvalidOperationException("Shared checks must consume the same monitoring identity, resources, cadence and regions.");
+                : null).Distinct().Count() != 1))
+            throw new InvalidOperationException("Shared checks must consume the same monitoring identity, resources, cadence and regions.");
+    }
+
+    private void ValidateMonitoringOwner(SiteDefinition site, CheckDefinition check)
+    {
+        var reference = check.Monitoring!;
+        var source = Sites.SingleOrDefault(candidate => candidate.Site.Id == reference.SiteId)
+            ?? throw new InvalidOperationException("Monitoring references must name a configured owning site.");
+        if (source.Site.Id == site.Site.Id)
+        {
+            if (reference.ComponentId != check.Component)
+                throw new InvalidOperationException("Monitoring references must name their own component.");
+        }
+        else if (check.SharedId is null || !site.SharedComponents.TryGetValue(check.Component, out var identity)
+            || source.SharedComponents.GetValueOrDefault(reference.ComponentId) != identity)
+            throw new InvalidOperationException("Cross-site monitoring inputs require an explicitly shared component.");
     }
 
     private static void ValidateSharedComponents(SiteDefinition definition)

@@ -69,30 +69,33 @@ public sealed class MonitoringWorker(
         var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
         var observations = batches.SelectMany(batch => batch.Rows).ToArray();
         var cached = new Dictionary<string, CheckResult>();
-        foreach (var site in catalog.Sites)
-            foreach (var result in await database.ReadChecksAsync(site.Site.Id, ct))
-                cached[$"{site.Site.Id}/{result.CheckId}"] = result;
+        foreach (var site in catalog.Sites.Select(site => site.Site))
+            foreach (var result in await database.ReadChecksAsync(site.Id, ct))
+                cached[$"{site.Id}/{result.CheckId}"] = result;
         var now = DateTimeOffset.UtcNow;
         var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null)
             .Select(check => MonitoringAvailability.Project(site.Site.Id, check,
                 observations, now, cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))))
             .OfType<CheckResult>().ToArray();
         await database.SaveMonitoringChecksAsync(results, ct);
-        if (requireCompleteRegionalCoverage)
-        {
-            if (unavailable.Count > 0)
-                throw new InvalidOperationException("Monitoring preflight could not query every required Application Insights resource.");
-            foreach (var site in catalog.Sites)
-                foreach (var check in site.Checks.Where(check => check.Monitoring is not null))
-                {
-                    var source = check.Monitoring!;
-                    var result = MonitoringAvailability.Project(site.Site.Id, check, observations, now);
-                    if (result is null || source.Regions.Any(region => !result.Regions.Any(observation =>
-                        observation.Region.Equals(region, StringComparison.OrdinalIgnoreCase)
-                        && observation.LastSeen is { } at && now - at <= TimeSpan.FromSeconds(source.FreshnessSeconds))))
-                        throw new InvalidOperationException($"Fresh regional monitoring coverage is incomplete for {site.Site.Id}/{check.Id}.");
-                }
-        }
+        if (requireCompleteRegionalCoverage) ValidateCoverage(unavailable, observations, now);
         return results.Length;
+    }
+
+    private void ValidateCoverage(IReadOnlyCollection<string> unavailable,
+        IReadOnlyList<MonitoringObservation> observations, DateTimeOffset now)
+    {
+        if (unavailable.Count > 0)
+            throw new InvalidOperationException("Monitoring preflight could not query every required Application Insights resource.");
+        foreach (var site in catalog.Sites)
+            foreach (var check in site.Checks.Where(check => check.Monitoring is not null))
+            {
+                var source = check.Monitoring!;
+                var result = MonitoringAvailability.Project(site.Site.Id, check, observations, now);
+                if (result is null || source.Regions.Any(region => !result.Regions.Any(observation =>
+                    observation.Region.Equals(region, StringComparison.OrdinalIgnoreCase)
+                    && observation.LastSeen is { } at && now - at <= TimeSpan.FromSeconds(source.FreshnessSeconds))))
+                    throw new InvalidOperationException($"Fresh regional monitoring coverage is incomplete for {site.Site.Id}/{check.Id}.");
+            }
     }
 }

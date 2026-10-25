@@ -545,12 +545,17 @@ public sealed partial class IndependentServiceTests : IDisposable
                         .ComponentsById[$"{site.Site.Id}.{fixture}"].Days).Total);
 
                 await using (var reset = new Npgsql.NpgsqlCommand("""
-                    DELETE FROM status_probe_days WHERE component_id IN ($1,$2);
-                    DELETE FROM status_sample_cursors WHERE component_id IN ($1,$2);
+                    WITH days AS (DELETE FROM status_probe_days WHERE component_id IN ($1,$2)),
+                    cursors AS (DELETE FROM status_sample_cursors WHERE component_id IN ($1,$2))
+                    DELETE FROM status_evidence WHERE source='check-result' AND event_id IN ($3,$4,$5,$6)
                     """, lease.Connection))
                 {
                     reset.Parameters.AddWithValue($"mx.{fixture}");
                     reset.Parameters.AddWithValue($"xi.{fixture}");
+                    reset.Parameters.AddWithValue($"mx/{fixture}.fast");
+                    reset.Parameters.AddWithValue($"mx/{fixture}.slow");
+                    reset.Parameters.AddWithValue($"xi/{fixture}.fast");
+                    reset.Parameters.AddWithValue($"xi/{fixture}.slow");
                     await reset.ExecuteNonQueryAsync();
                 }
                 var expiredAt = DateTimeOffset.UtcNow.AddMinutes(-16);
@@ -625,11 +630,17 @@ public sealed partial class IndependentServiceTests : IDisposable
                 }), StatusJson.Options));
                 using var queued = new PublicationWorker(new StatusCatalog(queuedPath), app.Services.GetRequiredService<RuntimeOptions>(),
                     app.Services.GetRequiredService<PublicationStore>(), database, NullLogger<PublicationWorker>.Instance);
+                await database.SaveMonitoringChecksAsync(
+                    [new("mx", $"{fixture}.one-sided", ComponentStatus.Operational, DateTimeOffset.UtcNow)
+                        { ObservationKey = "one-sided-incomplete" }], default);
                 using var publicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 await queued.PublishAsync(lease, publicationDeadline.Token);
                 var queuedPublication = Assert.IsType<StatusApiResponse>(await database.ReadPublicationAsync("mx", default));
                 Assert.Equal(20, queuedPublication.Components.Single(component => component.Id == $"mx.{fixture}.one-sided")
                     .Checks!.Count(check => check.Name == "Queued" && check.Status == "unknown"));
+                foreach (var site in catalog.Sites)
+                    Assert.Equal(1, Assert.Single((await database.ReadHistoryAsync(site, default))
+                        .ComponentsById[$"{site.Site.Id}.{fixture}.one-sided"].Days).Total);
             }
         }
         finally

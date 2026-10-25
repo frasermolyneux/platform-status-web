@@ -40,9 +40,10 @@ public sealed record CheckResult(string Site, string CheckId, [property: JsonReq
 public static class ComponentChecks
 {
     public static Dictionary<string, ComponentLiveTelemetry> Build(
-        SiteDefinition site, IReadOnlyList<ProbeObservation> probes, IReadOnlyList<CheckResult> signals)
+        SiteDefinition site, IReadOnlyList<ProbeObservation> probes, IReadOnlyList<CheckResult> signals,
+        DateTimeOffset? at = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = at ?? DateTimeOffset.UtcNow;
         return site.EffectiveChecks.GroupBy(check => check.Component).ToDictionary(group => group.Key, group =>
             FromChecks(group.Select(check => Observe(site, check, signals, now)).ToArray()));
     }

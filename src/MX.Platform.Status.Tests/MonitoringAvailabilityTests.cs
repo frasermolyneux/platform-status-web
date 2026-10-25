@@ -122,10 +122,27 @@ public sealed class MonitoringAvailabilityTests
         var cached = MonitoringAvailability.Project("mx", check,
             [Row("uksouth", false, at), Row("eastus", false, at), Row("westeurope", false, at)], at)!;
         Assert.Equal(0, ComponentChecks.Build(site, [], [cached])["mx.shared"].Samples);
-        var historical = ComponentChecks.FromChecks([ComponentChecks.Observe(site, check, [cached], at)]);
+        var historical = ComponentChecks.Build(site, [], [cached], at)["mx.shared"];
         Assert.Equal(1, historical.Samples);
         Assert.Equal(1, historical.Failures);
         Assert.Equal(at, historical.LastSeen);
+    }
+
+    [Fact]
+    public void HistoricalAggregationKeepsMissingConfiguredChecksUnknown()
+    {
+        var at = DateTimeOffset.UtcNow.AddMinutes(-16);
+        var check = Check with { Component = "mx.shared" };
+        var site = new SiteDefinition
+        {
+            Site = new() { Id = "mx" },
+            Checks = [check, check with { Id = "missing", Monitoring = null }]
+        };
+        var cached = MonitoringAvailability.Project("mx", check,
+            [Row("uksouth", true, at), Row("eastus", true, at), Row("westeurope", true, at)], at)!;
+        var historical = ComponentChecks.Build(site, [], [cached], at)["mx.shared"];
+        Assert.Equal(0, historical.Samples);
+        Assert.Contains(historical.Checks, result => result.Id == "missing" && result.Status == ComponentStatus.Unknown);
     }
 
     [Fact]

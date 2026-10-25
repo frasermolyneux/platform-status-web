@@ -117,17 +117,12 @@ public sealed class PublicationWorker(
             var live = catalog.ProjectTelemetry(site, telemetry);
             foreach (var component in live.Keys)
             {
-                var shared = site.SharedComponents.GetValueOrDefault(component);
-                var identities = catalog.Sites.SelectMany(source => source.EffectiveChecks
-                    .Where(check => shared is null
-                        ? source.Site.Id == site.Site.Id && check.Component == component
-                        : source.SharedComponents.GetValueOrDefault(check.Component) == shared)
-                    .Select(check => InputIdentity(source, check))).ToHashSet();
+                var identities = HistoryInputIdentities(site, component);
                 var inputs = catalog.Sites.SelectMany(source => source.EffectiveChecks
                     .Where(check => identities.Contains(InputIdentity(source, check)))
                     .SelectMany(check => signals[source.Site.Id].Where(signal => signal.CheckId == check.Id
                             && ComponentChecks.MatchesMonitoringSource(check, signal))
-                        .Select(signal => (Identity: InputIdentity(source, check), Signal: signal, Site: source, Check: check))))
+                        .Select(signal => (Identity: InputIdentity(source, check), Signal: signal))))
                     .GroupBy(input => input.Identity)
                     .Select(group => group.MaxBy(input => input.Signal.ObservedAt))
                     .OrderBy(input => input.Identity, StringComparer.Ordinal).ToArray();
@@ -140,9 +135,10 @@ public sealed class PublicationWorker(
                         ?? $"{input.Signal.ObservedAt:O}/{input.Signal.Status}"
                     }), StatusJson.Options)));
                 var observedAt = inputs.Max(input => input.Signal.ObservedAt);
-                var sample = ComponentChecks.FromChecks(inputs.Select(input =>
-                    ComponentChecks.Observe(input.Site, input.Check, [input.Signal], observedAt)).ToArray());
-                if (sample.Samples == 0) continue;
+                var measured = catalog.Sites.ToDictionary(source => source.Site.Id,
+                    source => ComponentChecks.Build(source, [], signals[source.Site.Id], observedAt));
+                var sample = catalog.ProjectTelemetry(site, measured).GetValueOrDefault(component);
+                if (sample is null || sample.Samples == 0) continue;
                 await lease.RecordMonitoringSampleAsync(site.Site.Id, component, fingerprint, observedAt,
                     IsMaintained(site, component, observedAt, incidents) ? null : sample.Failures == 0, ct);
             }
@@ -152,6 +148,16 @@ public sealed class PublicationWorker(
 
     private static string InputIdentity(SiteDefinition site, CheckDefinition check) =>
         check.Monitoring?.Identity ?? check.SharedId ?? $"{site.Site.Id}/{check.Id}";
+
+    private HashSet<string> HistoryInputIdentities(SiteDefinition site, string component)
+    {
+        var shared = site.SharedComponents.GetValueOrDefault(component);
+        return catalog.Sites.SelectMany(source => source.EffectiveChecks
+            .Where(check => shared is null
+                ? source.Site.Id == site.Site.Id && check.Component == component
+                : source.SharedComponents.GetValueOrDefault(check.Component) == shared)
+            .Select(check => InputIdentity(source, check))).ToHashSet();
+    }
 
     internal static bool IsMaintained(SiteDefinition site, string componentId, DateTimeOffset at,
         IReadOnlyList<IncidentRecord> incidents)

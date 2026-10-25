@@ -83,10 +83,10 @@ internal static class MonitoringAvailability
         var fresh = regions.Where(region => source.Regions.Contains(region.Region, StringComparer.OrdinalIgnoreCase)
             && region.LastSeen is { } at && at <= now.AddMinutes(5)
             && now - at <= TimeSpan.FromSeconds(source.FreshnessSeconds)).ToArray();
-        return fresh.Length == 0 ? ComponentStatus.Unknown
-            : fresh.All(region => region.Failures > 0) ? ComponentStatus.Outage
-            : fresh.Any(region => region.Failures > 0) || fresh.Length < source.Regions.Length
-                ? ComponentStatus.Degraded : ComponentStatus.Operational;
+        if (fresh.Length == 0) return ComponentStatus.Unknown;
+        if (fresh.All(region => region.Failures > 0)) return ComponentStatus.Outage;
+        return fresh.Any(region => region.Failures > 0) || fresh.Length < source.Regions.Length
+            ? ComponentStatus.Degraded : ComponentStatus.Operational;
     }
 
     internal static IEnumerable<MonitoringObservation> RecoverCached(MonitoringReference source, CheckResult? cached) =>
