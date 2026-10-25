@@ -4,6 +4,52 @@ import { JSDOM } from 'jsdom';
 import { affectedComponents, evidenceCards, incidentSeed } from '../src/client/evidence';
 import type { StatusResponse } from '../src/client/api';
 
+test('overview shows only the latest 30 days and matching observed availability without shortening detailed history', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderOverview, renderComponent, renderHistory } = await import('../src/client/render');
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'mx', displayName: 'MX status' }, generatedAt: '2026-10-25T18:00:00Z',
+    summary: { status: 'operational' }, incidents: [], maintenance: [],
+    components: [{ id: 'geo', name: 'GeoLocation', kind: 'leaf', status: 'operational',
+      uptimeWindowDays: 90, uptimeRatio: 0.1,
+      history: Array.from({ length: 90 }, (_, index) => ({
+        date: new Date(Date.UTC(2026, 9, 25) - (89 - index) * 86400000).toISOString().slice(0, 10),
+        status: index < 60 ? 'outage' : 'unknown', total: index < 60 ? 100 : 0,
+        failed: index < 60 ? 100 : null,
+      })) }],
+  };
+  const history = data.components[0].history;
+  history[60] = { ...history[60], status: 'degraded', total: 10, failed: 2 };
+  history[61] = { ...history[61], status: 'maintenance', total: 100, failed: 100 };
+  history[89] = { ...history[89], status: 'operational', total: 30, failed: 0 };
+
+  renderOverview(data);
+  const bars = document.querySelectorAll<HTMLElement>('.history-section .history-bar');
+  assert.equal(bars.length, 30);
+  assert.ok(bars[0].title.startsWith(history[60].date));
+  assert.ok(bars[29].title.startsWith(history[89].date));
+  assert.match(document.querySelector('.history-intro')?.textContent || '', /The last 30 days/);
+  assert.equal(document.querySelector('.history-uptime')?.textContent, '95.00% check availability');
+  assert.equal(document.querySelector('.component-uptime')?.textContent, '95.00%');
+  assert.equal(data.components[0].history.length, 90);
+  assert.equal(data.components[0].uptimeRatio, 0.1);
+
+  renderComponent(data, 'geo');
+  assert.equal(document.querySelectorAll('.history-bar').length, 90);
+  assert.equal(document.querySelector('.history-uptime')?.textContent, '10.00% check availability');
+  renderHistory(data);
+  assert.equal(document.querySelectorAll('.history-bar').length, 90);
+
+  data.components[0].history = history.map((day, index) => index < 60 ? day
+    : { ...day, status: 'unknown', total: 0, failed: null });
+  renderOverview(data);
+  assert.equal(document.querySelectorAll('.history-bar').length, 30);
+  assert.equal(document.querySelector('.history-uptime')?.textContent, '');
+  assert.equal(document.querySelector('.component-uptime')?.textContent, '—');
+});
+
 test('incidents identify affected services on cards and component pages, and link their actual GitHub source', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
   for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
