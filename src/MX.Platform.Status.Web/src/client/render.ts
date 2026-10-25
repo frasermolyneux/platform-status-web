@@ -137,10 +137,11 @@ function issueLink(incident: IncidentDto): string {
 
 function renderIncidentCard(inc: IncidentDto, data: StatusResponse): string {
   const info = getStatusInfo(inc.severity);
-  return `<div class="incident-card ${inc.state === 'monitoring' ? 'status-monitoring' : info.className}">
+  const recovering = inc.state === 'monitoring' && inc.severity !== 'maintenance';
+  return `<div class="incident-card ${recovering ? 'status-monitoring' : info.className}">
     <h3><a href="/incident/${escapeHtml(String(inc.id))}">${escapeHtml(inc.title)}</a></h3>
     <div class="incident-meta">
-      ${inc.state === 'monitoring' ? `<span>Previous impact: ${getStatusInfo(inc.severity).label}</span>`
+      ${recovering ? `<span>Previous impact: ${getStatusInfo(inc.severity).label}</span>`
         : `<span class="badge badge-${escapeHtml(inc.severity)}">${getStatusInfo(inc.severity).label}</span>`}
       <span class="badge badge-state">${escapeHtml(inc.state)}</span>
       <span>${formatRelative(inc.createdAt)}</span>

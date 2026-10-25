@@ -86,16 +86,18 @@ public sealed record IncidentRecord
     private IReadOnlyList<IncidentImpactObservation> ObserveGitHubTransitions(IncidentRecord? previous,
         IReadOnlyList<IncidentImpactObservation> history)
     {
-        if (!Published || SourceUrl is null || previous is not { Published: true } || history.Count == 0)
-            return history;
+        if (!Published || SourceUrl is null) return history;
         var observations = history.ToList();
-        foreach (var update in PublicUpdates.Where(update => update.At >= history[^1].At
-            && !previous.PublicUpdates.Contains(update)).OrderBy(update => update.At))
+        var pending = history.Count == 0 ? PublicUpdates : PublicUpdates.Where(update => update.At >= history[^1].At
+            && previous?.PublicUpdates.Contains(update) != true).ToArray();
+        foreach (var update in pending.OrderBy(update => update.At))
         {
-            var latest = observations[^1];
-            var severity = update.Severity ?? latest.Severity;
-            if (latest.State == update.State && latest.Severity == severity) continue;
-            observations.Add(latest with { At = update.At, State = update.State, Severity = severity });
+            var latest = observations.LastOrDefault();
+            var severity = update.Severity ?? latest?.Severity;
+            if (!severity.HasValue) continue;
+            latest ??= new(update.At, update.State, severity.Value, Components, ScheduledStart, ScheduledEnd);
+            if (observations.Count == 0 || latest.State != update.State || latest.Severity != severity)
+                observations.Add(latest with { At = update.At, State = update.State, Severity = severity.Value });
         }
         return observations;
     }

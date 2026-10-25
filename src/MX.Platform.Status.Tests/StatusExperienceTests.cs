@@ -72,8 +72,15 @@ public sealed class StatusExperienceTests
         Assert.NotNull(resolved.ResolvedAt);
         Assert.Throws<InvalidDataException>(() => GitHubIssueParser.Parse(
             Issue([.. monitoringLabels, "severity:outage", "severity:degraded"]), [], catalog, new(), [recovered]));
-        var taskHistory = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-tasks").History;
-        Assert.Equal("outage", taskHistory.Single(day => day.Date == DateOnly.FromDateTime(Created.UtcDateTime)).Status);
+        var task = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-tasks");
+        var historical = IncidentImpact.Apply(publication with
+        {
+            Components = [task with
+        {
+            History = [new() { Date = DateOnly.FromDateTime(Created.UtcDateTime), Status = "operational" }]
+        }]
+        }, [recovered.ToPublicIncident()]);
+        Assert.Equal("outage", Assert.Single(Assert.Single(historical.Components).History).Status);
     }
 
     [Fact]
@@ -104,6 +111,14 @@ public sealed class StatusExperienceTests
                 [comment], Catalogue(), new()));
             Assert.Equal(Severity.Degraded, imported.Severity);
             Assert.Equal(IncidentState.Monitoring, imported.State);
+            var persisted = JsonSerializer.Deserialize<IncidentRecord>(JsonSerializer.Serialize(
+                imported.ObserveImpact(null, Created.AddHours(1)), StatusJson.Options), StatusJson.Options)!;
+            var earlier = IncidentImpact.ForRange(persisted.ToPublicIncident(),
+                new HashSet<string> { "mx.sitewatch.geo-location-web" }, Created, Created.AddMinutes(20)).ToArray();
+            if (description == body) Assert.Equal(["outage"], earlier);
+            else Assert.Empty(earlier);
+            Assert.Empty(IncidentImpact.ForRange(persisted.ToPublicIncident(),
+                new HashSet<string> { "mx.sitewatch.geo-location-web" }, Created.AddMinutes(20), Created.AddHours(1)));
         }
     }
 

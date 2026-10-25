@@ -94,7 +94,7 @@ test('monitoring shows restoration without hiding a new failure and detailed ran
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
   for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
     Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
-  const { renderOverview, renderIncident, renderComponent } = await import('../src/client/render');
+  const { renderOverview, renderIncident, renderComponent, renderHistory } = await import('../src/client/render');
   const bucket = { start: '2026-10-25T15:00:00Z', end: '2026-10-25T15:15:00Z',
     status: 'outage', total: 2, failed: 0, incidentIds: [3] };
   const data: StatusResponse = {
@@ -128,6 +128,9 @@ test('monitoring shows restoration without hiding a new failure and detailed ran
   data.incidents[0].severity = 'maintenance';
   renderIncident(data, '3');
   assert.equal(document.querySelector('.recovery-message'), null);
+  assert.doesNotMatch(document.body.textContent || '', /Previous impact:/);
+  renderHistory(data);
+  assert.equal(document.querySelector('.incident-card.status-monitoring'), null);
   assert.doesNotMatch(document.body.textContent || '', /Previous impact:/);
   renderComponent(data, 'tasks');
   assert.equal(document.querySelector('[data-history-range="3d"]')?.getAttribute('aria-pressed'), 'true');
