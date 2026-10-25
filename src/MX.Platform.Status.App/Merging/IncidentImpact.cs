@@ -59,9 +59,11 @@ public static class IncidentImpact
         foreach (var source in history.GroupBy(observation => observation.SourceSite))
         {
             var observations = source.OrderBy(observation => observation.At).ToArray();
+            var resolution = SourceResolution(observations, resolvedAt);
             for (var index = 0; index < observations.Length; index++)
             {
-                var end = index + 1 < observations.Length ? observations[index + 1].At : resolvedAt ?? DateTimeOffset.UtcNow;
+                var end = index + 1 < observations.Length ? observations[index + 1].At : resolution ?? DateTimeOffset.UtcNow;
+                end = Earlier(end, resolution ?? end);
                 if (ObservationImpact(observations[index], end, components, midnight, midnight.AddDays(1)) is { } impact)
                     yield return impact;
             }
@@ -111,6 +113,7 @@ public static class IncidentImpact
             var update = updates[index];
             severity = update.Severity ?? severity;
             var end = index + 1 < updates.Length ? updates[index + 1].At : incident.ResolvedAt ?? DateTimeOffset.UtcNow;
+            end = Earlier(end, incident.ResolvedAt ?? end);
             if (severity is not null && update.State is not ("resolved" or "monitoring") && AffectsDate(update.At, end, date))
                 yield return severity;
         }
@@ -126,9 +129,11 @@ public static class IncidentImpact
         foreach (var source in observations.GroupBy(observation => observation.SourceSite))
         {
             var ordered = source.OrderBy(observation => observation.At).ToArray();
+            var resolution = SourceResolution(ordered, incident.ResolvedAt);
             for (var index = 0; index < ordered.Length; index++)
             {
-                var until = index + 1 < ordered.Length ? ordered[index + 1].At : incident.ResolvedAt ?? end;
+                var until = index + 1 < ordered.Length ? ordered[index + 1].At : resolution ?? end;
+                until = Earlier(until, resolution ?? until);
                 if (ObservationImpact(ordered[index], until, components, start, end) is { } impact)
                     yield return impact;
             }
@@ -152,6 +157,13 @@ public static class IncidentImpact
     }
 
     private static DateTimeOffset Earlier(DateTimeOffset first, DateTimeOffset second) => first < second ? first : second;
+
+    private static DateTimeOffset? SourceResolution(IncidentImpactObservation[] observations, DateTimeOffset? resolvedAt)
+    {
+        // Shared projections retain independently resolved brand histories.
+        if (observations[0].SourceSite is null) return resolvedAt;
+        return observations[^1].State == IncidentState.Resolved ? observations[^1].At : null;
+    }
 
     public static string Worst(IEnumerable<string> statuses)
     {

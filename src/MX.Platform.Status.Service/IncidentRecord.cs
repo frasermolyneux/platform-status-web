@@ -90,7 +90,8 @@ public sealed record IncidentRecord
         var observations = history.ToList();
         var pending = history.Count == 0 ? PublicUpdates : PublicUpdates.Where(update => update.At >= history[^1].At
             && previous?.PublicUpdates.Contains(update) != true).ToArray();
-        foreach (var update in pending.OrderBy(update => update.At))
+        foreach (var update in pending.Where(update => ResolvedAt is not { } resolved || update.At <= resolved)
+            .OrderBy(update => update.At))
         {
             var latest = observations.LastOrDefault();
             var severity = update.Severity ?? latest?.Severity;

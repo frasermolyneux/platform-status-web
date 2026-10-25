@@ -158,6 +158,54 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void PostResolutionCommentsCannotCreateLaterHistoricalOutages()
+    {
+        var active = new IncidentCommand("Unavailable", ["tasks"], Severity.Outage,
+            IncidentState.Identified, "Investigating", true).Apply(3, "xi", null, Created);
+        var completed = new IncidentCommand(active.Title, active.Components, Severity.Outage,
+            IncidentState.Resolved, "Restored", true).Apply(3, "xi", active, Created.AddMinutes(20)) with
+        {
+            SourceUrl = "https://github.com/frasermolyneux/status-pages/issues/3"
+        };
+        var later = Created.AddDays(1);
+        var comments = completed with
+        {
+            PublicUpdates = [.. completed.PublicUpdates,
+            new() { At = later, State = IncidentState.Identified, Body = "Follow-up discussion" },
+            new() { At = later.AddMinutes(10), State = IncidentState.Monitoring, Body = "More discussion" }]
+        };
+        Assert.Equal(2, comments.ObserveImpact(active, later.AddHours(1)).ImpactHistory.Count);
+        Assert.Equal(2, comments.ObserveImpact(completed, later.AddHours(1)).ImpactHistory.Count);
+        Assert.Equal(2, (comments with { ImpactHistory = [] }).ObserveImpact(null, later.AddHours(1)).ImpactHistory.Count);
+        var malformed = completed with
+        {
+            ImpactHistory = [.. completed.ImpactHistory,
+            new(later, IncidentState.Identified, Severity.Outage, ["tasks"]),
+            new(later.AddMinutes(10), IncidentState.Monitoring, Severity.Outage, ["tasks"])]
+        };
+        Assert.Empty(IncidentImpact.ForRange(malformed.ToPublicIncident(), new HashSet<string> { "tasks" },
+            later, later.AddHours(1)));
+        var publication = IncidentImpact.Apply(new()
+        {
+            Components = [new() { Id = "tasks", History = [new()
+                { Date = DateOnly.FromDateTime(later.UtcDateTime), Status = "operational" }] }],
+            Incidents = [new() { Id = 3, Components = ["tasks"], Severity = "outage", State = "resolved",
+                ResolvedAt = completed.ResolvedAt }]
+        }, [malformed.ToPublicIncident()]);
+        Assert.Equal("operational", Assert.Single(Assert.Single(publication.Components).History).Status);
+        publication = IncidentImpact.Apply(publication with
+        {
+            Incidents = [publication.Incidents[0] with
+        {
+            Updates = [new() { At = Created, State = "identified", Severity = "outage" },
+                new() { At = Created.AddMinutes(20), State = "resolved" },
+                new() { At = later, State = "identified" }, new() { At = later.AddMinutes(10), State = "monitoring" }]
+        }]
+        });
+        Assert.Equal("operational", Assert.Single(Assert.Single(publication.Components).History).Status);
+    }
+
+    [Fact]
     public void DetailedLegacyMaintenanceUsesItsKnownWindowAndStopsAtResolution()
     {
         var now = DateTimeOffset.Parse("2026-10-25T15:40:00Z");
@@ -536,6 +584,8 @@ public sealed class StatusExperienceTests
         Assert.Equal("outage", components["mx.sitewatch.geo-location-web"].History.Single(day => day.Date == first.AddDays(1)).Status);
         foreach (var date in new[] { first, first.AddDays(1) })
             Assert.Equal("outage", components["mx.service.geo-location"].History.Single(day => day.Date == date).Status);
+        Assert.Equal("outage", Assert.Single(IncidentImpact.ForRange(projected.ToPublicIncident(),
+            new HashSet<string> { "mx.sitewatch.geo-location-web" }, started.AddDays(1), started.AddDays(1).AddHours(2))));
     }
 
     [Fact]
