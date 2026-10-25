@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Azure.Monitor.Query;
+using System.Security.Cryptography.X509Certificates;
 
 namespace MX.Platform.Status.Service;
 
@@ -37,8 +38,9 @@ public sealed class MonitoringWorker(
         if (options.AzureCertificatePath is null)
             throw new InvalidOperationException("Monitoring input requires a dedicated certificate-authenticated reader.");
         await database.InitializeAsync(ct);
+        using var certificate = LoadReaderCertificate(options.AzureCertificatePath);
         var credential = new ClientCertificateCredential(options.TenantId, options.AzureCollectorClientId,
-            options.AzureCertificatePath);
+            certificate);
         var client = new LogsQueryClient(credential);
         var references = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Monitoring)
             .OfType<MonitoringReference>().DistinctBy(reference => reference.Identity).ToArray();
@@ -81,6 +83,8 @@ public sealed class MonitoringWorker(
         if (requireCompleteRegionalCoverage) ValidateCoverage(unavailable, observations, now);
         return results.Length;
     }
+
+    internal static X509Certificate2 LoadReaderCertificate(string path) => X509Certificate2.CreateFromPemFile(path);
 
     private void ValidateCoverage(IReadOnlyCollection<string> unavailable,
         IReadOnlyList<MonitoringObservation> observations, DateTimeOffset now)
