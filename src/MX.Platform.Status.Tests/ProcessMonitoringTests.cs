@@ -60,20 +60,25 @@ public sealed class ProcessMonitoringTests
         var day = DateOnly.FromDateTime(now.UtcDateTime);
         var snapshot = Catalogue().Get("xi").Snapshot with { Components = document };
         var definition = document.Components.Single().Children.Single(child => child.Id == "worker");
-        snapshot = snapshot with { Components = document with
+        snapshot = snapshot with
         {
-            Components = [document.Components.Single() with { Children =
+            Components = document with
+            {
+                Components = [document.Components.Single() with { Children =
             [
                 document.Components.Single().Children[0],
                 definition with { Source = new() { Kind = "static", Status = measured } }
             ] }]
-        }};
+            }
+        };
         var publication = new StatusMerger().Merge(snapshot, new Dictionary<string, ComponentLiveTelemetry>(), null, [], []);
         Assert.Equal(expected, publication.Components.Single().Status);
         var propagation = new ImpactPropagation(document);
         var dto = new ComponentDto
         {
-            Id = "portal", History = [new() { Date = day }], Children =
+            Id = "portal",
+            History = [new() { Date = day }],
+            Children =
             [
                 new() { Id = "web", History = [new() { Date = day, Status = "operational", Total = 1 }] },
                 new() { Id = "worker", History = [new() { Date = day, Status = measured, Total = 1, Failed = 1 }] }
@@ -102,8 +107,12 @@ public sealed class ProcessMonitoringTests
         var snapshot = Catalogue().Get("xi").Snapshot with { Components = document };
         var incident = new Incident
         {
-            Id = 15, Title = "Incident", Components = [affected], CreatedAt = now.AddMinutes(-5),
-            Severity = Severity.Outage, State = IncidentState.Identified,
+            Id = 15,
+            Title = "Incident",
+            Components = [affected],
+            CreatedAt = now.AddMinutes(-5),
+            Severity = Severity.Outage,
+            State = IncidentState.Identified,
             ImpactHistory = [new(now.AddMinutes(-5), IncidentState.Identified, Severity.Outage, [affected])]
         };
         var publication = new StatusMerger().Merge(snapshot, new Dictionary<string, ComponentLiveTelemetry>(), null, [incident], []);
