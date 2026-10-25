@@ -55,19 +55,21 @@ public static class IncidentImpact
     private static IEnumerable<string> ObservedImpacts(IReadOnlyList<IncidentImpactObservation> history,
         DateTimeOffset? resolvedAt, DateOnly date, ISet<string> components)
     {
+        var midnight = new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
         foreach (var source in history.GroupBy(observation => observation.SourceSite))
         {
             var observations = source.OrderBy(observation => observation.At).ToArray();
             for (var index = 0; index < observations.Length; index++)
             {
                 var end = index + 1 < observations.Length ? observations[index + 1].At : resolvedAt ?? DateTimeOffset.UtcNow;
-                if (ObservationImpact(observations[index], end, date, components) is { } impact) yield return impact;
+                if (ObservationImpact(observations[index], end, components, midnight, midnight.AddDays(1)) is { } impact)
+                    yield return impact;
             }
         }
     }
 
     private static string? ObservationImpact(IncidentImpactObservation observation, DateTimeOffset end,
-        DateOnly date, ISet<string> components)
+        ISet<string> components, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
     {
         if (observation.State == IncidentState.Resolved
             || observation.State == IncidentState.Monitoring && observation.Severity != Severity.Maintenance
@@ -79,7 +81,7 @@ public static class IncidentImpact
             start = start > windowStart ? start : windowStart;
             end = Earlier(end, windowEnd);
         }
-        return AffectsDate(start, end, date) ? observation.Severity.ToApiString() : null;
+        return start < end && start < rangeEnd && end > rangeStart ? observation.Severity.ToApiString() : null;
     }
 
     private static IEnumerable<string> Descendants(ComponentDto component) =>
@@ -120,40 +122,33 @@ public static class IncidentImpact
     public static IEnumerable<string> ForRange(Incident incident, ISet<string> components,
         DateTimeOffset start, DateTimeOffset end, MaintenanceDto? maintenance = null)
     {
-        var observations = incident.ImpactHistory;
-        if (observations.Count == 0 && incident.Severity == Severity.Maintenance && maintenance is not null)
-            observations = [new(maintenance.ScheduledStart, IncidentState.Investigating, Severity.Maintenance,
-                incident.Components, maintenance.ScheduledStart, maintenance.ScheduledEnd)];
-        else if (observations.Count == 0)
-        {
-            Severity? severity = null;
-            observations = incident.Updates.OrderBy(update => update.At).Select(update =>
-            {
-                severity = update.Severity ?? severity;
-                return severity.HasValue ? new IncidentImpactObservation(update.At, update.State,
-                    severity.Value, incident.Components) : null;
-            }).Where(observation => observation is not null).Select(observation => observation!).ToArray();
-        }
+        var observations = incident.ImpactHistory.Count > 0 ? incident.ImpactHistory : LegacyObservations(incident, maintenance);
         foreach (var source in observations.GroupBy(observation => observation.SourceSite))
         {
             var ordered = source.OrderBy(observation => observation.At).ToArray();
             for (var index = 0; index < ordered.Length; index++)
             {
-                var observation = ordered[index];
-                if (!observation.Components.Any(components.Contains) || observation.State == IncidentState.Resolved
-                    || observation.State == IncidentState.Monitoring && observation.Severity != Severity.Maintenance) continue;
                 var until = index + 1 < ordered.Length ? ordered[index + 1].At : incident.ResolvedAt ?? end;
-                var since = observation.At;
-                if (observation.Severity == Severity.Maintenance)
-                {
-                    if (observation.ScheduledStart is not { } scheduledStart || observation.ScheduledEnd is not { } scheduledEnd) continue;
-                    since = since > scheduledStart ? since : scheduledStart;
-                    until = Earlier(until, scheduledEnd);
-                }
-                if (since < until && since < end && until > start)
-                    yield return observation.Severity.ToApiString();
+                if (ObservationImpact(ordered[index], until, components, start, end) is { } impact)
+                    yield return impact;
             }
         }
+    }
+
+    private static IReadOnlyList<IncidentImpactObservation> LegacyObservations(Incident incident, MaintenanceDto? maintenance)
+    {
+        if (incident.Severity == Severity.Maintenance && maintenance is not null)
+            return [new(maintenance.ScheduledStart, IncidentState.Investigating, Severity.Maintenance,
+                incident.Components, maintenance.ScheduledStart, maintenance.ScheduledEnd)];
+        Severity? severity = null;
+        var observations = new List<IncidentImpactObservation>();
+        foreach (var update in incident.Updates.OrderBy(update => update.At))
+        {
+            severity = update.Severity ?? severity;
+            if (severity.HasValue)
+                observations.Add(new(update.At, update.State, severity.Value, incident.Components));
+        }
+        return observations;
     }
 
     private static DateTimeOffset Earlier(DateTimeOffset first, DateTimeOffset second) => first < second ? first : second;
