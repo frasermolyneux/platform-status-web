@@ -125,6 +125,10 @@ test('monitoring shows restoration without hiding a new failure and detailed ran
   assert.ok(document.querySelector('.check-row .status-label .status-dot[aria-hidden="true"]'));
   document.querySelector<HTMLButtonElement>('[data-history-range="3d"]')!.click();
   assert.equal(document.querySelectorAll('.recent-history-bars .history-bar').length, 1);
+  data.incidents[0].severity = 'maintenance';
+  renderIncident(data, '3');
+  assert.equal(document.querySelector('.recovery-message'), null);
+  assert.doesNotMatch(document.body.textContent || '', /Previous impact:/);
   renderComponent(data, 'tasks');
   assert.equal(document.querySelector('[data-history-range="3d"]')?.getAttribute('aria-pressed'), 'true');
   assert.equal(document.querySelectorAll('.recent-history-bars .history-bar').length, 1);

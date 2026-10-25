@@ -119,3 +119,19 @@ test('public refresh preserves the focused service link after replacing its DOM'
   assert.notEqual(next, previous);
   assert.equal(document.activeElement, next);
 });
+
+test('public refresh retains keyboard focus on a detailed history bucket', async context => {
+  history.replaceState(null, '', '/component/geo');
+  markup = '<button data-history-range="24h" aria-pressed="true">24 hours</button><div tabindex="0" data-history-bucket="geo|24h|2026-10-25T15:00:00Z">Operational</div>';
+  context.after(() => { markup = undefined; });
+  globalThis.fetch = async () => response('Updated status');
+  await routes.get('/component/:id')!({ id: 'geo' });
+  const previous = document.querySelector<HTMLElement>('[data-history-bucket]')!;
+  previous.focus();
+  await routes.get('/component/:id')!({ id: 'geo' });
+  assert.notEqual(document.activeElement, previous);
+  assert.equal(document.activeElement, document.querySelector('[data-history-bucket]'));
+  markup = '<button data-history-range="24h" aria-pressed="true">24 hours</button>';
+  await routes.get('/component/:id')!({ id: 'geo' });
+  assert.equal(document.activeElement, document.querySelector('[data-history-range]'));
+});

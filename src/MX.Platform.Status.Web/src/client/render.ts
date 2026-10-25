@@ -155,7 +155,7 @@ function renderIncidentCard(inc: IncidentDto, data: StatusResponse): string {
 }
 
 function recoveryMessage(incident: IncidentDto, data: StatusResponse): string {
-  if (incident.state !== 'monitoring') return '';
+  if (incident.state !== 'monitoring' || incident.severity === 'maintenance') return '';
   const affected = flattenComponents(data.components).filter(component => incident.components.includes(component.id));
   const recovered = affected.length > 0 && affected.every(component => component.status === 'operational');
   return `<p class="recovery-message">${recovered ? 'Service restored — monitoring.' : 'Monitoring recovery; current availability is shown below.'}</p>`;
@@ -171,7 +171,7 @@ function renderDetailedHistory(component: ComponentDto, range: HistoryRange): st
     <div class="history-label">${escapeHtml(component.name)}<span class="history-uptime">${availability}</span></div>
     <div class="history-bars recent-history-bars">${buckets.map(bucket => {
       const title = `${formatDateTime(bucket.start)} – ${formatDateTime(bucket.end)}: ${getStatusInfo(bucket.status).label}; ${bucket.total} observations${bucket.incidentIds.length ? `; incidents ${bucket.incidentIds.join(', ')}` : ''}`;
-      return `<div class="history-bar ${getStatusInfo(bucket.status).className}${bucket.incidentIds.length ? ' has-incident' : ''}" tabindex="0" role="img" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}"></div>`;
+      return `<div class="history-bar ${getStatusInfo(bucket.status).className}${bucket.incidentIds.length ? ' has-incident' : ''}" data-history-bucket="${escapeHtml(`${component.id}|${range}|${bucket.start}`)}" tabindex="0" role="img" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}"></div>`;
     }).join('')}</div>
     <div class="history-range"><span>${buckets.length ? formatDateTime(buckets[0].start) : ''}</span><span>${buckets.length ? formatDateTime(buckets[buckets.length - 1].end) : ''}</span></div>
   </div>`;
@@ -254,7 +254,7 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
     <h2>${escapeHtml(incident.title)}</h2>
     ${maintenance ? `<p>Maintenance: ${formatDateTime(maintenance.scheduledStart)} — ${formatDateTime(maintenance.scheduledEnd)} (${escapeHtml(maintenance.state)})</p>` : ''}
     <div class="incident-meta">
-      ${incident.state === 'monitoring' ? `<span>Previous impact: ${getStatusInfo(incident.severity).label}</span>`
+      ${incident.state === 'monitoring' && incident.severity !== 'maintenance' ? `<span>Previous impact: ${getStatusInfo(incident.severity).label}</span>`
         : `<span class="badge badge-${escapeHtml(incident.severity)}">${getStatusInfo(incident.severity).label}</span>`}
       <span class="badge badge-state">${escapeHtml(incident.state)}</span>
       <span>Opened ${formatDateTime(incident.createdAt)}</span>

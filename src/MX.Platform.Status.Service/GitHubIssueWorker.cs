@@ -37,12 +37,12 @@ public static class GitHubIssueParser
         var sourceUpdates = new List<SourceUpdateSnapshot>();
         var sourceTimeline = ReadUpdates(issue, comments, options, snapshots: sourceUpdates);
         var state = ReadState(labels, closedAt, sourceTimeline[^1].State);
-        var severity = ReadSeverity(labels, state, previous, sourceBody.Metadata);
+        var schedule = LatestMetadata(issue, comments, options);
+        var severity = ReadSeverity(labels, state, previous, schedule);
         var approved = ApprovedHistory(previous?.OrderByDescending(record => record.PublicUpdates.Count)
             .ThenByDescending(record => record.PublicUpdates.LastOrDefault()?.At).FirstOrDefault());
         var aliases = previous?.SelectMany(record => record.PublicAliases.Append(record.Id))
             .Where(id => id > 0).Distinct().ToArray() ?? [];
-        var schedule = LatestMetadata(issue, comments, options);
         if (severity != Severity.Maintenance) schedule = null;
         var records = new List<IncidentRecord>();
         foreach (var (site, components) in targets)

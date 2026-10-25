@@ -77,6 +77,31 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
+    public void RecoveryWithoutLocalHistoryUsesTheLatestTrustedSeverityEnvelope()
+    {
+        var command = new IncidentCommand("Unavailable", ["mx.sitewatch.geo-location-web"], Severity.Outage,
+            IncidentState.Identified, "Investigating", true, Delivery: "github", OperationId: Guid.NewGuid());
+        var initial = command.Apply(19, "mx", null, Created);
+        var body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, initial, command, null, false, "pending"));
+        command = command with { State = IncidentState.Monitoring, Severity = Severity.Degraded,
+            Message = "Recovery underway", OperationId = Guid.NewGuid() };
+        var recovered = command.Apply(19, "mx", initial, Created.AddMinutes(20));
+        var comment = JsonSerializer.SerializeToElement(new
+        {
+            body = GitHubIncidentDocument.Body(new(command.OperationId!.Value, recovered, command, null, false, "pending")),
+            created_at = Created.AddMinutes(20), user = new { login = "frasermolyneux" }
+        });
+        string[] labels = ["status:incident", "status:published", "site:mx", "workload:geo-location", "state:monitoring"];
+        foreach (var description in new[] { body, "Initial description without an authoring envelope" })
+        {
+            var imported = Assert.Single(GitHubIssueParser.Parse(Issue(labels, body: description, updatedMinutes: 25),
+                [comment], Catalogue(), new()));
+            Assert.Equal(Severity.Degraded, imported.Severity);
+            Assert.Equal(IncidentState.Monitoring, imported.State);
+        }
+    }
+
+    [Fact]
     public void GitHubRecoveryUsesTheStartOfItsCurrentMonitoringSequence()
     {
         var active = new IncidentCommand("Unavailable", ["tasks"], Severity.Outage,
