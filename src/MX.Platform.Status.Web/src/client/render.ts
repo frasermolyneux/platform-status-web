@@ -39,6 +39,16 @@ export function renderOverview(data: StatusResponse): void {
   const app = document.getElementById('app');
   if (!app) return;
 
+  const components = data.components.map(component => {
+    const history = component.history.slice(-30);
+    const observations = history.reduce((sum, day) => {
+      if (day.total == null || day.total <= 0 || day.failed == null || day.status === 'maintenance') return sum;
+      return { total: sum.total + day.total, failed: sum.failed + day.failed };
+    }, { total: 0, failed: 0 });
+    return { ...component, history, uptimeWindowDays: 30,
+      uptimeRatio: observations.total ? 1 - observations.failed / observations.total : null };
+  });
+
   // Update site header
   const titleEl = document.getElementById('site-title');
   const taglineEl = document.getElementById('site-tagline');
@@ -73,7 +83,7 @@ export function renderOverview(data: StatusResponse): void {
   }
 
   html += '<section class="components-section panel"><div class="section-heading"><h2>Service availability</h2><span class="muted">Live observations</span></div>';
-  for (const c of data.components) {
+  for (const c of components) {
     html += renderComponentRow(c);
   }
   html += '</section>';
@@ -93,10 +103,10 @@ export function renderOverview(data: StatusResponse): void {
     html += '</section>';
   }
 
-  // History bars (90-day)
-  if (data.components.length > 0) {
-    html += '<section class="history-section panel"><div class="section-heading"><h2>Availability history</h2><a href="/history">View incident history</a></div><p class="muted history-intro">The last 90 days. Grey periods have no observations and are not counted as healthy.</p>';
-    for (const c of data.components) {
+  // History bars (30-day)
+  if (components.length > 0) {
+    html += '<section class="history-section panel"><div class="section-heading"><h2>Availability history</h2><a href="/history">View incident history</a></div><p class="muted history-intro">The last 30 days. Grey periods have no observations and are not counted as healthy.</p>';
+    for (const c of components) {
       html += renderHistoryBars(c);
     }
     html += '</section>';
