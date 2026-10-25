@@ -16,6 +16,7 @@
     {"siteId":"mx","componentId":"mx.probe.trip-side-kick-website","checkId":"mx.probe.trip-side-kick-website","resources":["platform"],"intervalSeconds":300},
     {"siteId":"mx","componentId":"mx.probe.trip-side-kick-app","checkId":"mx.probe.trip-side-kick-app","resources":["platform"],"intervalSeconds":300},
     {"siteId":"xi","componentId":"xi.sitewatch.forums-web","checkId":"xi.sitewatch.forums-web","resources":["sitewatch-uksouth","sitewatch-eastus","sitewatch-westeurope"],"intervalSeconds":30},
+    {"siteId":"xi","componentId":"xi.sitewatch.forums-tasks","checkId":"xi.sitewatch.forums-tasks","resources":["sitewatch-uksouth","sitewatch-eastus","sitewatch-westeurope"],"intervalSeconds":30},
     {"siteId":"xi","componentId":"xi.sitewatch.portal-web","checkId":"xi.sitewatch.portal-web","resources":["portal"],"intervalSeconds":30},
     {"siteId":"xi","componentId":"xi.sitewatch.portal-web","checkId":"xi.portal-web.routing","resources":["platform"],"intervalSeconds":300},
     {"siteId":"xi","componentId":"xi.sitewatch.repository-api-v1","checkId":"xi.sitewatch.repository-api-v1","resources":["portal"],"intervalSeconds":30},

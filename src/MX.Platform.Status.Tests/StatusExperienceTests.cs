@@ -33,8 +33,8 @@ public sealed class StatusExperienceTests
     public void PublicCoverageContainsOnlyMonitoringBindingsAndPreservesSharedCanonicalIdentities()
     {
         var checks = Catalogue().Sites.SelectMany(site => site.EffectiveChecks).ToArray();
-        Assert.Equal(33, checks.Length);
-        Assert.Equal(31, checks.Select(check => check.Monitoring!.Identity).Distinct().Count());
+        Assert.Equal(34, checks.Length);
+        Assert.Equal(32, checks.Select(check => check.Monitoring!.Identity).Distinct().Count());
         Assert.All(checks, check =>
         {
             Assert.Equal("telemetry", check.Kind);
@@ -43,6 +43,31 @@ public sealed class StatusExperienceTests
         });
         Assert.Equal(2, checks.Count(check => check.SharedId == "geo-location-web.routing"
             && check.Monitoring!.SiteId == "mx" && check.Monitoring.CheckId == "mx.geo-location-web.routing"));
+    }
+
+    [Theory]
+    [InlineData(true, true, true, "operational")]
+    [InlineData(true, false, true, "degraded")]
+    [InlineData(false, false, false, "outage")]
+    public void ForumBackgroundTasksAffectTheirServiceIndependentlyOfTheHealthyWebsite(
+        bool uk, bool us, bool eu, string expected)
+    {
+        var site = Catalogue().Get("xi");
+        var now = DateTimeOffset.UtcNow;
+        bool[] regionSuccess = [uk, us, eu];
+        var observations = site.EffectiveChecks.Select(check => MonitoringAvailability.Project("xi", check,
+            check.Monitoring!.Regions.Select((region, index) => new MonitoringObservation(
+                check.Monitoring.SiteId, check.Monitoring.ComponentId, check.Monitoring.CheckId, region, now,
+                check.Id != "xi.sitewatch.forums-tasks" || regionSuccess[index], null)), now)!).ToArray();
+        var live = ComponentChecks.Build(site, [], observations);
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [], []);
+        var forums = Assert.Single(publication.Components, component => component.Id == "xi.service.forums");
+        var tasks = Assert.Single(forums.Children!, component => component.Id == "xi.sitewatch.forums-tasks");
+        Assert.Equal(expected, tasks.Status);
+        Assert.Equal(expected, Assert.Single(tasks.Checks!).Status);
+        Assert.Equal(expected, forums.Status);
+        Assert.All(forums.Children!.Where(component => component.Id != tasks.Id),
+            component => Assert.Equal("operational", component.Status));
     }
 
     [Theory]
@@ -1123,7 +1148,8 @@ public sealed class StatusExperienceTests
             author: "maintainer"), [], Catalogue(), new() { GitHubTrustedAuthors = ["maintainer"] });
         Assert.Equal(2, records.Count);
         Assert.Equal(["mx.sitewatch.molyneux-me"], records.Single(record => record.SiteId == "mx").Components);
-        Assert.Equal(["xi.sitewatch.forums-web"], records.Single(record => record.SiteId == "xi").Components);
+        Assert.Equal(["xi.sitewatch.forums-web", "xi.sitewatch.forums-tasks"],
+            records.Single(record => record.SiteId == "xi").Components);
     }
 
     [Theory]
