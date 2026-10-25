@@ -32,6 +32,14 @@ terraform -chdir=terraform validate
 
 ## Boundaries and ownership
 
+- Process observations use the mirrored strategic policy in `src/contract/`,
+  distinct from regional availability. Consume source-classified states without
+  implementing workload deadlines here. Supporting-component parent impact caps
+  must apply consistently to live, daily, granular and incident views without
+  changing measured counts, clamping Unknown/maintenance or suppressing explicitly
+  declared parent outages. Producer-first preflight requires fresh process input
+  as well as native regional coverage.
+
 - `platform-monitoring` is the strategic monitoring owner; `platform-sitewatch-func`
   owns endpoint targets, active measurement, cadence/retries and availability alerts.
   This service consumes monitoring observations and owns presentation, public history,

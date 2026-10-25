@@ -58,7 +58,9 @@ public static class HealthDiagnostics
                     siteProbes.Where(observation => definition?.Id == (observation.CheckId ?? observation.Component))
                         .MaxBy(observation => observation.ObservedAt), result?.Detail);
             }).ToArray() ?? [];
-            var source = configured.Any(check => check.Monitoring is not null)
+            var source = configured.Any(check => check.Process is not null)
+                ? "Process monitoring via Application Insights"
+                : configured.Any(check => check.Monitoring is not null)
                 ? "Sitewatch monitoring via Application Insights"
                 : "Telemetry checks and declared incidents";
             if (component.Kind == "group") source = "Service aggregate from components";

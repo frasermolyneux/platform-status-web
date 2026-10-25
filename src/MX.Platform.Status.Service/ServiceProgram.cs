@@ -29,7 +29,7 @@ public static class ServiceProgram
             await using var application = Build([]);
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             var catalog = application.Services.GetRequiredService<StatusCatalog>();
-            var expected = catalog.Sites.Sum(site => site.Checks.Count(check => check.Monitoring is not null));
+            var expected = catalog.Sites.Sum(site => site.Checks.Count(check => check.Monitoring is not null || check.Process is not null));
             var imported = await application.Services.GetRequiredService<MonitoringWorker>().RefreshAsync(timeout.Token,
                 requireCompleteRegionalCoverage: true);
             if (expected == 0 || imported != expected)
@@ -237,7 +237,7 @@ public static class ServiceProgram
             var check = definition?.EffectiveChecks.SingleOrDefault(check => check.Id == checkId && check.Kind == "telemetry");
             if (check is null)
                 return Results.BadRequest(new { error = "Unknown telemetry check." });
-            if (check.Monitoring is not null)
+            if (check.Monitoring is not null || check.Process is not null)
                 return Results.BadRequest(new { error = "This check is owned by Sitewatch/platform-monitoring and only accepts its authenticated monitoring feed." });
             if (result.Site != siteId || result.CheckId != checkId || result.Validate() is not null)
                 return Results.BadRequest(new { error = "Invalid telemetry check scope or observation." });

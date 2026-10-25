@@ -13,5 +13,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="MX.Platform.Status.Tests" />
     <Content Update="catalog.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\contract\process-health-policy.json" Link="process-health-policy.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

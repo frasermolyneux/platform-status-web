@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "eventName": "ProcessHealthSnapshot",
+  "intervalSeconds": 300,
+  "freshnessSeconds": 900,
+  "agentHeartbeatSeconds": 300,
+  "banCheckSeconds": 900,
+  "banDeliverySeconds": 600,
+  "banImportSeconds": 1200,
+  "maximumRecordBytes": 2048,
+  "monthlyIncrementalBudgetUsd": 5,
+  "bindings": [
+    { "siteId": "xi", "componentId": "xi.process.server-agent", "checkId": "xi.process.server-agent.fleet", "resource": "portal", "role": "Portal Server Agent" },
+    { "siteId": "xi", "componentId": "xi.process.ban-sync", "checkId": "xi.process.ban-sync.delivery", "resource": "portal", "role": "Portal Server Agent" },
+    { "siteId": "xi", "componentId": "xi.process.ban-sync", "checkId": "xi.process.ban-sync.generation", "resource": "portal", "role": "Sync FuncApp" },
+    { "siteId": "xi", "componentId": "xi.process.portal-sync", "checkId": "xi.process.portal-sync.jobs", "resource": "portal", "role": "Sync FuncApp" }
+  ],
+  "jobs": [
+    { "name": "GenerateLatestBansFile", "maximumAgeSeconds": 1200, "checkId": "xi.process.ban-sync.generation" },
+    { "name": "RunConnectedPlayerTagReconciliationSync", "maximumAgeSeconds": 900, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunMapRotationCleanup", "maximumAgeSeconds": 7200, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunUserProfileForumsSync", "maximumAgeSeconds": 7200, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunMapRedirectSync", "maximumAgeSeconds": 93600, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunRedirectToGameServerMapSync", "maximumAgeSeconds": 93600, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunMapImageSync", "maximumAgeSeconds": 691200, "checkId": "xi.process.portal-sync.jobs" }
+  ]
+}

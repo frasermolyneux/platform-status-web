@@ -22,7 +22,8 @@ public sealed class StatusMerger
             .Select(item => item with { Components = ExpandAffected(snapshot.Components.Components, item.Components) })
             .OrderBy(item => item.ScheduledStart).ToArray();
         var nowDate = DateOnly.FromDateTime(DateTime.UtcNow);
-        var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate)).ToArray();
+        var propagation = new ImpactPropagation(snapshot.Components);
+        var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate, propagation)).ToArray();
         var summaryStatus = Summarize(componentDtos.Select(component => ParseStatus(component.Status)));
 
         return IncidentImpact.Apply(new StatusApiResponse
@@ -49,7 +50,7 @@ public sealed class StatusMerger
                 Status = summaryStatus.ToApiString(),
                 Message = BuildSummaryMessage(summaryStatus, componentDtos)
             }
-        }, incidentList);
+        }, incidentList, propagation);
     }
 
     private ComponentDto BuildComponent(
@@ -58,13 +59,13 @@ public sealed class StatusMerger
         IReadOnlyDictionary<string, ComponentLiveTelemetry> liveData,
         IReadOnlyList<Incident> incidents,
         IReadOnlyList<MaintenanceWindow> maintenance,
-        DateOnly today)
+        DateOnly today, ImpactPropagation propagation)
     {
-        var children = component.Children.Where(child => !child.Hidden).Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today)).ToArray();
+        var children = component.Children.Where(child => !child.Hidden).Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today, propagation)).ToArray();
         var windowDays = Math.Max(1, component.Sla.WindowDays);
         var historicalDays = BuildHistoricalWindow(component, history, today, windowDays);
         var todayHistory = historicalDays[^1];
-        var (liveStatus, lastSampleAt) = ResolveLiveStatus(component, children, liveData, historicalDays, todayHistory);
+        var (liveStatus, lastSampleAt) = ResolveLiveStatus(component, children, liveData, historicalDays, todayHistory, propagation);
 
         var incidentStatuses = incidents
             .Where(incident => incident.ResolvedAt is null
@@ -110,12 +111,12 @@ public sealed class StatusMerger
         IReadOnlyList<ComponentDto> children,
         IReadOnlyDictionary<string, ComponentLiveTelemetry> liveData,
         IList<HistoryDay> historicalDays,
-        HistoryDay todayHistory)
+        HistoryDay todayHistory, ImpactPropagation propagation)
     {
         if (component.Kind.Equals("group", StringComparison.OrdinalIgnoreCase))
         {
             return (
-                Summarize(children.Select(child => ParseStatus(child.Status))),
+                Summarize(children.Select(child => propagation.Contribute(component.Id, child.Id, ParseStatus(child.Status)))),
                 children.Select(child => child.LastSampleAt).Where(value => value.HasValue).Max());
         }
 

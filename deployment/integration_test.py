@@ -88,19 +88,22 @@ def seed_monitoring_results(container, catalog):
     rows = []
     for site in catalog:
         for check in site["checks"]:
-            source = check["monitoring"]
+            source_kind = "process" if "process" in check else "monitoring"
+            source = check[source_kind]
             identity = "/".join(source[key] for key in ("siteId", "componentId", "checkId"))
-            document = json.dumps({
+            record = {
                 "site": site["site"]["id"], "checkId": check["id"],
                 "status": "operational", "observedAt": observed,
-                "monitoring": source,
-                "regions": [
-                    {"region": region, "samples": 1, "failures": 0, "lastSeen": observed}
-                    for region in source["regions"]
-                ],
+                source_kind: source,
                 "observationKey": hashlib.sha256((identity + observed).encode()).hexdigest(),
                 "detail": "Synthetic monitoring fixture; no workload request."
-            }).replace("'", "''")
+            }
+            if source_kind == "monitoring":
+                record["regions"] = [
+                    {"region": region, "samples": 1, "failures": 0, "lastSeen": observed}
+                    for region in source["regions"]
+                ]
+            document = json.dumps(record).replace("'", "''")
             rows.append(f"('check-result','{site['site']['id']}/{check['id']}','{observed}','{document}'::jsonb)")
     database_sql(container, """
         INSERT INTO status_evidence(source,event_id,observed_at,document) VALUES

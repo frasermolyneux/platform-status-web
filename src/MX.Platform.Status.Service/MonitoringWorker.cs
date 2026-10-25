@@ -9,7 +9,7 @@ public sealed class MonitoringWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Publisher || !catalog.Sites.Any(site => site.Checks.Any(check => check.Monitoring is not null))) return;
+        if (!options.Publisher || !catalog.Sites.Any(site => site.Checks.Any(check => check.Monitoring is not null || check.Process is not null))) return;
         if (options.AzureCertificatePath is null)
         {
             logger.LogError("Monitoring collection has no reader certificate; cached observations will become stale. No workload probing fallback is available.");
@@ -44,12 +44,16 @@ public sealed class MonitoringWorker(
         var client = new LogsQueryClient(credential);
         var references = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Monitoring)
             .OfType<MonitoringReference>().DistinctBy(reference => reference.Identity).ToArray();
-        var requiredAliases = references.SelectMany(reference => reference.Resources).ToHashSet();
+        var processReferences = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Process)
+            .OfType<ProcessReference>().DistinctBy(reference => reference.Identity).ToArray();
+        var requiredAliases = references.SelectMany(reference => reference.Resources)
+            .Concat(processReferences.Select(reference => reference.Resource)).ToHashSet();
         if (requiredAliases.Any(alias => !options.AzureMonitoringResources.ContainsKey(alias)))
             throw new InvalidOperationException("Monitoring resource bindings are incomplete.");
         var resources = options.AzureMonitoringResources.Where(pair => requiredAliases.Contains(pair.Key))
-            .GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        var batches = await Task.WhenAll(resources.Select(async resource =>
+            .GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase).ToArray();
+        var availabilityTask = Task.WhenAll(resources.Where(resource => references.Any(reference =>
+            reference.Resources.Any(alias => resource.Any(pair => pair.Key == alias)))).Select(async resource =>
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(30));
@@ -68,19 +72,54 @@ public sealed class MonitoringWorker(
                 return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<MonitoringObservation>)[]);
             }
         }));
+        var processTask = Task.WhenAll(resources.Where(resource => processReferences.Any(reference =>
+            resource.Any(pair => pair.Key == reference.Resource))).Select(async resource =>
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            var aliases = resource.Select(pair => pair.Key).ToHashSet();
+            try
+            {
+                var rows = await ProcessMonitoring.QueryAsync(client, resource.Key,
+                    processReferences.Where(reference => aliases.Contains(reference.Resource)).ToArray(), timeout.Token);
+                return (Aliases: aliases, Succeeded: true, Rows: rows);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "Process monitoring query failed for aliases {Aliases}; retaining original assessment timestamps.",
+                    string.Join(", ", aliases));
+                return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<ProcessObservation>)[]);
+            }
+        }));
+        var batches = await availabilityTask;
+        var processBatches = await processTask;
         var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
         var observations = batches.SelectMany(batch => batch.Rows).ToArray();
+        var processObservations = processBatches.SelectMany(batch => batch.Rows).ToArray();
         var cached = new Dictionary<string, CheckResult>();
         foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
             foreach (var result in await database.ReadChecksAsync(siteId, ct))
                 cached[$"{siteId}/{result.CheckId}"] = result;
         var now = DateTimeOffset.UtcNow;
-        var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null)
-            .Select(check => MonitoringAvailability.Project(site.Site.Id, check,
-                observations, now, cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))))
+        var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null || check.Process is not null)
+            .Select(check => check.Process is not null
+                ? ProcessMonitoring.Project(site.Site.Id, check, processObservations, now,
+                    cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))
+                : MonitoringAvailability.Project(site.Site.Id, check,
+                    observations, now, cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))))
             .OfType<CheckResult>().ToArray();
         await database.SaveMonitoringChecksAsync(results, ct);
-        if (requireCompleteRegionalCoverage) ValidateCoverage(unavailable, observations, now);
+        if (requireCompleteRegionalCoverage)
+        {
+            ValidateCoverage(unavailable, observations, now);
+            if (processBatches.Any(batch => !batch.Succeeded))
+                throw new InvalidOperationException("Process preflight could not query every required source.");
+            foreach (var source in processReferences)
+                if (!processObservations.Any(observation => observation.Source.Identity == source.Identity
+                    && now - observation.ObservedAt <= TimeSpan.FromSeconds(source.FreshnessSeconds)))
+                    throw new InvalidOperationException($"Fresh process monitoring coverage is incomplete for {source.CheckId}.");
+        }
         return results.Length;
     }
 
