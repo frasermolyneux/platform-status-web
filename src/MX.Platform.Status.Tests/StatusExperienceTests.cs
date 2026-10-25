@@ -15,49 +15,40 @@ public sealed class StatusExperienceTests
     private static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-10-23T08:00:00Z");
 
     [Fact]
-    public void ExplicitChecksReplaceLegacyProbesForTheirComponentWhileOtherLegacyProbesRemainAvailable()
+    public void LegacyProbeConfigurationIsRejectedRatherThanSilentlyIgnored()
     {
-        var site = Catalogue().Get("mx") with
+        var path = Path.GetTempFileName();
+        try
         {
-            Checks = [new() { Id = "queue", Name = "Queue delay", Component = "mx.sitewatch.geo-location-web", Kind = "telemetry" }]
-        };
-        var queue = Assert.Single(site.EffectiveChecks, check => check.Component == "mx.sitewatch.geo-location-web");
-        Assert.Equal("telemetry", queue.Kind);
-        Assert.Equal("queue", queue.Id);
-        Assert.Contains(site.EffectiveChecks, check => check.Component == "mx.sitewatch.molyneux-me" && check.Kind == "http");
+            File.WriteAllText(path, JsonSerializer.Serialize(Catalogue().Sites.Select(site => site with
+            {
+                Probes = new() { [site.Checks[0].Component] = "https://example.test/" }
+            }), StatusJson.Options));
+            Assert.Throws<InvalidOperationException>(() => new StatusCatalog(path));
+        }
+        finally { File.Delete(path); }
     }
 
-    [Theory]
-    [InlineData(0, false)]
-    [InlineData(299, false)]
-    [InlineData(300, true)]
-    [InlineData(301, true)]
-    [InlineData(-60, false)]
-    public void HttpCheckSchedulingUsesDurableMatchingObservationsAndItsOwnInterval(int ageSeconds, bool due)
+    [Fact]
+    public void PublicCoverageContainsOnlyMonitoringBindingsAndPreservesSharedCanonicalIdentities()
     {
-        var now = DateTimeOffset.UtcNow;
-        var check = new CheckDefinition
+        var checks = Catalogue().Sites.SelectMany(site => site.EffectiveChecks).ToArray();
+        Assert.Equal(33, checks.Length);
+        Assert.Equal(31, checks.Select(check => check.Monitoring!.Identity).Distinct().Count());
+        Assert.All(checks, check =>
         {
-            Id = "slow",
-            Component = "component",
-            Name = "Slow check",
-            Target = "https://example.test/",
-            ExpectedIntervalSeconds = 300
-        };
-        var observation = new ProbeObservation("mx", check.Component, check.Name, check.Target, "publisher",
-            now.AddSeconds(-ageSeconds), true, 200, 10, null, check.Id);
-        Assert.Equal(due, check.IsDue("mx", [observation], now));
-        Assert.True(check.IsDue("mx", [], now));
-        Assert.True(check.IsDue("xi", [observation], now));
-        Assert.True(check.IsDue("mx", [observation with { CheckId = "different" }], now));
-        Assert.True((check with { Target = "https://new.example.test/" }).IsDue("mx", [observation], now));
-        Assert.True((check with { Method = "HEAD" }).IsDue("mx", [observation], now));
+            Assert.Equal("telemetry", check.Kind);
+            Assert.Null(check.Target);
+            Assert.NotNull(check.Monitoring);
+        });
+        Assert.Equal(2, checks.Count(check => check.SharedId == "geo-location-web.routing"
+            && check.Monitoring!.SiteId == "mx" && check.Monitoring.CheckId == "mx.geo-location-web.routing"));
     }
 
     [Theory]
     [InlineData(true, "operational")]
     [InlineData(false, "outage")]
-    public void PartialProbeBatchesRetainSlowCheckStateBeyondTheDefaultComponentFreshnessWindow(bool success, string expected)
+    public void CachedMonitoringRetainsSlowCheckStateBeyondTheDefaultComponentFreshnessWindow(bool success, string expected)
     {
         const string component = "mx.sitewatch.geo-location-web";
         var site = Catalogue().Get("mx") with
@@ -65,21 +56,20 @@ public sealed class StatusExperienceTests
             Probes = [],
             Checks =
             [
-                new() { Id = "fast", Component = component, Name = "Fast", Target = "https://fast.example.test/" },
-                new() { Id = "slow", Component = component, Name = "Slow", Target = "https://slow.example.test/", ExpectedIntervalSeconds = 300 }
+                new() { Id = "fast", Component = component, Name = "Fast" },
+                new() { Id = "slow", Component = component, Name = "Slow", ExpectedIntervalSeconds = 300 }
             ]
         };
         var now = DateTimeOffset.UtcNow;
-        var previous = new ProbeObservation("mx", component, "Slow", "https://slow.example.test/", "publisher",
-            now.AddSeconds(-250), success, success ? 200 : 503, 10, null, "slow");
-        var fresh = previous with { CheckId = "fast", Target = "https://fast.example.test/", ObservedAt = now, Success = true, HttpStatus = 200 };
-        var live = ComponentChecks.Build(site, [previous, fresh], []);
+        var previous = new CheckResult("mx", "slow", success ? ComponentStatus.Operational : ComponentStatus.Outage, now.AddSeconds(-250));
+        var fresh = new CheckResult("mx", "fast", ComponentStatus.Operational, now);
+        var live = ComponentChecks.Build(site, [], [previous, fresh]);
         var publication = new StatusMerger().Merge(site.Snapshot, live, null, [], []);
         var geo = Flatten(publication.Components).Single(item => item.Id == component);
         Assert.Equal(expected, geo.Status);
         Assert.Equal(expected, geo.Checks!.Single(check => check.Id == "mx/slow").Status);
-        Assert.False(site.Checks.Single(check => check.Id == "slow").IsDue("mx", [previous], now));
-        Assert.Equal("unknown", ComponentChecks.Build(site, [fresh], [])[component].Checks
+        Assert.Equal(previous.ObservedAt, geo.Checks!.Single(check => check.Id == "mx/slow").ObservedAt);
+        Assert.Equal("unknown", ComponentChecks.Build(site, [], [fresh])[component].Checks
             .Single(check => check.Id == "mx/slow").Status.ToApiString());
     }
 
@@ -364,30 +354,30 @@ public sealed class StatusExperienceTests
             Probes = [],
             Checks =
             [
-                new() { Id = "http", Name = "HTTP", Component = "mx.sitewatch.geo-location-web", Target = "https://example.com/" },
+                new() { Id = "availability", Name = "Availability", Component = "mx.sitewatch.geo-location-web" },
                 new() { Id = "queue", Name = "Notification delay", Component = "mx.sitewatch.geo-location-web", Kind = "telemetry" }
             ]
         };
         var now = DateTimeOffset.UtcNow;
-        var observation = new ProbeObservation("mx", "mx.sitewatch.geo-location-web", "GeoLocation Website",
-            "https://example.com/", "publisher", now, true, 200, 10, null, "http");
-        var missing = ComponentChecks.Build(mx, [observation], []);
+        const string componentId = "mx.sitewatch.geo-location-web";
+        var observation = new CheckResult("mx", "availability", ComponentStatus.Operational, now);
+        var missing = ComponentChecks.Build(mx, [], [observation]);
         Assert.Contains(missing.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
         Assert.Equal(0, missing.Values.Single().Samples);
-        var failing = ComponentChecks.Build(mx, [observation with { Success = false }], []);
+        var failing = ComponentChecks.Build(mx, [], [observation with { Status = ComponentStatus.Outage }]);
         Assert.Equal(1, failing.Values.Single().Samples);
         Assert.Equal(1, failing.Values.Single().Failures);
         var signal = new CheckResult("mx", "queue", ComponentStatus.Degraded, now.AddSeconds(-15));
-        var telemetry = ComponentChecks.Build(mx, [observation], [signal]);
+        var telemetry = ComponentChecks.Build(mx, [], [observation, signal]);
         var localPublication = new StatusMerger().Merge(mx.Snapshot, telemetry, null, [], []);
         Assert.Equal(signal.ObservedAt, Flatten(localPublication.Components)
-            .Single(component => component.Id == observation.Component).LastSampleAt);
-        Assert.True(HealthDiagnostics.Build(mx, localPublication, [observation], [signal])
-            .Single(component => component.Id == observation.Component).MatchesPublication);
-        Assert.False(HealthDiagnostics.Build(mx, localPublication, [observation with { ObservedAt = now.AddSeconds(1) }], [signal])
-            .Single(component => component.Id == observation.Component).MatchesPublication);
-        Assert.False(HealthDiagnostics.Build(mx, localPublication, [observation], [signal with { ObservedAt = now }])
-            .Single(component => component.Id == observation.Component).MatchesPublication);
+            .Single(component => component.Id == componentId).LastSampleAt);
+        Assert.True(HealthDiagnostics.Build(mx, localPublication, [], [observation, signal])
+            .Single(component => component.Id == componentId).MatchesPublication);
+        Assert.False(HealthDiagnostics.Build(mx, localPublication, [], [observation with { ObservedAt = now.AddSeconds(1) }, signal])
+            .Single(component => component.Id == componentId).MatchesPublication);
+        Assert.False(HealthDiagnostics.Build(mx, localPublication, [], [observation, signal with { ObservedAt = now }])
+            .Single(component => component.Id == componentId).MatchesPublication);
         var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
         {
             ["mx"] = telemetry,
@@ -408,8 +398,8 @@ public sealed class StatusExperienceTests
         var independentChecks = catalog.ProjectTelemetry(xi, all)["xi.sitewatch.geo-location-web"].Checks;
         Assert.Contains(independentChecks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Degraded);
         Assert.Contains(independentChecks, check => check.Id == "xi/queue" && check.Status == ComponentStatus.Operational);
-        var stale = ComponentChecks.Build(mx, [observation],
-            [new("mx", "queue", ComponentStatus.Operational, now.AddMinutes(-10))]);
+        var stale = ComponentChecks.Build(mx, [],
+            [observation, new("mx", "queue", ComponentStatus.Operational, now.AddMinutes(-10))]);
         Assert.Contains(stale.Values.Single().Checks, check => check.Id == "mx/queue" && check.Status == ComponentStatus.Unknown);
     }
 
@@ -422,7 +412,7 @@ public sealed class StatusExperienceTests
         const string xiId = "xi.sitewatch.geo-location-web";
         var mx = catalog.Get("mx");
         var xi = catalog.Get("xi");
-        var http = mx.EffectiveChecks.Single(check => check.Id == mxId);
+        var monitored = mx.EffectiveChecks.Single(check => check.Id == mxId);
         var shared = new CheckDefinition
         {
             Id = "queue",
@@ -431,29 +421,30 @@ public sealed class StatusExperienceTests
             Component = mxId,
             Kind = "telemetry"
         };
-        mx = mx with { Checks = [http, shared] };
+        mx = mx with { Checks = [monitored, shared] };
         xi = xi with
         {
             Checks = [xi.EffectiveChecks.Single(check => check.Id == xiId), shared with { Component = xiId }]
         };
-        var probe = new ProbeObservation("mx", mxId, "GeoLocation Website", http.Target!, "publisher",
-            now, true, 200, 10, null, http.Id);
-        var ownProbe = probe with { Site = "xi", Component = xiId, CheckId = xiId };
+        var healthy = MonitoringAvailability.Project("mx", monitored, monitored.Monitoring!.Regions.Select(region =>
+            new MonitoringObservation(monitored.Monitoring.SiteId, monitored.Monitoring.ComponentId,
+                monitored.Monitoring.CheckId, region, now, true, "OK")), now)!;
+        var ownHealthy = healthy with { Site = "xi", CheckId = xiId };
         var signal = new CheckResult("mx", shared.Id, ComponentStatus.Degraded, now, "MX_PRIVATE_DETAIL");
         var all = new Dictionary<string, Dictionary<string, ComponentLiveTelemetry>>
         {
-            ["mx"] = ComponentChecks.Build(mx, [probe], [signal]),
-            ["xi"] = ComponentChecks.Build(xi, [ownProbe], [])
+            ["mx"] = ComponentChecks.Build(mx, [], [healthy, signal]),
+            ["xi"] = ComponentChecks.Build(xi, [], [ownHealthy])
         };
         var expected = catalog.ProjectTelemetry(xi, all);
         var publication = new StatusMerger().Merge(xi.Snapshot, expected, null, [], []);
-        var diagnostics = HealthDiagnostics.Build(xi, publication, [ownProbe], [signal], expected);
+        var diagnostics = HealthDiagnostics.Build(xi, publication, [], [ownHealthy, signal], expected);
         var geo = diagnostics.Single(component => component.Id == xiId);
         Assert.True(geo.MatchesPublication);
         Assert.Equal("degraded", geo.Checks!.Single(check => check.Id == shared.SharedId).Status);
         Assert.DoesNotContain("MX_PRIVATE_DETAIL", JsonSerializer.Serialize(diagnostics, StatusJson.Options));
-        all["mx"] = ComponentChecks.Build(mx, [probe], [signal with { ObservedAt = now.AddSeconds(1) }]);
-        Assert.False(HealthDiagnostics.Build(xi, publication, [ownProbe], [signal], catalog.ProjectTelemetry(xi, all))
+        all["mx"] = ComponentChecks.Build(mx, [], [healthy, signal with { ObservedAt = now.AddSeconds(1) }]);
+        Assert.False(HealthDiagnostics.Build(xi, publication, [], [ownHealthy, signal], catalog.ProjectTelemetry(xi, all))
             .Single(component => component.Id == xiId).MatchesPublication);
     }
 
@@ -793,13 +784,17 @@ public sealed class StatusExperienceTests
     [Fact]
     public void PublicationUsesTheLatestObservationWithoutMakingPersistedEvidenceAppearFresh()
     {
-        var site = Catalogue().Get("mx");
+        var configured = Catalogue().Get("mx");
         const string id = "mx.sitewatch.geo-location-web";
-        var first = new ProbeObservation("mx", id, "GeoLocation Website", site.EffectiveChecks.Single(check => check.Id == id).Target!, "publisher",
-            Created, false, 503, 10, "HTTP 503");
-        var latest = first with { ObservedAt = Created.AddMinutes(1), Success = true, HttpStatus = 200, Error = null };
-        var result = PublicationWorker.LatestTelemetry(site, [latest, first,
-            latest with { Site = "xi" }, latest with { Component = "removed-component" }]);
+        var site = configured with { Checks = [configured.Checks.Single(check => check.Id == id)] };
+        var check = site.Checks.Single();
+        CheckResult Measured(DateTimeOffset at, bool success) => MonitoringAvailability.Project("mx", check,
+            check.Monitoring!.Regions.Select(region => new MonitoringObservation(check.Monitoring.SiteId,
+                check.Monitoring.ComponentId, check.Monitoring.CheckId, region, at, success, null)), at)!;
+        var first = Measured(Created, false);
+        var latest = Measured(Created.AddMinutes(1), true);
+        var result = ComponentChecks.Build(site, [], [latest, first,
+            latest with { Site = "xi" }, latest with { CheckId = "removed-check" }]);
         var observation = Assert.Single(result).Value;
         Assert.Equal(latest.ObservedAt, observation.LastSeen);
         Assert.Equal(0, observation.Failures);
@@ -826,34 +821,27 @@ public sealed class StatusExperienceTests
     }
 
     [Theory]
-    [InlineData(200, true, "GET")]
-    [InlineData(302, true, "GET")]
-    [InlineData(503, false, "GET")]
-    [InlineData(200, true, "HEAD")]
-    [InlineData(302, true, "HEAD")]
-    [InlineData(503, false, "HEAD")]
-    public async Task IndependentChecksRetainTheHttpResultAndTargetForOperators(int status, bool success, string method)
+    [InlineData("http")]
+    [InlineData("telemetry")]
+    public void CatalogRejectsWorkloadTargetsEvenWhenMislabelledAsTelemetry(string kind)
     {
-        using var client = new HttpClient(new ProbeHandler((request, _) =>
+        var path = Path.GetTempFileName();
+        try
         {
-            Assert.Equal(method, request.Method.Method);
-            return Task.FromResult(new HttpResponseMessage((HttpStatusCode)status));
-        }));
-        var result = await IndependentProbe.ObserveAsync(client, "xi", "xi.sitewatch.forums-web",
-            "Community Forums", "https://www.xtremeidiots.com/", default, method);
-        Assert.Equal(success, result.Success);
-        Assert.Equal(status, result.HttpStatus);
-        Assert.Equal("https://www.xtremeidiots.com/", result.Target);
-        Assert.Equal("xi.sitewatch.forums-web", result.Component);
-        Assert.Equal(method, result.Method);
-        if (success) Assert.Null(result.Error);
-        else Assert.Contains("HTTP 503", result.Error);
+            File.WriteAllText(path, JsonSerializer.Serialize(Catalogue().Sites.Select(site => site with
+            {
+                Checks = site.Checks.Select(check => check with { Kind = kind, Target = "https://example.test/" }).ToList()
+            }), StatusJson.Options));
+            Assert.Throws<InvalidOperationException>(() => new StatusCatalog(path));
+        }
+        finally { File.Delete(path); }
     }
 
     [Theory]
     [InlineData("POST")]
     [InlineData("DELETE")]
     [InlineData("head")]
+    [InlineData("HEAD")]
     public void CatalogRejectsUnsupportedHttpMethods(string method)
     {
         var path = Path.GetTempFileName();
@@ -869,18 +857,10 @@ public sealed class StatusExperienceTests
     }
 
     [Fact]
-    public async Task ProbeNetworkErrorsStayInspectableAndShutdownIsNotRecordedAsAnOutage()
+    public void UnknownCollectionConfigurationIsNotSilentlyIgnored()
     {
-        using var client = new HttpClient(new ProbeHandler((_, _) =>
-            throw new HttpRequestException("Name resolution failed.")));
-        var result = await IndependentProbe.ObserveAsync(client, "mx", "web", "Website", "https://example.test/", default);
-        Assert.False(result.Success);
-        Assert.Null(result.HttpStatus);
-        Assert.Equal("Name resolution failed.", result.Error);
-        using var canceled = new CancellationTokenSource();
-        canceled.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            IndependentProbe.ObserveAsync(client, "mx", "web", "Website", "https://example.test/", canceled.Token));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<CheckDefinition>(
+            """{"id":"check","kind":"telemetry","uri":"https://example.test/"}""", StatusJson.Options));
     }
 
     [Fact]

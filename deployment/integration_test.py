@@ -1,6 +1,7 @@
 """Exercise the production images with real primary/standby PostgreSQL."""
 
 import json
+import hashlib
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -82,8 +83,35 @@ def database_lock(container, key):
         assert process.returncode == 0, errors
 
 
-def verify_publisher_fencing(container):
-    with database_lock(container, 814233108) as release_probe:
+def seed_monitoring_results(container, catalog):
+    observed = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for site in catalog:
+        for check in site["checks"]:
+            source = check["monitoring"]
+            identity = "/".join(source[key] for key in ("siteId", "componentId", "checkId"))
+            document = json.dumps({
+                "site": site["site"]["id"], "checkId": check["id"],
+                "status": "operational", "observedAt": observed,
+                "monitoring": source,
+                "regions": [
+                    {"region": region, "samples": 1, "failures": 0, "lastSeen": observed}
+                    for region in source["regions"]
+                ],
+                "observationKey": hashlib.sha256((identity + observed).encode()).hexdigest(),
+                "detail": "Synthetic monitoring fixture; no workload request."
+            }).replace("'", "''")
+            rows.append(f"('check-result','{site['site']['id']}/{check['id']}','{observed}','{document}'::jsonb)")
+    database_sql(container, """
+        INSERT INTO status_evidence(source,event_id,observed_at,document) VALUES
+        """ + ",".join(rows) + """
+        ON CONFLICT(source,event_id) DO UPDATE
+        SET observed_at=excluded.observed_at,document=excluded.document;
+        """)
+
+
+def verify_publisher_fencing(container, catalog):
+    with database_lock(container, 814233108) as release_sample:
         database_sql(container, """
             CREATE FUNCTION pause_status_probe() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
@@ -94,10 +122,11 @@ def verify_publisher_fencing(container):
                 FOR EACH ROW EXECUTE FUNCTION pause_status_probe();
             """)
         try:
+            seed_monitoring_results(container, catalog)
             wait_for(lambda: database_sql(container, """
                 SELECT EXISTS(SELECT FROM pg_locks
                     WHERE locktype='advisory' AND objid=814233108 AND NOT granted);
-                """) == "t", "publisher blocked during a probe")
+                """) == "t", "publisher blocked during a monitoring history sample")
             snapshot_sql = """
                 SELECT coalesce(sum(total),0)::text || ':' ||
                     (SELECT string_agg(generated_at::text,',' ORDER BY site_id) FROM status_publications)
@@ -113,14 +142,14 @@ def verify_publisher_fencing(container):
                     WHERE locktype='advisory' AND objid=814233107 AND granted);
                 """) == "t", "lost publisher lock released")
             with database_lock(container, 814233107):
-                release_probe()
+                release_sample()
                 wait_for(lambda: database_sql(container, """
                     SELECT NOT EXISTS(SELECT FROM pg_locks
                         WHERE locktype='advisory' AND objid=814233108 AND NOT granted);
-                    """) == "t", "interrupted probe unblocked")
+                    """) == "t", "interrupted history sample unblocked")
                 time.sleep(5)
                 assert database_sql(container, snapshot_sql) == snapshot, \
-                    "A publisher wrote probes or publications after losing its lock session"
+                    "A publisher wrote history or publications after losing its lock session"
         finally:
             database_sql(container, """
                 DROP TRIGGER pause_status_probe ON status_probe_days;
@@ -128,7 +157,7 @@ def verify_publisher_fencing(container):
                 """)
 
 
-def verify_probe_retry_interval(container):
+def verify_monitoring_sampling_retry(container, catalog):
     database_sql(container, """
         CREATE SEQUENCE status_failed_probe_attempt;
         CREATE FUNCTION reject_status_probe() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -136,24 +165,34 @@ def verify_probe_retry_interval(container):
             PERFORM nextval('status_failed_probe_attempt');
             RAISE EXCEPTION 'Injected probe persistence failure';
         END $$;
-        CREATE TRIGGER reject_status_probe BEFORE INSERT OR UPDATE ON status_evidence
-            FOR EACH ROW WHEN (NEW.source='independent-probe')
+        CREATE TRIGGER reject_status_probe BEFORE INSERT OR UPDATE ON status_probe_days
             EXECUTE FUNCTION reject_status_probe();
         """)
     try:
+        snapshot_sql = """
+            SELECT coalesce(sum(total),0)::text || ':' ||
+                (SELECT string_agg(site_id||component_id||fingerprint||observed_at::text,',' ORDER BY site_id,component_id)
+                 FROM status_sample_cursors)
+            FROM status_probe_days;
+            """
+        snapshot = database_sql(container, snapshot_sql)
+        seed_monitoring_results(container, catalog)
         wait_for(lambda: database_sql(container, "SELECT is_called FROM status_failed_probe_attempt;") == "t",
-                 "injected post-HTTP probe persistence failure", seconds=60)
-        first = database_sql(container, "SELECT last_value FROM status_failed_probe_attempt;")
-        time.sleep(12)
-        assert database_sql(container, "SELECT last_value FROM status_failed_probe_attempt;") == first, \
-            "Persistence retries increased probe frequency above the configured 30-second interval"
-        print("Probe persistence failure did not cause five-second HTTP re-probing.")
+                 "injected monitoring history persistence failure", seconds=60)
+        assert database_sql(container, snapshot_sql) == snapshot, \
+            "Failed history persistence advanced a sample cursor or daily counter"
     finally:
         database_sql(container, """
-            DROP TRIGGER reject_status_probe ON status_evidence;
+            DROP TRIGGER reject_status_probe ON status_probe_days;
             DROP FUNCTION reject_status_probe();
             DROP SEQUENCE status_failed_probe_attempt;
             """)
+    wait_for(lambda: database_sql(container, snapshot_sql) != snapshot, "cached input retried after history recovery")
+    recovered = database_sql(container, snapshot_sql)
+    time.sleep(12)
+    assert database_sql(container, snapshot_sql) == recovered, "Repeated publication recounted cached monitoring inputs"
+    assert database_sql(container, "SELECT count(*) FROM status_evidence WHERE source='independent-probe';") == "0"
+    print("Monitoring history failure rolled back cursors; cached inputs retried once without workload probing.")
 
 
 def verify_historic_thresholds(container, urls):
@@ -203,6 +242,13 @@ def runtime_directory(containers):
 
 
 def main():
+    manifest = json.loads((Path(__file__).resolve().parents[1] / "workload.json").read_text())
+    reader_key_consumers = [
+        service["name"] for service in manifest["services"]
+        if any(secret["id"] == "monitoring-reader-certificate" for secret in service.get("secrets", []))
+    ]
+    if reader_key_consumers != ["platform-status-service"]:
+        raise RuntimeError("The monitoring reader private key must be mounted in the status service only.")
     name = f"status-ci-{os.getpid()}"
     containers = []
     network_created = False
@@ -278,9 +324,14 @@ def main():
                 assert request(url, "/ops")[0] == 200
                 assert request(url, "/feed.xml")[0] == 200
                 assert request(url, "/api/status", "unexpected.example")[0] == 404
+            seed_monitoring_results(f"{name}-primary", catalog)
+            for label, url in urls.items():
+                for host in ("mxstatus.io", "status.xtremeidiots.com"):
+                    wait_for(lambda: request(url, "/api/status", host)[1]["summary"]["status"] == "operational",
+                             f"{label}/{host} cached monitoring projection")
             verify_database_restart_recovery(f"{name}-primary", f"{name}-standby", urls)
-            verify_publisher_fencing(f"{name}-primary")
-            verify_probe_retry_interval(f"{name}-primary")
+            verify_publisher_fencing(f"{name}-primary", catalog)
+            verify_monitoring_sampling_retry(f"{name}-primary", catalog)
             verify_historic_thresholds(f"{name}-primary", urls)
             connection_port = docker("port", f"{name}-primary", "5432/tcp").split(":")[-1]
             integration_environment = dict(os.environ)
@@ -288,7 +339,7 @@ def main():
                 f"Host=127.0.0.1;Port={connection_port};Database=status;Username=status_app;"
                 f"Password={credentials['app-password']}"
             )
-            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "GitHubOutboxPublishes", "GitHubOutboxReviews", "ProbeDiagnosticsPersist", "ProbeSchedulingSurvives",
+            native_cases = ("BannerApiPersists", "GitHubSourceKeeps", "GitHubOutboxPublishes", "GitHubOutboxReviews", "ProbeDiagnosticsPersist", "MonitoringSamplesDeduplicate",
                             "TrafficControlsPersist", "TrafficFailuresRemain", "TrafficConcurrencyRejects")
             native_results = root / "native-results"
             subprocess.run([
@@ -327,7 +378,7 @@ def main():
                     assert component["status"] == "outage"
                     assert record["id"] in component["openIncidentIds"]
                     assert "GeoLocation Website" in publication["summary"]["message"]
-            assert time.monotonic() - started < 30, "Shared incident publication must not wait for the probe interval."
+            assert time.monotonic() - started < 30, "Shared incident publication must not wait for monitoring refresh."
             command.update(revision=record["revision"], severity="degraded", state="identified",
                            message="Identified the cause; service remains degraded")
             record = json.loads(docker("exec", "--interactive", f"{name}-public", "dotnet", "MX.Platform.Status.Service.dll",

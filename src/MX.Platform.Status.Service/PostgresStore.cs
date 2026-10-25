@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using MX.Platform.Status.App.Contracts;
 using MX.Platform.Status.App.Models;
@@ -9,6 +10,7 @@ namespace MX.Platform.Status.Service;
 
 public sealed partial class PostgresStore(RuntimeOptions options, ILogger<PostgresStore> logger) : IAsyncDisposable
 {
+    internal const string CheckSnapshotQuery = "SELECT document::text FROM status_evidence WHERE source='check-result'";
     internal const string EvidenceUpsert = """
         INSERT INTO status_evidence VALUES($1,$2,$3,$4)
         ON CONFLICT(source,event_id) DO UPDATE SET observed_at=excluded.observed_at,document=excluded.document
@@ -70,6 +72,13 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             CREATE TABLE IF NOT EXISTS status_evidence (
                 source text NOT NULL, event_id text NOT NULL, observed_at timestamptz NOT NULL,
                 document jsonb NOT NULL, PRIMARY KEY (source, event_id));
+            CREATE TABLE IF NOT EXISTS status_sample_cursors (
+                site_id text NOT NULL, component_id text NOT NULL,
+                fingerprint text NOT NULL, observed_at timestamptz NOT NULL,
+                PRIMARY KEY(site_id,component_id));
+            CREATE TABLE IF NOT EXISTS status_monitoring_pending (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                fingerprint text NOT NULL UNIQUE, document jsonb NOT NULL);
             CREATE TABLE IF NOT EXISTS status_banners (
                 id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 site_id text NOT NULL, revision integer NOT NULL, document jsonb NOT NULL);
@@ -496,13 +505,52 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
 
     public async Task<IReadOnlyList<CheckResult>> ReadChecksAsync(string site, CancellationToken ct)
     {
-        await using var command = Source.CreateCommand("SELECT document::text FROM status_evidence WHERE source='check-result' AND document->>'site'=$1");
+        await using var command = Source.CreateCommand(CheckSnapshotQuery + " AND document->>'site'=$1");
         command.Parameters.AddWithValue(site);
+        return await ReadChecksAsync(command, ct);
+    }
+
+    internal static async Task<IReadOnlyList<CheckResult>> ReadChecksAsync(NpgsqlCommand command, CancellationToken ct)
+    {
         await using var reader = await command.ExecuteReaderAsync(ct);
         var result = new List<CheckResult>();
         while (await reader.ReadAsync(ct))
             result.Add(JsonSerializer.Deserialize<CheckResult>(reader.GetString(0), StatusJson.Options)!);
         return result;
+    }
+
+    internal async Task SaveMonitoringChecksAsync(IReadOnlyList<CheckResult> observations, CancellationToken ct)
+    {
+        await using var connection = await Writer.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        foreach (var observation in observations)
+        {
+            var validation = observation.Validate();
+            if (validation is not null) throw new InvalidDataException(validation);
+            await using var command = new NpgsqlCommand(EvidenceUpsert, connection, transaction);
+            command.Parameters.AddWithValue("check-result");
+            command.Parameters.AddWithValue($"{observation.Site}/{observation.CheckId}");
+            command.Parameters.AddWithValue(observation.ObservedAt);
+            command.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(observation, StatusJson.Options));
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        if (observations.Count > 0)
+        {
+            await using var snapshot = new NpgsqlCommand(CheckSnapshotQuery, connection, transaction);
+            var signals = await ReadChecksAsync(snapshot, ct);
+            var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+                signals.OrderBy(signal => signal.Site, StringComparer.Ordinal)
+                    .ThenBy(signal => signal.CheckId, StringComparer.Ordinal)
+                    .Select(signal => new { signal.Site, signal.CheckId, Key = signal.HistoryKey }), StatusJson.Options)));
+            await using var pending = new NpgsqlCommand("""
+                INSERT INTO status_monitoring_pending(fingerprint,document) VALUES($1,$2)
+                ON CONFLICT(fingerprint) DO NOTHING
+                """, connection, transaction);
+            pending.Parameters.AddWithValue(fingerprint);
+            pending.Parameters.AddWithValue(NpgsqlDbType.Jsonb, JsonSerializer.Serialize(signals, StatusJson.Options));
+            await pending.ExecuteNonQueryAsync(ct);
+        }
+        await transaction.CommitAsync(ct);
     }
 
     public async Task PruneAsync(CancellationToken ct)
@@ -523,8 +571,61 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
 
 public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233107) : IAsyncDisposable
 {
+    internal const int MonitoringBatchLimit = 100;
     internal NpgsqlConnection Connection => connection;
 
+    internal async Task<IReadOnlyList<(long Id, IReadOnlyList<CheckResult> Signals)>> ReadPendingMonitoringAsync(CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT id,document::text FROM status_monitoring_pending ORDER BY id LIMIT $1", connection);
+        command.Parameters.AddWithValue(MonitoringBatchLimit);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var result = new List<(long Id, IReadOnlyList<CheckResult> Signals)>();
+        while (await reader.ReadAsync(ct))
+            result.Add((reader.GetInt64(0),
+                JsonSerializer.Deserialize<CheckResult[]>(reader.GetString(1), StatusJson.Options)
+                ?? throw new InvalidDataException("A pending monitoring snapshot is missing its observations.")));
+        return result;
+    }
+
+    internal async Task<IReadOnlyList<CheckResult>> ReadCheckSnapshotAsync(CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand(PostgresStore.CheckSnapshotQuery, connection);
+        return await PostgresStore.ReadChecksAsync(command, ct);
+    }
+
+    internal async Task AcknowledgeMonitoringAsync(long id, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand("DELETE FROM status_monitoring_pending WHERE id=$1", connection);
+        command.Parameters.AddWithValue(id);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    internal async Task RecordMonitoringSampleAsync(string site, string component, string fingerprint,
+        DateTimeOffset observedAt, bool? success, CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand("""
+            WITH advanced AS (
+                INSERT INTO status_sample_cursors VALUES($1,$2,$3,$4)
+                ON CONFLICT(site_id,component_id) DO UPDATE
+                SET fingerprint=excluded.fingerprint,observed_at=excluded.observed_at
+                WHERE status_sample_cursors.fingerprint<>excluded.fingerprint
+                    AND status_sample_cursors.observed_at<=excluded.observed_at
+                RETURNING 1)
+            INSERT INTO status_probe_days
+            SELECT $1,$2,$5,1,$6 FROM advanced WHERE $6 IS NOT NULL
+            ON CONFLICT(site_id,component_id,day) DO UPDATE
+            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures
+            """, connection);
+        command.Parameters.AddWithValue(site);
+        command.Parameters.AddWithValue(component);
+        command.Parameters.AddWithValue(fingerprint);
+        command.Parameters.AddWithValue(observedAt);
+        command.Parameters.AddWithValue(DateOnly.FromDateTime(observedAt.UtcDateTime));
+        object failures = success switch { true => 0, false => 1, _ => DBNull.Value };
+        command.Parameters.AddWithValue(NpgsqlDbType.Integer, failures);
+        await command.ExecuteNonQueryAsync(ct);
+    }
     public async Task SaveProbeEvidenceAsync(ProbeObservation observation, CancellationToken ct)
     {
         await using var command = new NpgsqlCommand(PostgresStore.EvidenceUpsert, connection);

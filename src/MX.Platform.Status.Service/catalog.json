@@ -10,36 +10,36 @@
     "components": {
       "components": [
         {"id": "mx.service.molyneux", "name": "Molyneux Website", "kind": "group", "children": [
-          {"id": "mx.sitewatch.molyneux-me", "name": "Molyneux Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.sitewatch.molyneux-me", "name": "Molyneux Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.geo-location", "name": "GeoLocation", "kind": "group", "children": [
-          {"id": "mx.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "mx.sitewatch.geo-location-api", "name": "GeoLocation API", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "mx.sitewatch.geo-location-api", "name": "GeoLocation API", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.bishops-bees", "name": "Bishops Bees", "kind": "group", "children": [
-          {"id": "mx.sitewatch.bishopsbees", "name": "Bishops Bees Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.sitewatch.bishopsbees", "name": "Bishops Bees Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.bqba", "name": "BQBA", "kind": "group", "children": [
-          {"id": "mx.probe.bqba", "name": "BQBA Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.bqba", "name": "BQBA Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.dm-electrical-services", "name": "DM Electrical Services", "kind": "group", "children": [
-          {"id": "mx.probe.dm-electrical-services", "name": "DM Electrical Services Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.dm-electrical-services", "name": "DM Electrical Services Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.craftpledge", "name": "CraftPledge", "kind": "group", "children": [
-          {"id": "mx.probe.craftpledge", "name": "CraftPledge Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.craftpledge", "name": "CraftPledge Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.talkwithtiles", "name": "Talk With Tiles", "kind": "group", "children": [
-          {"id": "mx.probe.talkwithtiles", "name": "Talk With Tiles Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.talkwithtiles", "name": "Talk With Tiles Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.travel-itinerary", "name": "Travel Itinerary", "kind": "group", "children": [
-          {"id": "mx.probe.travel-itinerary", "name": "Travel Itinerary Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.travel-itinerary", "name": "Travel Itinerary Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.twenty-one", "name": "Twenty One", "kind": "group", "children": [
-          {"id": "mx.probe.twenty-one", "name": "Twenty One Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.twenty-one", "name": "Twenty One Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "mx.service.trip-side-kick", "name": "Trip Side Kick", "kind": "group", "children": [
-          {"id": "mx.probe.trip-side-kick-website", "name": "Trip Side Kick Website", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "mx.probe.trip-side-kick-app", "name": "Trip Side Kick Application", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "mx.probe.trip-side-kick-website", "name": "Trip Side Kick Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "mx.probe.trip-side-kick-app", "name": "Trip Side Kick Application", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]}
       ]
     },
@@ -56,26 +56,20 @@
       "twenty-one": ["mx.probe.twenty-one"],
       "trip-side-kick": ["mx.probe.trip-side-kick-website", "mx.probe.trip-side-kick-app"]
     },
-    "probes": {
-      "mx.sitewatch.molyneux-me": "https://www.molyneux.me/",
-      "mx.sitewatch.geo-location-web": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live",
-      "mx.sitewatch.geo-location-api": "https://app-geo-location-api-prd-swedencentral-6f10eaac01a0.azurewebsites.net/v1.0/health/live",
-      "mx.sitewatch.bishopsbees": "https://bishopsbees.co.uk/"
-    },
     "checks": [
-      {"id": "mx.sitewatch.molyneux-me", "component": "mx.sitewatch.molyneux-me", "name": "Website HTTP availability", "target": "https://www.molyneux.me/"},
-      {"id": "mx.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "mx.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live", "expectedIntervalSeconds": 120},
-      {"id": "mx.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "mx.sitewatch.geo-location-web", "name": "Public hostname routing", "target": "https://www.geo-location.net/api/health/live", "expectedIntervalSeconds": 300},
-      {"id": "mx.sitewatch.geo-location-api", "component": "mx.sitewatch.geo-location-api", "name": "API liveness", "target": "https://app-geo-location-api-prd-swedencentral-6f10eaac01a0.azurewebsites.net/v1.0/health/live", "expectedIntervalSeconds": 120},
-      {"id": "mx.sitewatch.bishopsbees", "component": "mx.sitewatch.bishopsbees", "name": "Website HTTP availability", "target": "https://bishopsbees.co.uk/"},
-      {"id": "mx.probe.bqba", "component": "mx.probe.bqba", "name": "Public website availability", "target": "https://bqba.co.uk/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.dm-electrical-services", "component": "mx.probe.dm-electrical-services", "name": "Public website availability", "target": "https://www.dm-electricalservices.co.uk/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.craftpledge", "component": "mx.probe.craftpledge", "name": "Public website availability", "method": "HEAD", "target": "https://www.craftpledge.org/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.talkwithtiles", "component": "mx.probe.talkwithtiles", "name": "Public website availability", "method": "HEAD", "target": "https://talkwithtiles.molyneux.me/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.travel-itinerary", "component": "mx.probe.travel-itinerary", "name": "Public website availability", "method": "HEAD", "target": "https://travelplans.molyneux.me/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.twenty-one", "component": "mx.probe.twenty-one", "name": "Public website availability", "method": "HEAD", "target": "https://twenty-one.molyneux.me/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.trip-side-kick-website", "component": "mx.probe.trip-side-kick-website", "name": "Public website availability", "method": "HEAD", "target": "https://tripsidekick.net/", "expectedIntervalSeconds": 300},
-      {"id": "mx.probe.trip-side-kick-app", "component": "mx.probe.trip-side-kick-app", "name": "Public application liveness", "method": "HEAD", "target": "https://tripsidekick.app/api/health/live", "expectedIntervalSeconds": 300}
+      {"id": "mx.sitewatch.molyneux-me", "component": "mx.sitewatch.molyneux-me", "name": "Website HTTP availability", "kind": "telemetry", "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.molyneux-me", "checkId": "mx.sitewatch.molyneux-me", "resources": ["sitewatch-uksouth", "sitewatch-eastus", "sitewatch-westeurope"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "mx.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "mx.sitewatch.geo-location-web", "name": "Website liveness", "kind": "telemetry", "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-web", "checkId": "mx.sitewatch.geo-location-web", "resources": ["geolocation"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "mx.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "mx.sitewatch.geo-location-web", "name": "Public hostname routing", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-web", "checkId": "mx.geo-location-web.routing", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.sitewatch.geo-location-api", "component": "mx.sitewatch.geo-location-api", "name": "API liveness", "kind": "telemetry", "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-api", "checkId": "mx.sitewatch.geo-location-api", "resources": ["geolocation"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "mx.sitewatch.bishopsbees", "component": "mx.sitewatch.bishopsbees", "name": "Website HTTP availability", "kind": "telemetry", "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.bishopsbees", "checkId": "mx.sitewatch.bishopsbees", "resources": ["sitewatch-uksouth", "sitewatch-eastus", "sitewatch-westeurope"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "mx.probe.bqba", "component": "mx.probe.bqba", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.bqba", "checkId": "mx.probe.bqba", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.dm-electrical-services", "component": "mx.probe.dm-electrical-services", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.dm-electrical-services", "checkId": "mx.probe.dm-electrical-services", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.craftpledge", "component": "mx.probe.craftpledge", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.craftpledge", "checkId": "mx.probe.craftpledge", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.talkwithtiles", "component": "mx.probe.talkwithtiles", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.talkwithtiles", "checkId": "mx.probe.talkwithtiles", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.travel-itinerary", "component": "mx.probe.travel-itinerary", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.travel-itinerary", "checkId": "mx.probe.travel-itinerary", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.twenty-one", "component": "mx.probe.twenty-one", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.twenty-one", "checkId": "mx.probe.twenty-one", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.trip-side-kick-website", "component": "mx.probe.trip-side-kick-website", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.trip-side-kick-website", "checkId": "mx.probe.trip-side-kick-website", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "mx.probe.trip-side-kick-app", "component": "mx.probe.trip-side-kick-app", "name": "Public application liveness", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.trip-side-kick-app", "checkId": "mx.probe.trip-side-kick-app", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}}
     ]
   },
   {
@@ -89,30 +83,30 @@
     "components": {
       "components": [
         {"id": "xi.service.forums", "name": "Community Forums", "kind": "group", "children": [
-          {"id": "xi.sitewatch.forums-web", "name": "Community Forums Website", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.probe.cdn", "name": "Community CDN", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.sitewatch.forums-web", "name": "Community Forums Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.probe.cdn", "name": "Community CDN", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "xi.service.portal", "name": "XtremeIdiots Portal", "kind": "group", "children": [
-          {"id": "xi.sitewatch.portal-web", "name": "XtremeIdiots Portal Website", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.sitewatch.repository-api-v1", "name": "Repository API v1", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.sitewatch.repository-api-v2", "name": "Repository API v2", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.sitewatch.servers-integration-api", "name": "Servers Integration API", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.sitewatch.server-events", "name": "Server Events", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.sitewatch.portal-web", "name": "XtremeIdiots Portal Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.repository-api-v1", "name": "Repository API v1", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.repository-api-v2", "name": "Repository API v2", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.servers-integration-api", "name": "Servers Integration API", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.server-events", "name": "Server Events", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.geo-location-web", "name": "GeoLocation Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "xi.service.redirect", "name": "XI Redirect", "kind": "group", "children": [
-          {"id": "xi.sitewatch.redirect", "name": "XI Redirect Website", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.probe.maps", "name": "Maps Manager", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.sitewatch.redirect", "name": "XI Redirect Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.probe.maps", "name": "Maps Manager", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "xi.service.games", "name": "Community Games & Points", "kind": "group", "children": [
-          {"id": "xi.probe.arcade", "name": "Arcade", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.probe.casino", "name": "Casino", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.probe.dailygames", "name": "Daily Games", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.probe.powerball", "name": "Powerball", "kind": "leaf", "source": {"kind": "probe"}},
-          {"id": "xi.probe.wallet", "name": "XI Points Wallet", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.probe.arcade", "name": "Arcade", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.probe.casino", "name": "Casino", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.probe.dailygames", "name": "Daily Games", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.probe.powerball", "name": "Powerball", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.probe.wallet", "name": "XI Points Wallet", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "xi.service.freezetag", "name": "FreezeTag Statistics", "kind": "group", "children": [
-          {"id": "xi.probe.freezetag", "name": "FreezeTag Statistics Website", "kind": "leaf", "source": {"kind": "probe"}}
+          {"id": "xi.probe.freezetag", "name": "FreezeTag Statistics Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]}
       ]
     },
@@ -134,37 +128,27 @@
       "xi-bank": ["xi.probe.wallet"],
       "xi-freezetag-stats": ["xi.probe.freezetag"]
     },
-    "probes": {
-      "xi.sitewatch.forums-web": "https://www.xtremeidiots.com/",
-      "xi.sitewatch.geo-location-web": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live",
-      "xi.sitewatch.portal-web": "https://app-portal-web-prd-uksouth-fe584e15256a.azurewebsites.net/api/health/live",
-      "xi.sitewatch.repository-api-v1": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/live",
-      "xi.sitewatch.repository-api-v2": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/live",
-      "xi.sitewatch.redirect": "https://redirect.xtremeidiots.net/",
-      "xi.sitewatch.servers-integration-api": "https://app-portal-servers-int-prd-uksouth-v1-66febf7b1b9d.azurewebsites.net/v1.0/health/live",
-      "xi.sitewatch.server-events": "https://fn-portal-server-events-prd-uksouth-3e4bb7b00601.azurewebsites.net/api/health/live"
-    },
     "checks": [
-      {"id": "xi.sitewatch.forums-web", "component": "xi.sitewatch.forums-web", "name": "Website HTTP availability", "target": "https://www.xtremeidiots.com/"},
-      {"id": "xi.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "xi.sitewatch.geo-location-web", "name": "Website liveness", "target": "https://app-geo-location-web-prd-swedencentral-6f10eaac01a0.azurewebsites.net/api/health/live", "expectedIntervalSeconds": 120},
-      {"id": "xi.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "xi.sitewatch.geo-location-web", "name": "Public hostname routing", "target": "https://www.geo-location.net/api/health/live", "expectedIntervalSeconds": 300},
-      {"id": "xi.sitewatch.portal-web", "component": "xi.sitewatch.portal-web", "name": "Website liveness", "target": "https://app-portal-web-prd-uksouth-fe584e15256a.azurewebsites.net/api/health/live", "expectedIntervalSeconds": 120},
-      {"id": "xi.portal-web.routing", "component": "xi.sitewatch.portal-web", "name": "Public hostname routing", "target": "https://portal.xtremeidiots.com/api/health/live", "expectedIntervalSeconds": 300},
-      {"id": "xi.sitewatch.repository-api-v1", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 liveness", "target": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/live", "expectedIntervalSeconds": 120},
-      {"id": "xi.repository-api-v1.readiness", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 database readiness", "target": "https://app-portal-repo-prd-uksouth-v1-655b79d54d89.azurewebsites.net/v1.0/health/ready", "expectedIntervalSeconds": 300},
-      {"id": "xi.sitewatch.repository-api-v2", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 liveness", "target": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/live", "expectedIntervalSeconds": 120},
-      {"id": "xi.repository-api-v2.readiness", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 database readiness", "target": "https://app-portal-repo-prd-uksouth-v2-655b79d54d89.azurewebsites.net/v2.0/health/ready", "expectedIntervalSeconds": 300},
-      {"id": "xi.sitewatch.redirect", "component": "xi.sitewatch.redirect", "name": "Website HTTP availability", "target": "https://redirect.xtremeidiots.net/"},
-      {"id": "xi.sitewatch.servers-integration-api", "component": "xi.sitewatch.servers-integration-api", "name": "API liveness", "target": "https://app-portal-servers-int-prd-uksouth-v1-66febf7b1b9d.azurewebsites.net/v1.0/health/live"},
-      {"id": "xi.sitewatch.server-events", "component": "xi.sitewatch.server-events", "name": "Function liveness", "target": "https://fn-portal-server-events-prd-uksouth-3e4bb7b00601.azurewebsites.net/api/health/live"},
-      {"id": "xi.probe.cdn", "component": "xi.probe.cdn", "name": "CDN HTTP liveness", "target": "https://cdn.xtremeidiots.com/_platform/health", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.maps", "component": "xi.probe.maps", "name": "Public website availability", "target": "https://maps.xtremeidiots.com/", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.arcade", "component": "xi.probe.arcade", "name": "Public application availability", "target": "https://www.xtremeidiots.com/arcade/", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.casino", "component": "xi.probe.casino", "name": "Public application availability", "target": "https://www.xtremeidiots.com/casino/", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.dailygames", "component": "xi.probe.dailygames", "name": "Public application availability", "target": "https://www.xtremeidiots.com/dailygames/", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.powerball", "component": "xi.probe.powerball", "name": "Public application availability", "target": "https://www.xtremeidiots.com/powerball/", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.wallet", "component": "xi.probe.wallet", "name": "Public application availability", "target": "https://www.xtremeidiots.com/wallet/", "expectedIntervalSeconds": 300},
-      {"id": "xi.probe.freezetag", "component": "xi.probe.freezetag", "name": "Published statistics availability", "target": "https://www.xtremeidiots.com/stats/stats.html", "expectedIntervalSeconds": 300}
+      {"id": "xi.sitewatch.forums-web", "component": "xi.sitewatch.forums-web", "name": "Website HTTP availability", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.forums-web", "checkId": "xi.sitewatch.forums-web", "resources": ["sitewatch-uksouth", "sitewatch-eastus", "sitewatch-westeurope"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.sitewatch.geo-location-web", "sharedId": "geo-location-web.liveness", "component": "xi.sitewatch.geo-location-web", "name": "Website liveness", "kind": "telemetry", "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-web", "checkId": "mx.sitewatch.geo-location-web", "resources": ["geolocation"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.geo-location-web.routing", "sharedId": "geo-location-web.routing", "component": "xi.sitewatch.geo-location-web", "name": "Public hostname routing", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.sitewatch.geo-location-web", "checkId": "mx.geo-location-web.routing", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.sitewatch.portal-web", "component": "xi.sitewatch.portal-web", "name": "Website liveness", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.portal-web", "checkId": "xi.sitewatch.portal-web", "resources": ["portal"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.portal-web.routing", "component": "xi.sitewatch.portal-web", "name": "Public hostname routing", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.portal-web", "checkId": "xi.portal-web.routing", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.sitewatch.repository-api-v1", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 liveness", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.repository-api-v1", "checkId": "xi.sitewatch.repository-api-v1", "resources": ["portal"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.repository-api-v1.readiness", "component": "xi.sitewatch.repository-api-v1", "name": "API v1 database readiness", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.repository-api-v1", "checkId": "xi.repository-api-v1.readiness", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.sitewatch.repository-api-v2", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 liveness", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.repository-api-v2", "checkId": "xi.sitewatch.repository-api-v2", "resources": ["portal"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.repository-api-v2.readiness", "component": "xi.sitewatch.repository-api-v2", "name": "API v2 database readiness", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.repository-api-v2", "checkId": "xi.repository-api-v2.readiness", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.sitewatch.redirect", "component": "xi.sitewatch.redirect", "name": "Website HTTP availability", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.redirect", "checkId": "xi.sitewatch.redirect", "resources": ["sitewatch-uksouth", "sitewatch-eastus", "sitewatch-westeurope"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.sitewatch.servers-integration-api", "component": "xi.sitewatch.servers-integration-api", "name": "API liveness", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.servers-integration-api", "checkId": "xi.sitewatch.servers-integration-api", "resources": ["portal"], "regions": ["uksouth", "eastus", "westeurope"]}},
+      {"id": "xi.sitewatch.server-events", "component": "xi.sitewatch.server-events", "name": "Function liveness", "kind": "telemetry", "monitoring": {"siteId": "xi", "componentId": "xi.sitewatch.server-events", "checkId": "xi.sitewatch.server-events", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 60}},
+      {"id": "xi.probe.cdn", "component": "xi.probe.cdn", "name": "CDN HTTP liveness", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.cdn", "checkId": "xi.probe.cdn", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.maps", "component": "xi.probe.maps", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.maps", "checkId": "xi.probe.maps", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.arcade", "component": "xi.probe.arcade", "name": "Public application availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.arcade", "checkId": "xi.probe.arcade", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.casino", "component": "xi.probe.casino", "name": "Public application availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.casino", "checkId": "xi.probe.casino", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.dailygames", "component": "xi.probe.dailygames", "name": "Public application availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.dailygames", "checkId": "xi.probe.dailygames", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.powerball", "component": "xi.probe.powerball", "name": "Public application availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.powerball", "checkId": "xi.probe.powerball", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.wallet", "component": "xi.probe.wallet", "name": "Public application availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.wallet", "checkId": "xi.probe.wallet", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
+      {"id": "xi.probe.freezetag", "component": "xi.probe.freezetag", "name": "Published statistics availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "xi", "componentId": "xi.probe.freezetag", "checkId": "xi.probe.freezetag", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}}
     ]
   }
 ]

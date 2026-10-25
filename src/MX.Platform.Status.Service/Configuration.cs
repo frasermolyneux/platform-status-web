@@ -23,6 +23,7 @@ public sealed record RuntimeOptions
     public string? ClientId { get; init; }
     public string? AzureCertificatePath { get; init; }
     public string? AzureCollectorClientId { get; init; }
+    public Dictionary<string, string> AzureMonitoringResources { get; init; } = [];
     public Uri AzureStatusFeed { get; init; } = new("https://azure.status.microsoft/status/feed/");
     public string[] WebhookApplicationIds { get; init; } = [];
     public bool GitHubEnabled { get; init; } = true;
@@ -62,6 +63,11 @@ public sealed record RuntimeOptions
             throw new InvalidOperationException("Webhook application IDs must be GUIDs.");
         if (AzureCertificatePath is not null && (TenantId is null || !Guid.TryParse(AzureCollectorClientId, out _)))
             throw new InvalidOperationException("Azure collection requires a tenant and certificate-authenticated collector application.");
+        if (AzureMonitoringResources.Count > 0 && (AzureCertificatePath is null || AzureMonitoringResources.Any(resource =>
+            string.IsNullOrWhiteSpace(resource.Key) || !Regex.IsMatch(resource.Value,
+                @"^/subscriptions/[0-9a-f-]{36}/resourceGroups/[^/]+/providers/Microsoft\.Insights/components/[^/]+$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)))))
+            throw new InvalidOperationException("Monitoring inputs require a dedicated certificate reader and exact Application Insights resource scopes, never workload URLs or workspace-wide access.");
     }
 }
 
@@ -75,11 +81,7 @@ public sealed record SiteDefinition
     public Dictionary<string, string> SharedComponents { get; init; } = [];
 
     public SiteConfigurationSnapshot Snapshot => new(Site, Components, "", "", DateTimeOffset.UtcNow);
-    public IReadOnlyList<CheckDefinition> EffectiveChecks => [.. Checks,
-        .. Probes.Where(pair => !Checks.Any(check => check.Component == pair.Key)).Select(pair => new CheckDefinition
-    {
-        Id = pair.Key, Component = pair.Key, Name = "HTTP health", Target = pair.Value
-    })];
+    public IReadOnlyList<CheckDefinition> EffectiveChecks => Checks;
 }
 
 public sealed class StatusCatalog
@@ -95,6 +97,7 @@ public sealed class StatusCatalog
         var domains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var definition in Sites) ValidateSite(definition, domains);
         ValidateSharedChecks();
+        ValidateMonitoringReferences();
     }
 
     private static void ValidateSite(SiteDefinition definition, HashSet<string> domains)
@@ -129,6 +132,8 @@ public sealed class StatusCatalog
 
     private static void ValidateProbes(SiteDefinition definition, Component[] components)
     {
+        if (definition.Probes.Count != 0)
+            throw new InvalidOperationException("Status cannot configure workload probes. Define collection and targets in Sitewatch/platform-monitoring.");
         if (definition.EffectiveChecks.Select(check => check.Id).Distinct().Count() != definition.EffectiveChecks.Count
             || definition.EffectiveChecks.Select(check => check.PublicId(definition)).Distinct().Count() != definition.EffectiveChecks.Count)
             throw new InvalidOperationException("Check IDs must be unique within a site.");
@@ -143,14 +148,45 @@ public sealed class StatusCatalog
             throw new InvalidOperationException("A shared check identity requires an explicitly shared component.");
         if (!components.Any(c => c.Id == check.Component && c.Kind == "leaf") || string.IsNullOrWhiteSpace(check.Id)
             || string.IsNullOrWhiteSpace(check.Name) || check.ExpectedIntervalSeconds is < 30 or > 86400
-            || check.Kind is not ("http" or "telemetry") || check.Method is not ("GET" or "HEAD"))
+            || check.Kind != "telemetry" || check.Method != "GET")
             throw new InvalidOperationException("Checks require a unique identity, component, name, supported kind and observation interval.");
-        if (check.Kind == "telemetry" && check.Target is not null)
-            throw new InvalidOperationException("Telemetry checks accept authenticated observations, not HTTP targets.");
-        if (check.Kind == "http" && (!Uri.TryCreate(check.Target, UriKind.Absolute, out var uri) || uri.Scheme != "https"
-            || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query)
-            || Uri.CheckHostName(uri.Host) != UriHostNameType.Dns))
-            throw new InvalidOperationException("Probes require a known leaf component and a public HTTPS URL without credentials or query strings.");
+        if (check.Target is not null)
+            throw new InvalidOperationException("Status checks accept monitoring observations, never workload HTTP targets.");
+        if (check.Monitoring is { } source && (string.IsNullOrWhiteSpace(source.SiteId)
+            || string.IsNullOrWhiteSpace(source.ComponentId) || string.IsNullOrWhiteSpace(source.CheckId)
+            || source.Resources is not { Length: > 0 } || source.Regions is not { Length: > 0 }
+            || source.Resources.Any(string.IsNullOrWhiteSpace) || source.Regions.Any(string.IsNullOrWhiteSpace)
+            || source.Resources.Distinct(StringComparer.OrdinalIgnoreCase).Count() != source.Resources.Length
+            || source.Regions.Distinct(StringComparer.OrdinalIgnoreCase).Count() != source.Regions.Length
+            || source.IntervalSeconds is < 30 or > 3600 || source.IntervalSeconds % 30 != 0))
+            throw new InvalidOperationException("Monitoring references require explicit source identities, resources, expected regions and a valid observation interval.");
+    }
+
+    private void ValidateMonitoringReferences()
+    {
+        foreach (var site in Sites)
+            foreach (var check in site.Checks.Where(check => check.Monitoring is not null))
+                ValidateMonitoringOwner(site, check);
+        if (Sites.SelectMany(site => site.Checks.Where(check => check.SharedId is not null))
+            .GroupBy(check => check.SharedId).Any(shared => shared.Select(check => check.Monitoring is { } source
+                ? $"{source.Identity}|{source.IntervalSeconds}|{string.Join(',', source.Resources.Order())}|{string.Join(',', source.Regions.Order())}"
+                : null).Distinct().Count() != 1))
+            throw new InvalidOperationException("Shared checks must consume the same monitoring identity, resources, cadence and regions.");
+    }
+
+    private void ValidateMonitoringOwner(SiteDefinition site, CheckDefinition check)
+    {
+        var reference = check.Monitoring!;
+        var source = Sites.SingleOrDefault(candidate => candidate.Site.Id == reference.SiteId)
+            ?? throw new InvalidOperationException("Monitoring references must name a configured owning site.");
+        if (source.Site.Id == site.Site.Id)
+        {
+            if (reference.ComponentId != check.Component)
+                throw new InvalidOperationException("Monitoring references must name their own component.");
+        }
+        else if (check.SharedId is null || !site.SharedComponents.TryGetValue(check.Component, out var identity)
+            || source.SharedComponents.GetValueOrDefault(reference.ComponentId) != identity)
+            throw new InvalidOperationException("Cross-site monitoring inputs require an explicitly shared component.");
     }
 
     private static void ValidateSharedComponents(SiteDefinition definition)

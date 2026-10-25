@@ -1,8 +1,13 @@
 {
   "$schema": "https://frasermolyneux.com/schemas/status-pages/availability-telemetry-contract.schema.json",
-  "version": 1,
+  "version": 2,
   "description": "Canonical shape of the customDimensions emitted onto every native Application Insights availabilityResults row produced by platform-sitewatch-func and consumed by platform-status-web. This file is duplicated verbatim in both repositories (platform-sitewatch-func/contract/ and platform-status-web/contract/) and each repo has a test asserting its own code against these exact key names, so a rename on either side that isn't mirrored in the other repo's copy fails CI instead of drifting silently in production.",
   "customDimensions": {
+    "checkId": {
+      "required": true,
+      "type": "string",
+      "description": "Stable monitoring-owned check identity within the owning site/component. Defaults to componentId for existing single-check definitions. Distinguishes liveness, readiness and routing measurements without requiring consumers to probe endpoints."
+    },
     "componentId": {
       "required": true,
       "type": "string",
@@ -23,6 +28,7 @@
     "name": "availabilityResults",
     "customDimensions": {
       "componentId": "mx.api",
+      "checkId": "mx.api",
       "siteId": "mx",
       "region": "uksouth"
     }

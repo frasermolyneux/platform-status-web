@@ -4,46 +4,49 @@ using MX.Platform.Status.App.Telemetry;
 
 namespace MX.Platform.Status.Service;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CheckDefinition
 {
     public string Id { get; init; } = "";
     public string? SharedId { get; init; }
     public string Component { get; init; } = "";
     public string Name { get; init; } = "";
-    public string Kind { get; init; } = "http";
+    public string Kind { get; init; } = "telemetry";
     public string Method { get; init; } = "GET";
     public string? Target { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 60;
+    public MonitoringReference? Monitoring { get; init; }
 
     public string PublicId(SiteDefinition site) => SharedId
         ?? (site.SharedComponents.ContainsKey(Component) ? $"{site.Site.Id}/{Id}" : Id);
 
-    internal ProbeObservation? LatestProbe(string site, IReadOnlyList<ProbeObservation> probes) =>
-        probes.Where(probe => probe.Site == site && probe.Component == Component && probe.Target == Target && probe.Method == Method
-            && (probe.CheckId == Id || probe.CheckId is null)).MaxBy(probe => probe.ObservedAt);
-
-    internal bool IsDue(string site, IReadOnlyList<ProbeObservation> probes, DateTimeOffset now)
-    {
-        var latest = LatestProbe(site, probes);
-        return latest is null || now - latest.ObservedAt >= TimeSpan.FromSeconds(ExpectedIntervalSeconds);
-    }
 }
 
 public sealed record CheckResult(string Site, string CheckId, [property: JsonRequired] ComponentStatus Status, DateTimeOffset ObservedAt, string? Detail = null)
 {
+    public string? Component { get; init; }
+    public string? Name { get; init; }
+    public MonitoringReference? Monitoring { get; init; }
+    public string? ObservationKey { get; init; }
+    internal string HistoryKey => ObservationKey ?? $"{ObservedAt:O}/{Status}";
+    public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
+    public IReadOnlyDictionary<string, string> RegionMessages { get; init; } = new Dictionary<string, string>();
+
     public string? Validate() => !Enum.IsDefined(Status) || Status == ComponentStatus.Maintenance
         || ObservedAt > DateTimeOffset.UtcNow.AddMinutes(5) || ObservedAt == default || Detail?.Length > 2000
+        || ObservationKey?.Length > 128
         ? "A check requires a valid observation time and an operational, degraded, outage or unknown status." : null;
 }
 
 public static class ComponentChecks
 {
     public static Dictionary<string, ComponentLiveTelemetry> Build(
-        SiteDefinition site, IReadOnlyList<ProbeObservation> probes, IReadOnlyList<CheckResult> signals)
+        SiteDefinition site, IReadOnlyList<ProbeObservation> probes, IReadOnlyList<CheckResult> signals,
+        DateTimeOffset? at = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = at ?? DateTimeOffset.UtcNow;
         return site.EffectiveChecks.GroupBy(check => check.Component).ToDictionary(group => group.Key, group =>
-            FromChecks(group.Select(check => Observe(site, check, probes, signals, now)).ToArray()));
+            FromChecks(group.Select(check => Observe(site, check, signals, now)).ToArray()));
     }
 
     public static ComponentLiveTelemetry FromChecks(IReadOnlyList<CheckTelemetry> checks) =>
@@ -53,19 +56,21 @@ public static class ComponentChecks
             checks.Where(check => check.ObservedAt.HasValue).Select(check => check.ObservedAt).Min(), null)
         { Checks = checks };
 
-    private static CheckTelemetry Observe(SiteDefinition site, CheckDefinition check, IReadOnlyList<ProbeObservation> probes,
+    internal static bool MatchesMonitoringSource(CheckDefinition check, CheckResult signal) =>
+        check.Monitoring is null
+        || (signal.Monitoring?.Identity == check.Monitoring.Identity && signal.Regions.Count > 0);
+
+    internal static CheckTelemetry Observe(SiteDefinition site, CheckDefinition check,
         IReadOnlyList<CheckResult> signals, DateTimeOffset now)
     {
-        var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id).MaxBy(signal => signal.ObservedAt);
-        var probe = check.LatestProbe(site.Site.Id, probes);
-        var at = check.Kind == "http" ? probe?.ObservedAt : signal?.ObservedAt;
-        var status = signal?.Status ?? ComponentStatus.Unknown;
-        if (check.Kind == "http")
-        {
-            status = ComponentStatus.Unknown;
-            if (probe is not null) status = probe.Success ? ComponentStatus.Operational : ComponentStatus.Outage;
-        }
-        if (at is null || now - at > TimeSpan.FromSeconds(check.ExpectedIntervalSeconds * 3) || at > now.AddMinutes(5))
+        var signal = signals.Where(signal => signal.Site == site.Site.Id && signal.CheckId == check.Id
+            && MatchesMonitoringSource(check, signal)).MaxBy(signal => signal.ObservedAt);
+        var at = signal?.ObservedAt;
+        var status = check.Kind == "telemetry" ? signal?.Status ?? ComponentStatus.Unknown : ComponentStatus.Unknown;
+        if (check.Monitoring is { } source && signal is { Regions.Count: > 0 })
+            status = MonitoringAvailability.CurrentStatus(source, signal.Regions, now);
+        if (at is null || now - at > TimeSpan.FromSeconds(check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3)
+            || at > now.AddMinutes(5))
             status = ComponentStatus.Unknown;
         return new(check.PublicId(site), check.Name, check.Kind, status, at);
     }

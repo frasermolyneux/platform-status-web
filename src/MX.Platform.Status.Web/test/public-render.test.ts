@@ -199,3 +199,22 @@ test('telemetry evidence keeps check scope and private diagnostics without copyi
   const recovered = evidenceCards([{ ...record, evidence: { ...record.evidence, status: 'operational' } }])[0];
   assert.equal(incidentSeed(recovered, ids, ['Server Events']).state, 'monitoring');
 });
+
+test('monitoring evidence explains regional failures and promotes only its public brand component', () => {
+  const card = evidenceCards([{
+    source: 'check-result', id: 'xi/geo-routing', observedAt: new Date().toISOString(),
+    evidence: {
+      site: 'xi', component: 'xi.sitewatch.geo-location-web', name: 'GeoLocation routing',
+      checkId: 'geo-routing', status: 'degraded', detail: 'PRIVATE_REGIONAL_REASON',
+      monitoring: { siteId: 'mx', componentId: 'mx.sitewatch.geo-location-web', checkId: 'mx.geo.routing' },
+      regions: [{ region: 'uksouth', samples: 1, failures: 1, lastSeen: '2026-01-01T12:00:00Z' }],
+    },
+  }])[0];
+  assert.ok(card.details.some(detail => detail.label === 'Source' && detail.value === 'Sitewatch via Application Insights'));
+  assert.ok(card.details.some(detail => detail.label === 'uksouth' && detail.value.includes('1 failed / 1 samples')));
+  const affected = affectedComponents(card, ['xi.sitewatch.geo-location-web'], {}, []);
+  assert.deepEqual(affected, ['xi.sitewatch.geo-location-web']);
+  const seed = incidentSeed(card, affected, ['GeoLocation Website']);
+  assert.equal(seed.severity, 'degraded');
+  assert.doesNotMatch(seed.message, /PRIVATE|mx\.geo/);
+});

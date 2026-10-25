@@ -49,21 +49,23 @@ public static class HealthDiagnostics
             byId.TryGetValue(component.Id, out var probe);
             failures.TryGetValue(component.Id, out var failure);
             var configured = site.EffectiveChecks.Where(check => check.Component == component.Id).ToArray();
-            var target = configured.FirstOrDefault(check => check.Kind == "http")?.Target;
             var checks = published?.Checks?.Select(check =>
             {
                 var definition = configured.SingleOrDefault(definition => definition.PublicId(site) == check.Id);
                 var result = signals?.Where(signal => signal.Site == site.Site.Id && signal.CheckId == definition?.Id)
                     .MaxBy(signal => signal.ObservedAt);
-                return new CheckHealth(check.Id, check.Name, check.Kind, check.Status, check.ObservedAt, definition?.Target,
+                return new CheckHealth(check.Id, check.Name, check.Kind, check.Status, check.ObservedAt, null,
                     siteProbes.Where(observation => definition?.Id == (observation.CheckId ?? observation.Component))
                         .MaxBy(observation => observation.ObservedAt), result?.Detail);
             }).ToArray() ?? [];
-            var source = target is null ? "Telemetry checks and declared incidents" : "Independent HTTP checks (publisher)";
+            var source = configured.Any(check => check.Monitoring is not null)
+                ? "Sitewatch monitoring via Application Insights"
+                : "Telemetry checks and declared incidents";
             if (component.Kind == "group") source = "Service aggregate from components";
             return new ComponentHealth(component.Id, component.Name, published?.Status ?? "unknown",
                 source,
-                target, configured.Select(check => check.ExpectedIntervalSeconds).DefaultIfEmpty(component.Sla.ExpectedIntervalSeconds).Min(),
+                null, configured.Select(check => check.Monitoring?.IntervalSeconds ?? check.ExpectedIntervalSeconds)
+                    .DefaultIfEmpty(component.Sla.ExpectedIntervalSeconds).Min(),
                 published?.LastSampleAt, probe, failure,
                 MatchesPublication(published, observations.GetValueOrDefault(component.Id), probe),
                 publication.Incidents.Where(incident => incident.Severity != "maintenance"

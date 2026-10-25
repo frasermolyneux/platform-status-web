@@ -1,15 +1,11 @@
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
-using Azure.Identity;
-using Azure.Monitor.Query;
-using MX.Platform.Status.App.Models;
-using MX.Platform.Status.App.Telemetry;
 
 namespace MX.Platform.Status.Service;
 
 public sealed class EvidenceWorker(
-    StatusCatalog catalog, RuntimeOptions options, PostgresStore database,
+    RuntimeOptions options, PostgresStore database,
     IHttpClientFactory clients, ILogger<EvidenceWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -24,7 +20,6 @@ public sealed class EvidenceWorker(
                 if (await database.IsWritableAsync(timeout.Token))
                 {
                     await CollectAzureStatusAsync(timeout.Token);
-                    foreach (var site in catalog.Sites) await CollectAzureTelemetryAsync(site, timeout.Token);
                     await database.PruneAsync(timeout.Token);
                 }
             }
@@ -35,37 +30,6 @@ public sealed class EvidenceWorker(
             }
             try { await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-        }
-    }
-
-    private async Task CollectAzureTelemetryAsync(SiteDefinition site, CancellationToken ct)
-    {
-        if (options.AzureCertificatePath is null) return;
-        var credential = new ClientCertificateCredential(options.TenantId, options.AzureCollectorClientId,
-            options.AzureCertificatePath);
-        var availability = new AvailabilityClient(new LogsQueryClient(credential));
-        foreach (var component in StatusCatalog.Flatten(site.Components.Components).Where(c => c.Source.Kind == "appInsights"))
-        {
-            try
-            {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(30));
-                var regions = new List<RegionAvailabilityTelemetry>();
-                foreach (var resource in component.Source.EffectiveResources())
-                {
-                    if (!site.Site.AppInsights.TryGetValue(resource, out var configured))
-                        throw new InvalidOperationException("Unknown Application Insights resource alias.");
-                    regions.AddRange(await availability.QueryLiveRegionalAsync(configured.ResourceId,
-                        TelemetryFilters.WithSiteId(component.Source.Filter, site.Site.Id), 15, timeout.Token));
-                }
-                await database.SaveEvidenceAsync("sitewatch", $"{site.Site.Id}/{component.Id}", DateTimeOffset.UtcNow,
-                    JsonSerializer.SerializeToElement(new { site = site.Site.Id, component = component.Id, regions }, StatusJson.Options), ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception exception)
-            {
-                logger.LogWarning(exception, "Sitewatch evidence refresh failed for {Site}/{Component}.", site.Site.Id, component.Id);
-            }
         }
     }
 

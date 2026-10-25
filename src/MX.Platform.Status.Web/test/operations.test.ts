@@ -630,17 +630,20 @@ test('dedicated pages retain independent drafts and evidence promotion requires 
 test('service diagnostics explain incident overrides without blaming a successful check', async () => {
   existingHealth = [{
     id: 'mx.sitewatch.molyneux-me', name: 'Website', status: 'degraded',
-    source: 'Independent HTTP probe (publisher)', target: 'https://example.test/',
+    source: 'Sitewatch monitoring via Application Insights', target: null,
     expectedIntervalSeconds: 60, matchesPublication: true,
-    probe: { success: true, httpStatus: 200, durationMilliseconds: 17, observedAt: new Date().toISOString(), observer: 'publisher', error: null },
+    probe: { success: false, httpStatus: 503, durationMilliseconds: 17, observedAt: new Date().toISOString(), observer: 'publisher', error: 'Archived failure' },
+    checks: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website availability', kind: 'telemetry',
+      status: 'operational', observedAt: new Date().toISOString(), detail: 'Three regions healthy' }],
     incidents: [{ id: 7, title: 'Intermittent failures', severity: 'degraded', state: 'monitoring' }], maintenance: [],
   }];
   history.replaceState(null, '', '/ops');
   await renderOperations();
   assert.match(document.querySelector('.health-check')?.textContent || '', /Website: degraded/);
-  assert.match(document.querySelector('.health-check')?.textContent || '', /HTTP 200/);
+  assert.match(document.querySelector('.health-check')?.textContent || '', /Archived HTTP observation: failed \/ HTTP 503/);
+  assert.match(document.querySelector('.health-check')?.textContent || '', /Three regions healthy/);
   assert.match(document.querySelector('.health-check')?.textContent || '', /Incident #7: Intermittent failures/);
-  assert.match(document.querySelector('.health-check')?.textContent || '', /HTTP check passed; the active incident/);
+  assert.match(document.querySelector('.health-check')?.textContent || '', /Monitoring checks are healthy; the active incident/);
   assert.equal(document.querySelector('#operator-banners'), null);
   assert.equal(document.querySelector('#operator-incidents'), null);
   assert.equal(document.querySelector('.workspace-nav a[aria-current="page"]')?.getAttribute('href'), '/ops');

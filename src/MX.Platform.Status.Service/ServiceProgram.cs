@@ -24,6 +24,19 @@ public static class ServiceProgram
         {
             return await HealthcheckAsync();
         }
+        if (args is ["--refresh-monitoring"])
+        {
+            await using var application = Build([]);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var catalog = application.Services.GetRequiredService<StatusCatalog>();
+            var expected = catalog.Sites.Sum(site => site.Checks.Count(check => check.Monitoring is not null));
+            var imported = await application.Services.GetRequiredService<MonitoringWorker>().RefreshAsync(timeout.Token,
+                requireCompleteRegionalCoverage: true);
+            if (expected == 0 || imported != expected)
+                throw new InvalidOperationException($"Monitoring coverage is incomplete: imported {imported} of {expected} configured checks.");
+            Console.WriteLine(JsonSerializer.Serialize(new { imported, expected }));
+            return 0;
+        }
         if (args is ["--verify-maintenance-edge"] or ["--restore-maintenance-canary"])
         {
             await using var application = Build([]);
@@ -82,11 +95,11 @@ public static class ServiceProgram
         builder.Services.AddSingleton<GitHubIncidentClient>();
         builder.Services.AddHostedService<PublicationWorker>();
         builder.Services.AddHostedService<EvidenceWorker>();
+        builder.Services.AddSingleton<MonitoringWorker>();
+        builder.Services.AddHostedService(provider => provider.GetRequiredService<MonitoringWorker>());
         builder.Services.AddHostedService<GitHubIssueWorker>();
         builder.Services.AddHostedService<GitHubOutboxWorker>();
         builder.Services.AddHostedService<TrafficUsageWorker>();
-        builder.Services.AddHttpClient("probe", client => client.DefaultRequestHeaders.UserAgent.ParseAdd("MXStatus/1.0"))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         builder.Services.AddHttpClient("vendor", client => client.Timeout = TimeSpan.FromSeconds(15));
         builder.Services.AddHttpClient("cloudflare-traffic", client =>
         {
@@ -224,6 +237,8 @@ public static class ServiceProgram
             var check = definition?.EffectiveChecks.SingleOrDefault(check => check.Id == checkId && check.Kind == "telemetry");
             if (check is null)
                 return Results.BadRequest(new { error = "Unknown telemetry check." });
+            if (check.Monitoring is not null)
+                return Results.BadRequest(new { error = "This check is owned by Sitewatch/platform-monitoring and only accepts its authenticated monitoring feed." });
             if (result.Site != siteId || result.CheckId != checkId || result.Validate() is not null)
                 return Results.BadRequest(new { error = "Invalid telemetry check scope or observation." });
             if (!await database.IsWritableAsync(ct)) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
