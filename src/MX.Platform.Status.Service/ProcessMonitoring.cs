@@ -18,7 +18,7 @@ public sealed record ProcessReference
     public string Role { get; init; } = "";
     public int Version { get; init; } = 1;
     internal string Identity => $"{SiteId}/{ComponentId}/{CheckId}/{Role}/{Version}";
-    internal int FreshnessSeconds => ProcessMonitoring.Policy.GetProperty("freshnessSeconds").GetInt32();
+    internal static int FreshnessSeconds => ProcessMonitoring.Policy.GetProperty("freshnessSeconds").GetInt32();
 }
 
 internal sealed record ProcessObservation(ProcessReference Source, DateTimeOffset ObservedAt,

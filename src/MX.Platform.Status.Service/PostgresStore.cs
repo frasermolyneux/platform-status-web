@@ -487,6 +487,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             var total = reader.GetInt32(2);
             var failures = reader.GetInt32(3);
             var uptime = 1d - (double)failures / total;
+            var impact = reader.IsDBNull(4) ? ComponentStatus.Unknown : Enum.Parse<ComponentStatus>(reader.GetString(4), true);
             record.Days.Add(new HistoryDay
             {
                 Date = reader.GetFieldValue<DateOnly>(1),
@@ -494,7 +495,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 Failed = failures,
                 Uptime = uptime,
                 Status = definition.HistoryClassification == "impact"
-                    ? reader.IsDBNull(4) ? ComponentStatus.Unknown : Enum.Parse<ComponentStatus>(reader.GetString(4), true)
+                    ? impact
                     : ComponentStatusCalculator.ClassifyHistoricStatus(total, uptime, definition.Sla)
             });
         }

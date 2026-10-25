@@ -72,7 +72,9 @@ public static class ComponentChecks
         var status = check.Kind == "telemetry" ? signal?.Status ?? ComponentStatus.Unknown : ComponentStatus.Unknown;
         if (check.Monitoring is { } source && signal is { Regions.Count: > 0 })
             status = MonitoringAvailability.CurrentStatus(source, signal.Regions, now);
-        if (at is null || now - at > TimeSpan.FromSeconds(check.Process?.FreshnessSeconds ?? check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3)
+        var freshness = check.Process is not null ? ProcessReference.FreshnessSeconds
+            : check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3;
+        if (at is null || now - at > TimeSpan.FromSeconds(freshness)
             || at > now.AddMinutes(5))
             status = ComponentStatus.Unknown;
         return new(check.PublicId(site), check.Name, check.Kind, status, at);

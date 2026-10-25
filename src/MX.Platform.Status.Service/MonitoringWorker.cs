@@ -52,46 +52,14 @@ public sealed class MonitoringWorker(
             throw new InvalidOperationException("Monitoring resource bindings are incomplete.");
         var resources = options.AzureMonitoringResources.Where(pair => requiredAliases.Contains(pair.Key))
             .GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase).ToArray();
-        var availabilityTask = Task.WhenAll(resources.Where(resource => references.Any(reference =>
-            reference.Resources.Any(alias => resource.Any(pair => pair.Key == alias)))).Select(async resource =>
-        {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(30));
-            var aliases = resource.Select(pair => pair.Key).ToHashSet();
-            try
-            {
-                var rows = await MonitoringAvailability.QueryAsync(client, resource.Key,
-                    references.Where(reference => reference.Resources.Any(aliases.Contains)), timeout.Token);
-                return (Aliases: aliases, Succeeded: true, Rows: rows);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception exception)
-            {
-                logger.LogError(exception, "Monitoring query failed for resource aliases {Aliases}; retaining their cached measurements.",
-                    string.Join(", ", aliases));
-                return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<MonitoringObservation>)[]);
-            }
-        }));
-        var processTask = Task.WhenAll(resources.Where(resource => processReferences.Any(reference =>
-            resource.Any(pair => pair.Key == reference.Resource))).Select(async resource =>
-        {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(30));
-            var aliases = resource.Select(pair => pair.Key).ToHashSet();
-            try
-            {
-                var rows = await ProcessMonitoring.QueryAsync(client, resource.Key,
-                    processReferences.Where(reference => aliases.Contains(reference.Resource)).ToArray(), timeout.Token);
-                return (Aliases: aliases, Succeeded: true, Rows: rows);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception exception)
-            {
-                logger.LogError(exception, "Process monitoring query failed for aliases {Aliases}; retaining original assessment timestamps.",
-                    string.Join(", ", aliases));
-                return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<ProcessObservation>)[]);
-            }
-        }));
+        var availabilityTask = QueryResourceBatchesAsync<MonitoringObservation>(
+            resources.Where(resource => resource.Any(pair => references.Any(reference => reference.Resources.Contains(pair.Key)))),
+            "Availability", (resource, aliases, token) => MonitoringAvailability.QueryAsync(client, resource,
+                references.Where(reference => reference.Resources.Any(aliases.Contains)), token), ct);
+        var processTask = QueryResourceBatchesAsync<ProcessObservation>(
+            resources.Where(resource => resource.Any(pair => processReferences.Any(reference => reference.Resource == pair.Key))),
+            "Process", (resource, aliases, token) => ProcessMonitoring.QueryAsync(client, resource,
+                processReferences.Where(reference => aliases.Contains(reference.Resource)).ToArray(), token), ct);
         var batches = await availabilityTask;
         var processBatches = await processTask;
         var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
@@ -115,15 +83,37 @@ public sealed class MonitoringWorker(
             ValidateCoverage(unavailable, observations, now);
             if (processBatches.Any(batch => !batch.Succeeded))
                 throw new InvalidOperationException("Process preflight could not query every required source.");
-            foreach (var source in processReferences)
-                if (!processObservations.Any(observation => observation.Source.Identity == source.Identity
-                    && now - observation.ObservedAt <= TimeSpan.FromSeconds(source.FreshnessSeconds)))
-                    throw new InvalidOperationException($"Fresh process monitoring coverage is incomplete for {source.CheckId}.");
+            foreach (var source in processReferences.Where(source => !processObservations.Any(observation =>
+                observation.Source.Identity == source.Identity
+                && now - observation.ObservedAt <= TimeSpan.FromSeconds(ProcessReference.FreshnessSeconds))))
+                throw new InvalidOperationException($"Fresh process monitoring coverage is incomplete for {source.CheckId}.");
         }
         return results.Length;
     }
 
     internal static X509Certificate2 LoadReaderCertificate(string path) => X509Certificate2.CreateFromPemFile(path);
+
+    private Task<(HashSet<string> Aliases, bool Succeeded, IReadOnlyList<T> Rows)[]> QueryResourceBatchesAsync<T>(
+        IEnumerable<IGrouping<string, KeyValuePair<string, string>>> resources, string kind,
+        Func<string, HashSet<string>, CancellationToken, Task<IReadOnlyList<T>>> query, CancellationToken ct) =>
+        Task.WhenAll(resources.Select(async resource =>
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            var aliases = resource.Select(pair => pair.Key).ToHashSet();
+            try
+            {
+                var rows = await query(resource.Key, aliases, timeout.Token);
+                return (Aliases: aliases, Succeeded: true, Rows: rows);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "{Kind} monitoring query failed for aliases {Aliases}; retaining original assessment timestamps.",
+                    kind, string.Join(", ", aliases));
+                return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<T>)[]);
+            }
+        }));
 
     private void ValidateCoverage(IReadOnlyCollection<string> unavailable,
         IReadOnlyList<MonitoringObservation> observations, DateTimeOffset now)
