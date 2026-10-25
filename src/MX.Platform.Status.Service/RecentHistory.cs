@@ -44,7 +44,7 @@ internal static class RecentHistory
                     var statuses = observed.Select(bucket => bucket.Status).Concat(impacts.SelectMany(impact => impact.Statuses));
                     if (leaves.Any(leaf => !observed.Any(bucket => bucket.Component == leaf)))
                         statuses = statuses.Append("unknown");
-                    return new HistoryBucketDto(from, end, IncidentImpact.Worst(statuses),
+                    return new HistoryBucketDto(from, to, IncidentImpact.Worst(statuses),
                         observed.Sum(bucket => bucket.Total), observed.Sum(bucket => bucket.Failed),
                         impacts.Select(impact => impact.Id).Distinct().Order().ToArray());
                 }).ToArray();

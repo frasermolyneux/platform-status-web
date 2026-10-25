@@ -65,6 +65,15 @@ public sealed class StatusExperienceTests
         Assert.Throws<InvalidDataException>(() => GitHubIssueParser.Parse(
             Issue(monitoringLabels.Select(label => label == "state:monitoring" ? "state:identified" : label).ToArray()),
             [], catalog, new(), [recovered]));
+        var resolved = Assert.Single(GitHubIssueParser.Parse(
+            Issue(monitoringLabels.Select(label => label == "state:monitoring" ? "state:resolved" : label).ToArray(), updatedMinutes: 30),
+            [], catalog, new(), [recovered]));
+        Assert.Equal(Severity.Outage, resolved.Severity);
+        Assert.NotNull(resolved.ResolvedAt);
+        Assert.Throws<InvalidDataException>(() => GitHubIssueParser.Parse(
+            Issue([.. monitoringLabels, "severity:outage", "severity:degraded"]), [], catalog, new(), [recovered]));
+        var taskHistory = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-tasks").History;
+        Assert.Equal("outage", taskHistory.Single(day => day.Date == DateOnly.FromDateTime(Created.UtcDateTime)).Status);
     }
 
     [Fact]
@@ -100,6 +109,14 @@ public sealed class StatusExperienceTests
         Assert.Equal("outage", group.Last3Days[^1].Status);
         Assert.Equal(37, group.Last3Days[^1].Total);
         Assert.Equal(1, group.Last3Days[^1].Failed);
+        Assert.Equal(now.AddMinutes(5), group.Last24Hours[^1].End);
+        var republished = RecentHistory.Apply(publication with { GeneratedAt = now.AddSeconds(5) }, [
+            new("tasks", start, 10, 0, "operational"), new("web", start, 10, 0, "operational"),
+            new("tasks", start.AddMinutes(15), 8, 0, "operational"), new("web", start.AddMinutes(15), 8, 0, "operational"),
+            new("tasks", start.AddMinutes(30), 1, 1, "degraded")
+        ], [incident.ToPublicIncident()]);
+        Assert.Equal(JsonSerializer.Serialize(publication.Components, StatusJson.Options),
+            JsonSerializer.Serialize(republished.Components, StatusJson.Options));
     }
 
     [Fact]
