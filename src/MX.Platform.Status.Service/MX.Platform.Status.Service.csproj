@@ -7,7 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MX.Platform.Status.App\MX.Platform.Status.App.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>
   <ItemGroup>
