@@ -67,7 +67,9 @@ public sealed class StatusMerger
         var (liveStatus, lastSampleAt) = ResolveLiveStatus(component, children, liveData, historicalDays, todayHistory);
 
         var incidentStatuses = incidents
-            .Where(incident => incident.ResolvedAt is null && incident.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase))
+            .Where(incident => incident.ResolvedAt is null
+                && (incident.State != IncidentState.Monitoring || incident.Severity == Severity.Maintenance)
+                && incident.Components.Contains(component.Id, StringComparer.OrdinalIgnoreCase))
             .Select(incident => incident.Severity.ToComponentStatus())
             .ToArray();
 

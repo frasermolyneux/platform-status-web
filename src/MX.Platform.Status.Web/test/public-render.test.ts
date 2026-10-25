@@ -90,6 +90,53 @@ test('services drill down to components and checks without flattening the overvi
   }
 });
 
+test('monitoring shows restoration without hiding a new failure and detailed ranges retain selection', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderOverview, renderIncident, renderComponent, renderHistory } = await import('../src/client/render');
+  const bucket = { start: '2026-10-25T15:00:00Z', end: '2026-10-25T15:15:00Z',
+    status: 'outage', total: 2, failed: 0, incidentIds: [3] };
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'xi', displayName: 'XI Status' }, generatedAt: '2026-10-25T15:40:00Z',
+    summary: { status: 'operational' }, maintenance: [],
+    components: [{ id: 'tasks', name: 'Background Tasks', kind: 'leaf', status: 'operational',
+      uptimeWindowDays: 90, uptimeRatio: 1, history: [],
+      recentHistory: { last24Hours: [bucket, { ...bucket, status: 'unknown', total: 0, incidentIds: [] }],
+        last3Days: [{ ...bucket, total: 20 }] },
+      checks: [{ id: 'task', name: 'Task execution', kind: 'telemetry', status: 'operational' }] }],
+    incidents: [{ id: 3, title: 'Task recovery', components: ['tasks'], severity: 'outage',
+      state: 'monitoring', url: '/incident/3', createdAt: bucket.start, updates: [] }],
+  };
+  for (const render of [renderOverview, (value: StatusResponse) => renderIncident(value, '3')]) {
+    render(data);
+    assert.match(document.querySelector('.recovery-message')?.textContent || '', /Service restored/);
+    assert.match(document.body.textContent || '', /Previous impact: Outage/);
+    assert.doesNotMatch(document.body.textContent || '', /Major Outage/);
+    assert.equal(document.querySelector('.incident-meta .badge-outage'), null);
+  }
+  data.components[0].status = 'unknown';
+  renderOverview(data);
+  assert.doesNotMatch(document.querySelector('.recovery-message')?.textContent || '', /Service restored/);
+  renderComponent(data, 'tasks');
+  assert.equal(document.querySelectorAll('.recent-history-bars .history-bar').length, 2);
+  assert.ok(document.querySelector('.history-bar.has-incident[aria-label*="incidents 3"]'));
+  assert.ok(document.querySelector('.history-bar.status-unknown'));
+  assert.ok(document.querySelector('.check-row .status-label .status-dot[aria-hidden="true"]'));
+  document.querySelector<HTMLButtonElement>('[data-history-range="3d"]')!.click();
+  assert.equal(document.querySelectorAll('.recent-history-bars .history-bar').length, 1);
+  data.incidents[0].severity = 'maintenance';
+  renderIncident(data, '3');
+  assert.equal(document.querySelector('.recovery-message'), null);
+  assert.doesNotMatch(document.body.textContent || '', /Previous impact:/);
+  renderHistory(data);
+  assert.equal(document.querySelector('.incident-card.status-monitoring'), null);
+  assert.doesNotMatch(document.body.textContent || '', /Previous impact:/);
+  renderComponent(data, 'tasks');
+  assert.equal(document.querySelector('[data-history-range="3d"]')?.getAttribute('aria-pressed'), 'true');
+  assert.equal(document.querySelectorAll('.recent-history-bars .history-bar').length, 1);
+});
+
 test('public rendering keeps announcements plain text and incident excerpts readable', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
   for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)

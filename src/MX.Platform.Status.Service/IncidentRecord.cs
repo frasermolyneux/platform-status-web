@@ -65,6 +65,7 @@ public sealed record IncidentRecord
         var history = previous?.ImpactHistory ?? ImpactHistory;
         if (history.Count == 0 && previous is { Published: true, State: IncidentState.Resolved })
             history = previous.RecordedLegacyImpact();
+        history = ObserveGitHubTransitions(previous, history);
         if (!Published || State == IncidentState.Resolved && history.Count == 0
             || history.LastOrDefault() is { } last
             && last.State == State && last.Severity == Severity
@@ -72,11 +73,34 @@ public sealed record IncidentRecord
             && last.ScheduledStart == ScheduledStart && last.ScheduledEnd == ScheduledEnd)
             return this with { ImpactHistory = history };
         var at = State == IncidentState.Resolved ? ResolvedAt ?? now : now;
+        if (SourceUrl is not null && State == IncidentState.Monitoring && previous?.State != State
+            && PublicUpdates.Reverse().TakeWhile(update => update.State == State).LastOrDefault() is { } transition)
+            at = transition.At;
         if (history.LastOrDefault() is { } latest && at < latest.At) at = latest.At;
         return this with
         {
             ImpactHistory = [.. history, new(at, State, Severity, Components, ScheduledStart, ScheduledEnd)]
         };
+    }
+
+    private IReadOnlyList<IncidentImpactObservation> ObserveGitHubTransitions(IncidentRecord? previous,
+        IReadOnlyList<IncidentImpactObservation> history)
+    {
+        if (!Published || SourceUrl is null) return history;
+        var observations = history.ToList();
+        var pending = history.Count == 0 ? PublicUpdates : PublicUpdates.Where(update => update.At >= history[^1].At
+            && previous?.PublicUpdates.Contains(update) != true).ToArray();
+        foreach (var update in pending.Where(update => ResolvedAt is not { } resolved || update.At <= resolved)
+            .OrderBy(update => update.At))
+        {
+            var latest = observations.LastOrDefault();
+            var severity = update.Severity ?? latest?.Severity;
+            if (!severity.HasValue) continue;
+            latest ??= new(update.At, update.State, severity.Value, Components, ScheduledStart, ScheduledEnd);
+            if (observations.Count == 0 || latest.State != update.State || latest.Severity != severity)
+                observations.Add(latest with { At = update.At, State = update.State, Severity = severity.Value });
+        }
+        return observations;
     }
 
     private IReadOnlyList<IncidentImpactObservation> RecordedLegacyImpact()

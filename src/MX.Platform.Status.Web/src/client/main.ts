@@ -20,10 +20,17 @@ async function loadAndRender(renderer: (data: StatusResponse) => void): Promise<
     if (tagline) tagline.textContent = data.site.tagline || '';
     const app = document.getElementById('app');
     const active = renderedPath === location.pathname ? document.activeElement : null;
+    const historyRange = app?.contains(active) ? active?.getAttribute('data-history-range') : null;
+    const historyBucket = app?.contains(active) ? active?.getAttribute('data-history-bucket') : null;
     const href = app?.contains(active) && active?.tagName === 'A' ? active.getAttribute('href') : null;
     const links = app ? Array.from(app.querySelectorAll('a')) : [];
     const position = links.filter(link => link.getAttribute('href') === href).findIndex(link => link === active);
     renderer(data);
+    if (historyRange) app?.querySelector<HTMLButtonElement>(`[data-history-range="${historyRange}"]`)?.focus({ preventScroll: true });
+    if (historyBucket && app)
+      (Array.from(app.querySelectorAll<HTMLElement>('[data-history-bucket]'))
+        .find(bucket => bucket.getAttribute('data-history-bucket') === historyBucket)
+        ?? app.querySelector<HTMLButtonElement>('[data-history-range][aria-pressed="true"]'))?.focus({ preventScroll: true });
     renderedPath = location.pathname;
     if (app && href && position >= 0)
       Array.from(app.querySelectorAll('a')).filter(link => link.getAttribute('href') === href)[position]?.focus({ preventScroll: true });

@@ -65,6 +65,20 @@ Historical incident overrides remain independently applied after measurement
 aggregation. Archived legacy probe evidence is readable privately, never used as
 a live input.
 
+The same history transaction updates 15-minute local counters and worst measured
+state, retained for four days. Publications include 96 quarter-hour and 72 hourly
+buckets per public component/service, with missing periods explicit and incident
+impact intervals applied separately. Public detail views select these durable
+windows without reading PostgreSQL or Azure. Daily data is never expanded into
+invented sub-day measurements.
+
+Monitoring releases a non-maintenance incident's live override while preserving its
+open lifecycle and earlier impact intervals. GitHub severity removal is accepted
+only for monitoring/resolved states with a recorded prior severity; invalid active
+metadata remains an explicit synchronization error, visible to operators. A delayed
+GitHub recovery import uses its recorded transition time, bounded by existing impact
+history, not the new poll time. Maintenance retains its explicit scheduled window.
+
 Deploy/verify the producer before the consumer. The new image's
 `--refresh-monitoring` preflight seeds the writable cache and refuses incomplete
 fresh regional coverage from the current successful queries, not recovered cache,

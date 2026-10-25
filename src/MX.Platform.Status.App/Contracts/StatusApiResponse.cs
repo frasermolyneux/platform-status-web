@@ -71,6 +71,9 @@ public sealed record LinkDto
 
 public sealed record ComponentDto
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RecentHistoryDto? RecentHistory { get; init; }
+
     [JsonPropertyName("checks")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<CheckDto>? Checks { get; init; }
@@ -118,6 +121,12 @@ public sealed record ComponentDto
 }
 
 public sealed record CheckDto(string Id, string Name, string Kind, string Status, DateTimeOffset? ObservedAt);
+
+public sealed record RecentHistoryDto(
+    IReadOnlyList<HistoryBucketDto> Last24Hours, IReadOnlyList<HistoryBucketDto> Last3Days);
+
+public sealed record HistoryBucketDto(DateTimeOffset Start, DateTimeOffset End, string Status,
+    int Total, int Failed, IReadOnlyList<int> IncidentIds);
 
 public sealed record HistoryDayDto
 {

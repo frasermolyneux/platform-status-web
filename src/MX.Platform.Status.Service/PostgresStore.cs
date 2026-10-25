@@ -69,6 +69,10 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 site_id text NOT NULL, component_id text NOT NULL, day date NOT NULL,
                 total integer NOT NULL, failures integer NOT NULL,
                 PRIMARY KEY (site_id, component_id, day));
+            CREATE TABLE IF NOT EXISTS status_monitoring_buckets (
+                site_id text NOT NULL, component_id text NOT NULL, bucket_at timestamptz NOT NULL,
+                total integer NOT NULL, failures integer NOT NULL, status text NOT NULL,
+                PRIMARY KEY (site_id, component_id, bucket_at));
             CREATE TABLE IF NOT EXISTS status_evidence (
                 source text NOT NULL, event_id text NOT NULL, observed_at timestamptz NOT NULL,
                 document jsonb NOT NULL, PRIMARY KEY (source, event_id));
@@ -442,6 +446,22 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
         return json is null ? null : JsonSerializer.Deserialize<StatusApiResponse>(json, StatusJson.Options);
     }
 
+    internal async Task<IReadOnlyList<MonitoringBucket>> ReadRecentBucketsAsync(string site, CancellationToken ct)
+    {
+        await using var command = Source.CreateCommand("""
+            SELECT component_id,bucket_at,total,failures,status FROM status_monitoring_buckets
+            WHERE site_id=$1 AND bucket_at >= date_trunc('hour',now())-interval '71 hours'
+            ORDER BY bucket_at
+            """);
+        command.Parameters.AddWithValue(site);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var buckets = new List<MonitoringBucket>();
+        while (await reader.ReadAsync(ct))
+            buckets.Add(new(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1),
+                reader.GetInt32(2), reader.GetInt32(3), reader.GetString(4)));
+        return buckets;
+    }
+
     public async Task<HistoryDocument> ReadHistoryAsync(SiteDefinition site, CancellationToken ct)
     {
         var components = StatusCatalog.Flatten(site.Components.Components).ToDictionary(component => component.Id);
@@ -557,6 +577,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     {
         await using var command = Source.CreateCommand("""
             DELETE FROM status_probe_days WHERE day < (now() AT TIME ZONE 'UTC')::date-365;
+            DELETE FROM status_monitoring_buckets WHERE bucket_at < now()-interval '4 days';
             DELETE FROM status_evidence WHERE observed_at < now()-interval '30 days';
             """);
         await command.ExecuteNonQueryAsync(ct);
@@ -602,7 +623,7 @@ public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233
     }
 
     internal async Task RecordMonitoringSampleAsync(string site, string component, string fingerprint,
-        DateTimeOffset observedAt, bool? success, CancellationToken ct)
+        DateTimeOffset observedAt, bool? success, CancellationToken ct, ComponentStatus? measuredStatus = null)
     {
         await using var command = new NpgsqlCommand("""
             WITH advanced AS (
@@ -611,11 +632,21 @@ public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233
                 SET fingerprint=excluded.fingerprint,observed_at=excluded.observed_at
                 WHERE status_sample_cursors.fingerprint<>excluded.fingerprint
                     AND status_sample_cursors.observed_at<=excluded.observed_at
-                RETURNING 1)
+                RETURNING 1),
+            daily AS (
             INSERT INTO status_probe_days
             SELECT $1,$2,$5,1,$6 FROM advanced WHERE $6 IS NOT NULL
             ON CONFLICT(site_id,component_id,day) DO UPDATE
-            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures
+            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures)
+            INSERT INTO status_monitoring_buckets
+            SELECT $1,$2,date_bin(interval '15 minutes',$4::timestamptz,timestamptz '2000-01-01'),1,$6,$7
+            FROM advanced WHERE $6 IS NOT NULL
+            ON CONFLICT(site_id,component_id,bucket_at) DO UPDATE
+            SET total=status_monitoring_buckets.total+1,
+                failures=status_monitoring_buckets.failures+excluded.failures,
+                status=CASE WHEN status_monitoring_buckets.status='outage' OR excluded.status='outage' THEN 'outage'
+                    WHEN status_monitoring_buckets.status='degraded' OR excluded.status='degraded' THEN 'degraded'
+                    ELSE 'operational' END
             """, connection);
         command.Parameters.AddWithValue(site);
         command.Parameters.AddWithValue(component);
@@ -624,6 +655,7 @@ public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233
         command.Parameters.AddWithValue(DateOnly.FromDateTime(observedAt.UtcDateTime));
         object failures = success switch { true => 0, false => 1, _ => DBNull.Value };
         command.Parameters.AddWithValue(NpgsqlDbType.Integer, failures);
+        command.Parameters.AddWithValue((measuredStatus ?? (success == false ? ComponentStatus.Outage : ComponentStatus.Operational)).ToApiString());
         await command.ExecuteNonQueryAsync(ct);
     }
     public async Task SaveProbeEvidenceAsync(ProbeObservation observation, CancellationToken ct)

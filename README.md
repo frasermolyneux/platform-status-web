@@ -142,6 +142,19 @@ individual checks. A service aggregates component status, and a component aggreg
 its configured checks. Checks report operational, degraded, outage or unknown;
 missing or stale observations remain unknown, not healthy.
 
+Incidents in Monitoring remain open and visible, but no longer impose an outage
+or degradation on live availability. Fresh measurements determine recovery; missing
+signals stay unknown. Previous declared impact is preserved historically.
+GitHub monitoring/resolved transitions may omit severity when an existing incident
+or signed authoring envelope supplies its historical severity; active incidents
+still require an explicit severity. Maintenance continues to follow its schedule.
+
+Service and component detail pages offer 24-hour (15-minute), 3-day (hourly) and
+90-day (daily) history. Short windows use four-day-retained, deduplicated local
+monitoring buckets committed with daily counters and history acknowledgements.
+No earlier granular observations are fabricated from daily totals. Declared
+incident periods overlay measured availability without changing its percentages.
+
 Community Forums includes its Website, Background Tasks and Community CDN.
 Background Tasks consumes Sitewatch's existing scheduled-task endpoint result,
 independently of homepage availability, and affects the service's aggregate status.

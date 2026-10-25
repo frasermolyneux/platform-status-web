@@ -1,8 +1,11 @@
 import type { StatusResponse, ComponentDto, IncidentDto } from './api';
-import { getStatusInfo, getStatusDotHtml } from './status-colors';
+import { getStatusInfo, getStatusDotHtml, getStatusBadgeHtml } from './status-colors';
 import { formatRelative, formatDate, formatDateTime } from './time';
 import { navigate } from './router';
 import DOMPurify from 'dompurify';
+
+type HistoryRange = '24h' | '3d' | '90d';
+const historyRanges = new Map<string, HistoryRange>();
 
 function escapeHtml(str: string): string {
   return str
@@ -111,12 +114,11 @@ export function renderOverview(data: StatusResponse): void {
 }
 
 function renderComponentRow(c: ComponentDto): string {
-  const info = getStatusInfo(c.status);
   const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}%` : '—';
   return `<div class="component-row${c.kind === 'group' ? ' component-group' : ''}">
     <a href="/component/${escapeHtml(c.id)}" data-component-id="${escapeHtml(c.id)}" class="component-name">${escapeHtml(c.name)}</a>
     <span class="component-uptime" title="Observed check availability; declared incident impact is shown separately in history">${escapeHtml(uptime)}</span>
-    <span class="component-status ${info.className}">${getStatusDotHtml(c.status)}${info.label}</span>
+    <span class="component-status">${getStatusBadgeHtml(c.status)}</span>
   </div>`;
 }
 
@@ -135,18 +137,44 @@ function issueLink(incident: IncidentDto): string {
 
 function renderIncidentCard(inc: IncidentDto, data: StatusResponse): string {
   const info = getStatusInfo(inc.severity);
-  return `<div class="incident-card ${info.className}">
+  const recovering = inc.state === 'monitoring' && inc.severity !== 'maintenance';
+  return `<div class="incident-card ${recovering ? 'status-monitoring' : info.className}">
     <h3><a href="/incident/${escapeHtml(String(inc.id))}">${escapeHtml(inc.title)}</a></h3>
     <div class="incident-meta">
-      <span class="badge badge-${escapeHtml(inc.severity)}">${escapeHtml(inc.severity)}</span>
+      ${recovering ? `<span>Previous impact: ${getStatusInfo(inc.severity).label}</span>`
+        : `<span class="badge badge-${escapeHtml(inc.severity)}">${getStatusInfo(inc.severity).label}</span>`}
       <span class="badge badge-state">${escapeHtml(inc.state)}</span>
       <span>${formatRelative(inc.createdAt)}</span>
     </div>
+    ${recoveryMessage(inc, data)}
     ${affectedServices(inc.components, data)}
     ${issueLink(inc)}
     ${inc.updates.length > 0
       ? `<p class="incident-latest">${excerpt(inc.updates[inc.updates.length - 1].body)}</p>`
       : ''}
+  </div>`;
+}
+
+function recoveryMessage(incident: IncidentDto, data: StatusResponse): string {
+  if (incident.state !== 'monitoring' || incident.severity === 'maintenance') return '';
+  const affected = flattenComponents(data.components).filter(component => incident.components.includes(component.id));
+  const recovered = affected.length > 0 && affected.every(component => component.status === 'operational');
+  return `<p class="recovery-message">${recovered ? 'Service restored — monitoring.' : 'Monitoring recovery; current availability is shown below.'}</p>`;
+}
+
+function renderDetailedHistory(component: ComponentDto, range: HistoryRange): string {
+  if (range === '90d' || !component.recentHistory) return renderHistoryBars(component);
+  const buckets = range === '24h' ? component.recentHistory.last24Hours : component.recentHistory.last3Days;
+  const total = buckets.reduce((sum, bucket) => sum + bucket.total, 0);
+  const failed = buckets.reduce((sum, bucket) => sum + bucket.failed, 0);
+  const availability = total ? `${((1 - failed / total) * 100).toFixed(2)}% check availability` : 'No observations';
+  return `<div class="history-component">
+    <div class="history-label">${escapeHtml(component.name)}<span class="history-uptime">${availability}</span></div>
+    <div class="history-bars recent-history-bars">${buckets.map(bucket => {
+      const title = `${formatDateTime(bucket.start)} – ${formatDateTime(bucket.end)}: ${getStatusInfo(bucket.status).label}; ${bucket.total} observations${bucket.incidentIds.length ? `; incidents ${bucket.incidentIds.join(', ')}` : ''}`;
+      return `<div class="history-bar ${getStatusInfo(bucket.status).className}${bucket.incidentIds.length ? ' has-incident' : ''}" data-history-bucket="${escapeHtml(`${component.id}|${range}|${bucket.start}`)}" tabindex="0" role="img" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}"></div>`;
+    }).join('')}</div>
+    <div class="history-range"><span>${buckets.length ? formatDateTime(buckets[0].start) : ''}</span><span>${buckets.length ? formatDateTime(buckets[buckets.length - 1].end) : ''}</span></div>
   </div>`;
 }
 
@@ -173,6 +201,7 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     return;
   }
   const info = getStatusInfo(component.status);
+  const range = historyRanges.get(componentId) ?? (component.recentHistory ? '24h' : '90d');
   const descendants = flattenComponents([component]);
   const affectedIds = new Set(descendants.map(item => item.id));
   const historicalIncidents = new Set(descendants.flatMap(item => item.history.flatMap(day => day.incidentIds ?? [])));
@@ -183,18 +212,30 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     ${parent ? `<p><a href="/component/${escapeHtml(parent.id)}">${escapeHtml(parent.name)}</a></p>` : ''}
     <h2>${escapeHtml(component.name)}</h2>
     ${component.description ? `<p>${escapeHtml(component.description)}</p>` : ''}
-    <div class="component-detail-status ${info.className}">${getStatusDotHtml(component.status)}${info.label}</div>
+    <div class="component-detail-status ${info.className}">${getStatusBadgeHtml(component.status)}</div>
     ${component.link ? `<p><a href="${escapeHtml(component.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(component.link)}</a></p>` : ''}
-    ${renderHistoryBars(component)}
+    <div class="history-controls" role="group" aria-label="Availability history range">${(['24h', '3d', '90d'] as const).map(value =>
+      `<button type="button" data-history-range="${value}" aria-pressed="${range === value}" ${!component.recentHistory && value !== '90d' ? 'disabled' : ''}>${{ '24h': '24 hours', '3d': '3 days', '90d': '90 days' }[value]}</button>`).join('')}</div>
+    <p class="muted history-intro">${range === '90d' ? 'Daily' : range === '24h' ? '15-minute' : 'Hourly'} periods. Times use your local timezone. Grey means missing observations; marked bars include declared incident impact. Detailed observations are retained from collection onward, not reconstructed from daily totals.</p>
+    ${renderDetailedHistory(component, range)}
     ${component.children?.length ? `<section class="panel"><h3>Components</h3>${component.children.map(child =>
-      renderComponentRow(child) + renderHistoryBars(child)).join('')}</section>` : ''}
+      renderComponentRow(child) + renderDetailedHistory(child, range)).join('')}</section>` : ''}
     ${component.checks?.length ? `<section class="panel"><h3>Checks</h3>${component.checks.map(check =>
-      `<article class="component-row"><span>${escapeHtml(check.name)}</span><span class="${getStatusInfo(check.status).className}">${getStatusDotHtml(check.status)}${getStatusInfo(check.status).label}</span><span>${check.observedAt ? formatRelative(check.observedAt) : 'Awaiting first observation'}</span></article>`).join('')}</section>` : ''}
+      `<article class="component-row check-row"><span class="check-name">${escapeHtml(check.name)}</span>${getStatusBadgeHtml(check.status)}<span>${check.observedAt ? formatRelative(check.observedAt) : 'Awaiting first observation'}</span></article>`).join('')}</section>` : ''}
     <section class="incidents-section"><h3>Incidents affecting this ${component.kind === 'group' ? 'service' : 'component'}</h3>
     ${data.incidents.filter(incident => incident.components.some(id => affectedIds.has(id))
       || [incident.id, ...(incident.aliases ?? [])].some(id => historicalIncidents.has(id)))
       .map(incident => renderIncidentCard(incident, data)).join('') || '<p>No published incidents for this service.</p>'}</section>
   `);
+  app.querySelectorAll<HTMLButtonElement>('[data-history-range]').forEach(button => {
+    button.addEventListener('click', () => {
+      const selected = button.dataset.historyRange;
+      if (selected !== '24h' && selected !== '3d' && selected !== '90d') return;
+      historyRanges.set(componentId, selected);
+      renderComponent(data, componentId);
+      app.querySelector<HTMLButtonElement>(`[data-history-range="${button.dataset.historyRange}"]`)?.focus({ preventScroll: true });
+    });
+  });
 }
 
 export function renderIncident(data: StatusResponse, incidentId: string): void {
@@ -214,11 +255,13 @@ export function renderIncident(data: StatusResponse, incidentId: string): void {
     <h2>${escapeHtml(incident.title)}</h2>
     ${maintenance ? `<p>Maintenance: ${formatDateTime(maintenance.scheduledStart)} — ${formatDateTime(maintenance.scheduledEnd)} (${escapeHtml(maintenance.state)})</p>` : ''}
     <div class="incident-meta">
-      <span class="badge badge-${escapeHtml(incident.severity)}">${escapeHtml(incident.severity)}</span>
+      ${incident.state === 'monitoring' && incident.severity !== 'maintenance' ? `<span>Previous impact: ${getStatusInfo(incident.severity).label}</span>`
+        : `<span class="badge badge-${escapeHtml(incident.severity)}">${getStatusInfo(incident.severity).label}</span>`}
       <span class="badge badge-state">${escapeHtml(incident.state)}</span>
       <span>Opened ${formatDateTime(incident.createdAt)}</span>
       ${incident.resolvedAt ? `<span>Resolved ${formatDateTime(incident.resolvedAt)}</span>` : ''}
     </div>
+    ${recoveryMessage(incident, data)}
     ${affectedServices(incident.components, data)}
     ${issueLink(incident)}
     ${!incident.sourceUrl ? '<p class="muted">Published by the status team. This incident has no linked GitHub issue.</p>' : ''}
