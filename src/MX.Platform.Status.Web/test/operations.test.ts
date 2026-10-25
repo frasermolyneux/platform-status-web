@@ -9,6 +9,7 @@ let loginCount = 0;
 let existingBanners: unknown[] = [];
 let existingHealth: unknown[] = [];
 let existingIncidents: unknown[] = [];
+let githubSyncStatus = 'healthy';
 let saveGate: Promise<void> | undefined;
 let writerWritable = true;
 let trafficReadGate: Promise<void> | undefined;
@@ -62,6 +63,7 @@ beforeEach(() => {
   writes.length = loginCount = 0;
   existingBanners = [];
   existingHealth = [];
+  githubSyncStatus = 'healthy';
   existingIncidents = [{
     id: 1, siteId: 'mx', revision: 1, components: ['mx.sitewatch.molyneux-me'],
     title: 'GitHub managed outage', state: 'investigating', severity: 'outage', published: true,
@@ -125,13 +127,26 @@ beforeEach(() => {
         source: 'azure-alert', id: 'alert-1', observedAt: timestamp,
         evidence: { data: { essentials: { alertRule: 'Database availability', description: 'The database needs attention.', severity: 'Sev1', monitorCondition: 'Fired' } } },
       }, {
-        source: 'github-issues', id: 'github', observedAt: timestamp,
-        evidence: { repository: 'frasermolyneux/status-pages', status: 'healthy', summary: 'GitHub issues are synchronized.' },
+        source: 'github-issues', id: 'github', observedAt: new Date().toISOString(),
+        evidence: { repository: 'frasermolyneux/status-pages', status: githubSyncStatus,
+          summary: githubSyncStatus === 'healthy' ? 'GitHub issues are synchronized.' : 'Issue 3 needs metadata corrections.' },
       }],
     };
     assert.ok(path in fixtures, `Unexpected request ${path}`);
     return Response.json(fixtures[path]);
   };
+});
+
+test('incident pages surface rejected GitHub synchronisation and clear the warning after recovery', async () => {
+  history.replaceState(null, '', '/ops/incidents');
+  githubSyncStatus = 'error';
+  await renderOperations();
+  const warning = document.querySelector<HTMLElement>('aside[role="status"]')!;
+  assert.equal(warning.hidden, false);
+  assert.match(warning.textContent || '', /Issue 3 needs metadata corrections.*latest issue changes/);
+  githubSyncStatus = 'healthy';
+  await renderOperations();
+  assert.equal(document.querySelector<HTMLElement>('aside[role="status"]')?.hidden, true);
 });
 
 test('traffic changes require an additional role and exact-host confirmation, without publishing an announcement', async () => {
@@ -635,7 +650,7 @@ test('service diagnostics explain incident overrides without blaming a successfu
     probe: { success: false, httpStatus: 503, durationMilliseconds: 17, observedAt: new Date().toISOString(), observer: 'publisher', error: 'Archived failure' },
     checks: [{ id: 'mx.sitewatch.molyneux-me', name: 'Website availability', kind: 'telemetry',
       status: 'operational', observedAt: new Date().toISOString(), detail: 'Three regions healthy' }],
-    incidents: [{ id: 7, title: 'Intermittent failures', severity: 'degraded', state: 'monitoring' }], maintenance: [],
+    incidents: [{ id: 7, title: 'Intermittent failures', severity: 'degraded', state: 'identified' }], maintenance: [],
   }];
   history.replaceState(null, '', '/ops');
   await renderOperations();

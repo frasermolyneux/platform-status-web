@@ -31,9 +31,19 @@ export interface ComponentDto {
   uptimeWindowDays: number;
   uptimeRatio: number | null;
   history: HistoryDayDto[];
+  recentHistory?: { last24Hours: HistoryBucketDto[]; last3Days: HistoryBucketDto[] };
   openIncidentIds?: number[];
   children?: ComponentDto[];
   checks?: { id: string; name: string; kind: string; status: string; observedAt?: string | null }[];
+}
+
+export interface HistoryBucketDto {
+  start: string;
+  end: string;
+  status: string;
+  total: number;
+  failed: number;
+  incidentIds: number[];
 }
 
 export interface HistoryDayDto {

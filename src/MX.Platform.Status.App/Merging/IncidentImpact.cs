@@ -69,7 +69,9 @@ public static class IncidentImpact
     private static string? ObservationImpact(IncidentImpactObservation observation, DateTimeOffset end,
         DateOnly date, ISet<string> components)
     {
-        if (observation.State == IncidentState.Resolved || !observation.Components.Any(components.Contains)) return null;
+        if (observation.State == IncidentState.Resolved
+            || observation.State == IncidentState.Monitoring && observation.Severity != Severity.Maintenance
+            || !observation.Components.Any(components.Contains)) return null;
         var start = observation.At;
         if (observation.Severity == Severity.Maintenance)
         {
@@ -107,17 +109,53 @@ public static class IncidentImpact
             var update = updates[index];
             severity = update.Severity ?? severity;
             var end = index + 1 < updates.Length ? updates[index + 1].At : incident.ResolvedAt ?? DateTimeOffset.UtcNow;
-            if (severity is not null && update.State != "resolved" && AffectsDate(update.At, end, date))
+            if (severity is not null && update.State is not ("resolved" or "monitoring") && AffectsDate(update.At, end, date))
                 yield return severity;
         }
         // Old incidents may predate impact recording; only their current impact is known.
-        if (incident.ResolvedAt is null && date == DateOnly.FromDateTime(DateTime.UtcNow))
+        if (incident.ResolvedAt is null && incident.State != "monitoring" && date == DateOnly.FromDateTime(DateTime.UtcNow))
             yield return incident.Severity;
+    }
+
+    public static IEnumerable<string> ForRange(Incident incident, ISet<string> components,
+        DateTimeOffset start, DateTimeOffset end)
+    {
+        var observations = incident.ImpactHistory;
+        if (observations.Count == 0)
+        {
+            Severity? severity = null;
+            observations = incident.Updates.OrderBy(update => update.At).Select(update =>
+            {
+                severity = update.Severity ?? severity;
+                return severity.HasValue ? new IncidentImpactObservation(update.At, update.State,
+                    severity.Value, incident.Components) : null;
+            }).Where(observation => observation is not null).Select(observation => observation!).ToArray();
+        }
+        foreach (var source in observations.GroupBy(observation => observation.SourceSite))
+        {
+            var ordered = source.OrderBy(observation => observation.At).ToArray();
+            for (var index = 0; index < ordered.Length; index++)
+            {
+                var observation = ordered[index];
+                if (!observation.Components.Any(components.Contains) || observation.State == IncidentState.Resolved
+                    || observation.State == IncidentState.Monitoring && observation.Severity != Severity.Maintenance) continue;
+                var until = index + 1 < ordered.Length ? ordered[index + 1].At : incident.ResolvedAt ?? end;
+                var since = observation.At;
+                if (observation.Severity == Severity.Maintenance)
+                {
+                    if (observation.ScheduledStart is not { } scheduledStart || observation.ScheduledEnd is not { } scheduledEnd) continue;
+                    since = since > scheduledStart ? since : scheduledStart;
+                    until = Earlier(until, scheduledEnd);
+                }
+                if (since < until && since < end && until > start)
+                    yield return observation.Severity.ToApiString();
+            }
+        }
     }
 
     private static DateTimeOffset Earlier(DateTimeOffset first, DateTimeOffset second) => first < second ? first : second;
 
-    internal static string Worst(IEnumerable<string> statuses)
+    public static string Worst(IEnumerable<string> statuses)
     {
         var values = statuses.ToHashSet();
         return new[] { "outage", "degraded", "maintenance", "unknown", "operational" }

@@ -26,7 +26,6 @@ public static class GitHubIssueParser
         if (!IsTrusted(issue.GetProperty("user").GetProperty(LoginProperty).GetString()!, options))
             throw new InvalidDataException("Incident authors must be the repository owner or an explicitly trusted maintainer.");
         var targets = ReadTargets(labels, catalog);
-        var severity = ReadSeverity(labels);
         var closedAt = issue.GetProperty("closed_at").ValueKind == JsonValueKind.Null
             ? (DateTimeOffset?)null : issue.GetProperty("closed_at").GetDateTimeOffset();
         var published = labels.Contains("status:published");
@@ -38,6 +37,7 @@ public static class GitHubIssueParser
         var sourceUpdates = new List<SourceUpdateSnapshot>();
         var sourceTimeline = ReadUpdates(issue, comments, options, snapshots: sourceUpdates);
         var state = ReadState(labels, closedAt, sourceTimeline[^1].State);
+        var severity = ReadSeverity(labels, state, previous, sourceBody.Metadata);
         var approved = ApprovedHistory(previous?.OrderByDescending(record => record.PublicUpdates.Count)
             .ThenByDescending(record => record.PublicUpdates.LastOrDefault()?.At).FirstOrDefault());
         var aliases = previous?.SelectMany(record => record.PublicAliases.Append(record.Id))
@@ -138,9 +138,16 @@ public static class GitHubIssueParser
         }).ToArray();
     }
 
-    private static Severity ReadSeverity(HashSet<string> labels)
+    private static Severity ReadSeverity(HashSet<string> labels, IncidentState state,
+        IReadOnlyList<IncidentRecord>? previous, GitHubUpdateEnvelope? metadata)
     {
         var severities = labels.Where(label => label.StartsWith("severity:", StringComparison.Ordinal)).ToArray();
+        if (severities.Length == 0 && state is IncidentState.Monitoring or IncidentState.Resolved)
+        {
+            var recorded = previous?.OrderByDescending(record => record.PublicUpdates.LastOrDefault()?.At)
+                .FirstOrDefault()?.Severity ?? metadata?.Severity;
+            if (recorded.HasValue) return recorded.Value;
+        }
         if (severities.Length != 1 || severities[0] is not ("severity:degraded" or "severity:outage" or "severity:maintenance"))
             throw new InvalidDataException("Choose exactly one severity:degraded, severity:outage or severity:maintenance label.");
         return Enum.Parse<Severity>(severities[0]["severity:".Length..], true);

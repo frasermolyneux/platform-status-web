@@ -494,6 +494,11 @@ public sealed partial class IndependentServiceTests : IDisposable
                         Assert.Equal("outage", component.Status);
                         Assert.Equal("outage", component.Checks!.Single(check => check.Id == $"{fixture}.slow").Status);
                         Assert.Equal("operational", component.Checks!.Single(check => check.Id == $"{fixture}.fast").Status);
+                        var buckets = (await database.ReadRecentBucketsAsync(site.Site.Id, default))
+                            .Where(bucket => bucket.Component == component.Id).ToArray();
+                        Assert.Equal(1, buckets.Sum(bucket => bucket.Total));
+                        Assert.Equal(1, buckets.Sum(bucket => bucket.Failed));
+                        Assert.All(buckets, bucket => Assert.Equal("outage", bucket.Status));
                         var day = Assert.Single((await database.ReadHistoryAsync(site, default)).ComponentsById[component.Id].Days);
                         Assert.Equal(1, day.Total);
                         Assert.Equal(1, day.Failed);
@@ -530,6 +535,8 @@ public sealed partial class IndependentServiceTests : IDisposable
                         var day = Assert.Single((await database.ReadHistoryAsync(site, default)).ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
                         Assert.Equal(2, day.Total);
                         Assert.Equal(2, day.Failed);
+                        Assert.Equal(2, (await database.ReadRecentBucketsAsync(site.Site.Id, default))
+                            .Where(bucket => bucket.Component == $"{site.Site.Id}.{fixture}").Sum(bucket => bucket.Total));
                     }
                 }
                 finally
@@ -557,6 +564,10 @@ public sealed partial class IndependentServiceTests : IDisposable
                         .ComponentsById[$"{site.Site.Id}.{fixture}"].Days);
                     Assert.Equal(4, day.Total);
                     Assert.Equal(3, day.Failed);
+                    var buckets = (await database.ReadRecentBucketsAsync(site.Site.Id, default))
+                        .Where(bucket => bucket.Component == $"{site.Site.Id}.{fixture}").ToArray();
+                    Assert.Equal(4, buckets.Sum(bucket => bucket.Total));
+                    Assert.Equal(3, buckets.Sum(bucket => bucket.Failed));
                 }
 
                 for (var index = 0; index < PublisherLease.MonitoringBatchLimit + 2; index++)
@@ -584,7 +595,8 @@ public sealed partial class IndependentServiceTests : IDisposable
                 }
 
                 await using (var reset = new Npgsql.NpgsqlCommand("""
-                    WITH days AS (DELETE FROM status_probe_days WHERE component_id IN ($1,$2)),
+                    WITH buckets AS (DELETE FROM status_monitoring_buckets WHERE component_id IN ($1,$2)),
+                    days AS (DELETE FROM status_probe_days WHERE component_id IN ($1,$2)),
                     cursors AS (DELETE FROM status_sample_cursors WHERE component_id IN ($1,$2))
                     DELETE FROM status_evidence WHERE source='check-result' AND event_id IN ($3,$4,$5,$6)
                     """, lease.Connection))
@@ -705,7 +717,10 @@ public sealed partial class IndependentServiceTests : IDisposable
                 .Concat(Enumerable.Range(0, 20).Select(index => $"mx/{fixture}.queued-{index}")).ToArray());
             cleanup.Parameters.AddWithValue($"{fixture}.");
             await cleanup.ExecuteNonQueryAsync();
-            await using var counters = source.CreateCommand("DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4)");
+            await using var counters = source.CreateCommand("""
+                WITH buckets AS (DELETE FROM status_monitoring_buckets WHERE component_id IN ($1,$2,$3,$4))
+                DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4)
+                """);
             counters.Parameters.AddWithValue($"mx.{fixture}");
             counters.Parameters.AddWithValue($"xi.{fixture}");
             counters.Parameters.AddWithValue($"mx.{fixture}.one-sided");

@@ -198,6 +198,10 @@ export async function renderOperations(navigateTo: (path: string) => void = path
       navigation.append(item);
     }
     root.append(navigation, actions);
+    const syncWarning = element('aside', undefined, 'stale-warning');
+    syncWarning.setAttribute('role', 'status');
+    syncWarning.hidden = true;
+    root.append(syncWarning);
     if (page === 'overview') root.append(overview, healthSection);
     if (page === 'evidence') root.append(healthSection, evidenceSection);
     if (page === 'banners') root.append(editor, bannerSection);
@@ -609,7 +613,8 @@ export async function renderOperations(navigateTo: (path: string) => void = path
         for (const maintenance of check.maintenance) row.append(element('p', `Maintenance #${maintenance.id}: ${maintenance.title}`));
         if (check.lastFailure && check.lastFailure.observedAt !== check.probe?.observedAt)
           row.append(element('p', `Archived failed HTTP check: ${formatDateTime(check.lastFailure.observedAt)} / ${check.lastFailure.error || 'No HTTP response'}`));
-        if (check.checks?.length && check.checks.every(signal => signal.status === 'operational') && check.incidents.length)
+        if (check.checks?.length && check.checks.every(signal => signal.status === 'operational')
+            && check.incidents.some(incident => incident.state !== 'monitoring'))
           row.append(element('p', 'Monitoring checks are healthy; the active incident still affects the public status.'));
         healthSection.append(row);
       }
@@ -617,6 +622,11 @@ export async function renderOperations(navigateTo: (path: string) => void = path
     }
 
     function renderLists(): void {
+      const githubSync = evidence.find(record => record.source === 'github-issues');
+      const sync = githubSync ? evidenceCards([githubSync])[0] : undefined;
+      const syncStale = githubSync && Date.now() - new Date(githubSync.observedAt).getTime() > 10 * 60_000;
+      syncWarning.hidden = !runtime.github.enabled || (sync?.state === 'healthy' && !syncStale);
+      syncWarning.textContent = syncWarning.hidden ? '' : `GitHub incident synchronisation needs attention. ${sync?.summary || 'The last sync is stale.'} Published incidents may not reflect the latest issue changes. Review monitoring evidence.`;
       createBanner.disabled = createIncident.disabled = !canWrite || !runtime.writable;
       overview.replaceChildren();
       for (const [value, label] of [

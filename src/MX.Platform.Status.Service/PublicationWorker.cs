@@ -79,6 +79,8 @@ public sealed class PublicationWorker(
                 incidents.Select(i => i.ToPublicIncident()),
                 incidents.Where(i => i.Severity == Severity.Maintenance).Select(i => i.ToMaintenance(DateTimeOffset.UtcNow)));
             publication = IncidentImpact.Apply(CorrectTodayHistory(publication, history), incidents.Select(incident => incident.ToPublicIncident()));
+            publication = RecentHistory.Apply(publication, await database.ReadRecentBucketsAsync(site.Site.Id, ct),
+                incidents.Select(incident => incident.ToPublicIncident()).ToArray());
             publication = publication with
             {
                 Banners = (await database.ReadBannersAsync(site.Site.Id, ct))
@@ -157,7 +159,8 @@ public sealed class PublicationWorker(
                 var sample = catalog.ProjectTelemetry(site, measured).GetValueOrDefault(component);
                 if (sample is null || sample.Samples == 0) continue;
                 await lease.RecordMonitoringSampleAsync(site.Site.Id, component, fingerprint, observedAt,
-                    IsMaintained(site, component, observedAt, incidents) ? null : sample.Failures == 0, ct);
+                    IsMaintained(site, component, observedAt, incidents) ? null : sample.Failures == 0, ct,
+                    ComponentStatusCalculator.WorstOf(sample.Checks.Select(check => check.Status)));
             }
         }
     }

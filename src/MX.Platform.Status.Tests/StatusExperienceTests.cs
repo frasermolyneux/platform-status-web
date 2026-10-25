@@ -29,6 +29,79 @@ public sealed class StatusExperienceTests
         finally { File.Delete(path); }
     }
 
+    [Theory]
+    [InlineData(ComponentStatus.Operational, "operational")]
+    [InlineData(ComponentStatus.Outage, "outage")]
+    [InlineData(ComponentStatus.Unknown, "unknown")]
+    public void MonitoringWithoutSeverityReleasesLiveImpactButRetainsTheRecordedOutage(
+        ComponentStatus measured, string expected)
+    {
+        var catalog = Catalogue();
+        string[] labels = ["status:incident", "status:published", "site:xi",
+            "component:xi.sitewatch.forums-tasks", "severity:outage", "state:identified"];
+        var initial = Assert.Single(GitHubIssueParser.Parse(Issue(labels), [], catalog, new()));
+        initial = initial.ObserveImpact(null, Created);
+        var monitoringLabels = labels.Where(label => label != "severity:outage")
+            .Select(label => label == "state:identified" ? "state:monitoring" : label).ToArray();
+        var recovered = Assert.Single(GitHubIssueParser.Parse(Issue(monitoringLabels, updatedMinutes: 20),
+            [], catalog, new(), [initial])).ObserveImpact(initial, Created.AddHours(2));
+        Assert.Equal(IncidentState.Monitoring, recovered.State);
+        Assert.Equal(Severity.Outage, recovered.Severity);
+        Assert.Equal(Created.AddMinutes(20), recovered.ImpactHistory[^1].At);
+        Assert.Null(recovered.ResolvedAt);
+        var site = catalog.Get("xi");
+        var live = site.EffectiveChecks.GroupBy(check => check.Component).ToDictionary(group => group.Key,
+            group => new ComponentLiveTelemetry(
+                group.Key == "xi.sitewatch.forums-tasks" && measured == ComponentStatus.Unknown ? 0 : 1,
+                group.Key == "xi.sitewatch.forums-tasks" && measured == ComponentStatus.Outage ? 1 : 0,
+                DateTimeOffset.UtcNow, null));
+        var publication = new StatusMerger().Merge(site.Snapshot, live, null, [recovered.ToPublicIncident()], []);
+        Assert.Equal(expected, Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-tasks").Status);
+        var scopes = new HashSet<string> { "xi.sitewatch.forums-tasks" };
+        Assert.Equal("outage", Assert.Single(IncidentImpact.ForRange(recovered.ToPublicIncident(), scopes,
+            Created, Created.AddMinutes(20))));
+        Assert.Empty(IncidentImpact.ForRange(recovered.ToPublicIncident(), scopes,
+            Created.AddMinutes(20), Created.AddHours(2)));
+        Assert.Throws<InvalidDataException>(() => GitHubIssueParser.Parse(
+            Issue(monitoringLabels.Select(label => label == "state:monitoring" ? "state:identified" : label).ToArray()),
+            [], catalog, new(), [recovered]));
+    }
+
+    [Fact]
+    public void RecentHistoryShowsRealBucketsMissingPeriodsAndBoundedIncidentRecovery()
+    {
+        var now = DateTimeOffset.Parse("2026-10-25T15:40:00Z");
+        var start = now.AddMinutes(-40);
+        var incident = new IncidentCommand("Tasks unavailable", ["tasks"], Severity.Outage,
+            IncidentState.Investigating, "Investigating", true).Apply(5, "xi", null, start);
+        incident = (new IncidentCommand(incident.Title, incident.Components, Severity.Outage,
+            IncidentState.Monitoring, "Recovered", true)).Apply(5, "xi", incident, start.AddMinutes(15));
+        var publication = RecentHistory.Apply(new()
+        {
+            GeneratedAt = now,
+            Components = [new() { Id = "forums", Kind = "group", Children = [
+                new() { Id = "tasks" }, new() { Id = "web" }] }]
+        }, [
+            new("tasks", start, 10, 0, "operational"),
+            new("web", start, 10, 0, "operational"),
+            new("tasks", start.AddMinutes(15), 8, 0, "operational"),
+            new("web", start.AddMinutes(15), 8, 0, "operational"),
+            new("tasks", start.AddMinutes(30), 1, 1, "degraded")
+        ], [incident.ToPublicIncident()]);
+        var group = Assert.Single(publication.Components).RecentHistory!;
+        Assert.Equal(96, group.Last24Hours.Count);
+        Assert.Equal(72, group.Last3Days.Count);
+        Assert.Equal("outage", group.Last24Hours[^3].Status);
+        Assert.Equal([5], group.Last24Hours[^3].IncidentIds);
+        Assert.Equal("operational", group.Last24Hours[^2].Status);
+        Assert.Empty(group.Last24Hours[^2].IncidentIds);
+        Assert.Equal("degraded", group.Last24Hours[^1].Status);
+        Assert.Equal("unknown", group.Last24Hours[^4].Status);
+        Assert.Equal("outage", group.Last3Days[^1].Status);
+        Assert.Equal(37, group.Last3Days[^1].Total);
+        Assert.Equal(1, group.Last3Days[^1].Failed);
+    }
+
     [Fact]
     public void PublicCoverageContainsOnlyMonitoringBindingsAndPreservesSharedCanonicalIdentities()
     {

@@ -1,7 +1,7 @@
 const STATUS_MAP: Record<string, { className: string; label: string; color: string }> = {
   operational: { className: 'status-operational', label: 'Operational', color: '#2da44e' },
   degraded: { className: 'status-degraded', label: 'Degraded Performance', color: '#d4a72c' },
-  outage: { className: 'status-outage', label: 'Major Outage', color: '#cf222e' },
+  outage: { className: 'status-outage', label: 'Outage', color: '#cf222e' },
   maintenance: { className: 'status-maintenance', label: 'Under Maintenance', color: '#d4a72c' },
   unknown: { className: 'status-unknown', label: 'Unknown', color: '#656d76' },
 };
@@ -12,5 +12,10 @@ export function getStatusInfo(status: string) {
 
 export function getStatusDotHtml(status: string): string {
   const info = getStatusInfo(status);
-  return `<span class="status-dot ${info.className}" title="${info.label}"></span>`;
+  return `<span class="status-dot ${info.className}" aria-hidden="true"></span>`;
+}
+
+export function getStatusBadgeHtml(status: string): string {
+  const info = getStatusInfo(status);
+  return `<span class="status-label ${info.className}">${getStatusDotHtml(status)}<span>${info.label}</span></span>`;
 }

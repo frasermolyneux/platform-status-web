@@ -72,6 +72,9 @@ public sealed record IncidentRecord
             && last.ScheduledStart == ScheduledStart && last.ScheduledEnd == ScheduledEnd)
             return this with { ImpactHistory = history };
         var at = State == IncidentState.Resolved ? ResolvedAt ?? now : now;
+        if (SourceUrl is not null && State == IncidentState.Monitoring && previous?.State != State
+            && PublicUpdates.LastOrDefault(update => update.State == State) is { } transition)
+            at = transition.At;
         if (history.LastOrDefault() is { } latest && at < latest.At) at = latest.At;
         return this with
         {
