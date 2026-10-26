@@ -78,9 +78,11 @@ public sealed class PublicationWorker(
             var publication = new StatusMerger().Merge(site.Snapshot, live, history,
                 incidents.Select(i => i.ToPublicIncident()),
                 incidents.Where(i => i.Severity == Severity.Maintenance).Select(i => i.ToMaintenance(DateTimeOffset.UtcNow)));
-            publication = IncidentImpact.Apply(CorrectTodayHistory(publication, history), incidents.Select(incident => incident.ToPublicIncident()));
+            var propagation = new ImpactPropagation(site.Components);
+            publication = IncidentImpact.Apply(CorrectTodayHistory(publication, history, propagation),
+                incidents.Select(incident => incident.ToPublicIncident()), propagation);
             publication = RecentHistory.Apply(publication, await database.ReadRecentBucketsAsync(site.Site.Id, ct),
-                incidents.Select(incident => incident.ToPublicIncident()).ToArray());
+                incidents.Select(incident => incident.ToPublicIncident()).ToArray(), propagation);
             publication = publication with
             {
                 Banners = (await database.ReadBannersAsync(site.Site.Id, ct))
@@ -166,7 +168,7 @@ public sealed class PublicationWorker(
     }
 
     private static string InputIdentity(SiteDefinition site, CheckDefinition check) =>
-        check.Monitoring?.Identity ?? check.SharedId ?? $"{site.Site.Id}/{check.Id}";
+        check.Process?.Identity ?? check.Monitoring?.Identity ?? check.SharedId ?? $"{site.Site.Id}/{check.Id}";
 
     private HashSet<string> HistoryInputIdentities(SiteDefinition site, string component)
     {
@@ -199,15 +201,16 @@ public sealed class PublicationWorker(
         });
     }
 
-    internal static StatusApiResponse CorrectTodayHistory(StatusApiResponse publication, HistoryDocument history) =>
-        publication with { Components = publication.Components.Select(c => CorrectComponent(c, history)).ToArray() };
+    internal static StatusApiResponse CorrectTodayHistory(StatusApiResponse publication, HistoryDocument history,
+        ImpactPropagation? propagation = null) =>
+        publication with { Components = publication.Components.Select(c => CorrectComponent(c, history, propagation)).ToArray() };
 
-    private static ComponentDto CorrectComponent(ComponentDto component, HistoryDocument history)
+    private static ComponentDto CorrectComponent(ComponentDto component, HistoryDocument history, ImpactPropagation? propagation)
     {
         var days = history.ComponentsById.TryGetValue(component.Id, out var record)
             ? record.Days.ToDictionary(day => day.Date) : [];
-        var children = component.Children?.Select(child => CorrectComponent(child, history)).ToArray();
-        var corrected = component.History.Select(day => CorrectDay(day, days, children)).ToArray();
+        var children = component.Children?.Select(child => CorrectComponent(child, history, propagation)).ToArray();
+        var corrected = component.History.Select(day => CorrectDay(day, days, children, component.Id, propagation)).ToArray();
         var known = corrected.Where(day => day.Total > 0 && day.Failed.HasValue && day.Status != "maintenance").ToArray();
         var total = known.Sum(day => day.Total!.Value);
         return component with
@@ -218,18 +221,23 @@ public sealed class PublicationWorker(
         };
     }
 
-    private static HistoryDayDto CorrectDay(HistoryDayDto day, IReadOnlyDictionary<DateOnly, HistoryDay> days, ComponentDto[]? children)
+    private static HistoryDayDto CorrectDay(HistoryDayDto day, IReadOnlyDictionary<DateOnly, HistoryDay> days,
+        ComponentDto[]? children, string component, ImpactPropagation? propagation)
     {
         if (days.TryGetValue(day.Date, out var sample))
             return day with { Status = sample.Status.ToApiString(), Uptime = sample.Uptime, Total = sample.Total, Failed = sample.Failed };
-        return children is { Length: > 0 } ? GroupDay(day, children)
+        return children is { Length: > 0 } ? GroupDay(day, children, component, propagation)
             : day with { Status = "unknown", Uptime = null, Total = null, Failed = null };
     }
 
-    private static HistoryDayDto GroupDay(HistoryDayDto day, IReadOnlyList<ComponentDto> children)
+    private static HistoryDayDto GroupDay(HistoryDayDto day, IReadOnlyList<ComponentDto> children,
+        string component, ImpactPropagation? propagation)
     {
-        var samples = children.Select(child => child.History.FirstOrDefault(sample => sample.Date == day.Date)
-            ?? new HistoryDayDto { Date = day.Date }).ToArray();
+        var samples = children.Select(child =>
+        {
+            var sample = child.History.FirstOrDefault(sample => sample.Date == day.Date) ?? new HistoryDayDto { Date = day.Date };
+            return sample with { Status = propagation?.Contribute(component, child.Id, sample.Status) ?? sample.Status };
+        }).ToArray();
         var total = samples.Sum(sample => sample.Total ?? 0);
         var failures = samples.Sum(sample => sample.Failed ?? 0);
         var state = new[] { "outage", "degraded", "maintenance", "operational" }

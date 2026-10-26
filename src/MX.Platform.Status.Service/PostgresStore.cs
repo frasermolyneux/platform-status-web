@@ -69,6 +69,10 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
                 site_id text NOT NULL, component_id text NOT NULL, day date NOT NULL,
                 total integer NOT NULL, failures integer NOT NULL,
                 PRIMARY KEY (site_id, component_id, day));
+            CREATE TABLE IF NOT EXISTS status_monitoring_days (
+                site_id text NOT NULL, component_id text NOT NULL, day date NOT NULL,
+                status text NOT NULL CHECK(status IN ('operational','degraded','outage')),
+                PRIMARY KEY(site_id,component_id,day));
             CREATE TABLE IF NOT EXISTS status_monitoring_buckets (
                 site_id text NOT NULL, component_id text NOT NULL, bucket_at timestamptz NOT NULL,
                 total integer NOT NULL, failures integer NOT NULL, status text NOT NULL,
@@ -466,7 +470,12 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     {
         var components = StatusCatalog.Flatten(site.Components.Components).ToDictionary(component => component.Id);
         var history = new HistoryDocument { Site = site.Site.Id, GeneratedAt = DateTimeOffset.UtcNow };
-        await using var command = Source.CreateCommand("SELECT component_id,day,total,failures FROM status_probe_days WHERE site_id=$1 AND day >= (now() AT TIME ZONE 'UTC')::date-89 ORDER BY day");
+        await using var command = Source.CreateCommand("""
+            SELECT d.component_id,d.day,d.total,d.failures,i.status
+            FROM status_probe_days d LEFT JOIN status_monitoring_days i
+                ON i.site_id=d.site_id AND i.component_id=d.component_id AND i.day=d.day
+            WHERE d.site_id=$1 AND d.day >= (now() AT TIME ZONE 'UTC')::date-89 ORDER BY d.day
+            """);
         command.Parameters.AddWithValue(site.Site.Id);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -478,13 +487,16 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
             var total = reader.GetInt32(2);
             var failures = reader.GetInt32(3);
             var uptime = 1d - (double)failures / total;
+            var impact = reader.IsDBNull(4) ? ComponentStatus.Unknown : Enum.Parse<ComponentStatus>(reader.GetString(4), true);
             record.Days.Add(new HistoryDay
             {
                 Date = reader.GetFieldValue<DateOnly>(1),
                 Total = total,
                 Failed = failures,
                 Uptime = uptime,
-                Status = ComponentStatusCalculator.ClassifyHistoricStatus(total, uptime, definition.Sla)
+                Status = definition.HistoryClassification == "impact"
+                    ? impact
+                    : ComponentStatusCalculator.ClassifyHistoricStatus(total, uptime, definition.Sla)
             });
         }
         return history;
@@ -577,6 +589,7 @@ public sealed partial class PostgresStore(RuntimeOptions options, ILogger<Postgr
     {
         await using var command = Source.CreateCommand("""
             DELETE FROM status_probe_days WHERE day < (now() AT TIME ZONE 'UTC')::date-365;
+            DELETE FROM status_monitoring_days WHERE day < (now() AT TIME ZONE 'UTC')::date-365;
             DELETE FROM status_monitoring_buckets WHERE bucket_at < now()-interval '4 days';
             DELETE FROM status_evidence WHERE observed_at < now()-interval '30 days';
             """);
@@ -637,7 +650,14 @@ public sealed class PublisherLease(NpgsqlConnection connection, int key = 814233
             INSERT INTO status_probe_days
             SELECT $1,$2,$5,1,$6 FROM advanced WHERE $6 IS NOT NULL
             ON CONFLICT(site_id,component_id,day) DO UPDATE
-            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures)
+            SET total=status_probe_days.total+1,failures=status_probe_days.failures+excluded.failures),
+            impact_daily AS (
+                INSERT INTO status_monitoring_days
+                SELECT $1,$2,$5,$7 FROM advanced WHERE $6 IS NOT NULL
+                ON CONFLICT(site_id,component_id,day) DO UPDATE
+                SET status=CASE WHEN status_monitoring_days.status='outage' OR excluded.status='outage' THEN 'outage'
+                    WHEN status_monitoring_days.status='degraded' OR excluded.status='degraded' THEN 'degraded'
+                    ELSE 'operational' END)
             INSERT INTO status_monitoring_buckets
             SELECT $1,$2,date_bin(interval '15 minutes',$4::timestamptz,timestamptz '2000-01-01'),1,$6,$7
             FROM advanced WHERE $6 IS NOT NULL

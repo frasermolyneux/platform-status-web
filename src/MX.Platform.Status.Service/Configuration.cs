@@ -111,7 +111,9 @@ public sealed class StatusCatalog
         if (components.Length == 0 || components.Select(c => c.Id).Distinct().Count() != components.Length)
             throw new InvalidOperationException("Status component IDs must be unique within a site.");
         if (components.Any(component => component.Kind is not ("group" or "leaf")
-            || component.Kind == "leaf" && component.Children.Count > 0))
+            || component.Kind == "leaf" && component.Children.Count > 0
+            || component.MaximumParentImpact is not ("outage" or "degraded")
+            || component.HistoryClassification is not ("availability" or "impact")))
             throw new InvalidOperationException("Services contain components; leaf components cannot contain children.");
         ValidateProbes(definition, components);
         ValidateSharedComponents(definition);
@@ -152,6 +154,10 @@ public sealed class StatusCatalog
             throw new InvalidOperationException("Checks require a unique identity, component, name, supported kind and observation interval.");
         if (check.Target is not null)
             throw new InvalidOperationException("Status checks accept monitoring observations, never workload HTTP targets.");
+        if (check.Process is { } process && (check.Monitoring is not null || !ProcessMonitoring.IsApproved(process)
+            || process.SiteId != definition.Site.Id || process.ComponentId != check.Component || process.CheckId != check.Id
+            || check.ExpectedIntervalSeconds != ProcessMonitoring.Policy.GetProperty("intervalSeconds").GetInt32()))
+            throw new InvalidOperationException("Process checks require an approved, same-site monitoring contract and cadence.");
         if (check.Monitoring is { } source && (string.IsNullOrWhiteSpace(source.SiteId)
             || string.IsNullOrWhiteSpace(source.ComponentId) || string.IsNullOrWhiteSpace(source.CheckId)
             || source.Resources is not { Length: > 0 } || source.Regions is not { Length: > 0 }

@@ -280,13 +280,13 @@ public sealed class StatusExperienceTests
     public void PublicCoverageContainsOnlyMonitoringBindingsAndPreservesSharedCanonicalIdentities()
     {
         var checks = Catalogue().Sites.SelectMany(site => site.EffectiveChecks).ToArray();
-        Assert.Equal(34, checks.Length);
-        Assert.Equal(32, checks.Select(check => check.Monitoring!.Identity).Distinct().Count());
+        Assert.Equal(38, checks.Length);
+        Assert.Equal(32, checks.Where(check => check.Monitoring is not null).Select(check => check.Monitoring!.Identity).Distinct().Count());
         Assert.All(checks, check =>
         {
             Assert.Equal("telemetry", check.Kind);
             Assert.Null(check.Target);
-            Assert.NotNull(check.Monitoring);
+            Assert.True(check.Monitoring is not null ^ check.Process is not null);
         });
         Assert.Equal(2, checks.Count(check => check.SharedId == "geo-location-web.routing"
             && check.Monitoring!.SiteId == "mx" && check.Monitoring.CheckId == "mx.geo-location-web.routing"));
@@ -302,7 +302,7 @@ public sealed class StatusExperienceTests
         var site = Catalogue().Get("xi");
         var now = DateTimeOffset.UtcNow;
         bool[] regionSuccess = [uk, us, eu];
-        var observations = site.EffectiveChecks.Select(check => MonitoringAvailability.Project("xi", check,
+        var observations = site.EffectiveChecks.Where(check => check.Monitoring is not null).Select(check => MonitoringAvailability.Project("xi", check,
             check.Monitoring!.Regions.Select((region, index) => new MonitoringObservation(
                 check.Monitoring.SiteId, check.Monitoring.ComponentId, check.Monitoring.CheckId, region, now,
                 check.Id != "xi.sitewatch.forums-tasks" || regionSuccess[index], null)), now)!).ToArray();

@@ -5,19 +5,20 @@ namespace MX.Platform.Status.App.Merging;
 
 public static class IncidentImpact
 {
-    public static StatusApiResponse Apply(StatusApiResponse publication, IEnumerable<Incident>? incidents = null)
+    public static StatusApiResponse Apply(StatusApiResponse publication, IEnumerable<Incident>? incidents = null,
+        ImpactPropagation? propagation = null)
     {
         var records = incidents?.ToDictionary(incident => incident.Id) ?? [];
         return publication with
         {
-            Components = publication.Components.Select(component => Apply(component, publication, records, [])).ToArray()
+            Components = publication.Components.Select(component => Apply(component, publication, records, [], propagation)).ToArray()
         };
     }
 
     private static ComponentDto Apply(ComponentDto component, StatusApiResponse publication,
-        IReadOnlyDictionary<int, Incident> records, IReadOnlyList<string> ancestors)
+        IReadOnlyDictionary<int, Incident> records, IReadOnlyList<string> ancestors, ImpactPropagation? propagation)
     {
-        var children = component.Children?.Select(child => Apply(child, publication, records, [.. ancestors, component.Id])).ToArray();
+        var children = component.Children?.Select(child => Apply(child, publication, records, [.. ancestors, component.Id], propagation)).ToArray();
         var ids = Descendants(component).Concat(ancestors).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var incidents = publication.Incidents.Where(incident => incident.Components.Any(ids.Contains)).ToArray();
         return component with
@@ -28,11 +29,15 @@ public static class IncidentImpact
             History = component.History.Select(day =>
             {
                 var impacts = publication.Incidents.Select(incident =>
-                    (incident.Id, States: ImpactsForDay(incident, records, day.Date, ids, publication.Maintenance).ToArray()))
+                    (incident.Id, States: propagation is null
+                        ? ImpactsForDay(incident, records, day.Date, ids, publication.Maintenance).ToArray()
+                        : ids.SelectMany(id => ImpactsForDay(incident, records, day.Date,
+                            new HashSet<string>([id], StringComparer.OrdinalIgnoreCase), publication.Maintenance)
+                            .Select(status => propagation.Contribute(component.Id, id, status))).ToArray()))
                     .Where(impact => impact.States.Length > 0).ToArray();
                 var states = impacts.SelectMany(impact => impact.States)
                     .Concat(children?.SelectMany(child => child.History.Where(sample => sample.Date == day.Date)
-                        .Select(sample => sample.Status)) ?? []);
+                        .Select(sample => propagation?.Contribute(component.Id, child.Id, sample.Status) ?? sample.Status)) ?? []);
                 return day with
                 {
                     Status = Worst(states.Append(day.Status).Where(status => status != "unknown")),

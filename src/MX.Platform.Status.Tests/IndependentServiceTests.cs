@@ -443,7 +443,8 @@ public sealed partial class IndependentServiceTests : IDisposable
             {
                 Components = [.. site.Components.Components,
                 new() { Id = $"{site.Site.Id}.{fixture}", Name = "Fixture" },
-                new() { Id = $"{site.Site.Id}.{fixture}.one-sided", Name = "One-sided fixture" }]
+                new() { Id = $"{site.Site.Id}.{fixture}.one-sided", Name = "One-sided fixture" },
+                new() { Id = $"{site.Site.Id}.{fixture}.impact", Name = "Process history fixture", HistoryClassification = "impact" }]
             },
             SharedComponents = new(site.SharedComponents)
             {
@@ -669,6 +670,20 @@ public sealed partial class IndependentServiceTests : IDisposable
                     Assert.Equal(1, Assert.Single((await database.ReadHistoryAsync(site, default))
                         .ComponentsById[$"{site.Site.Id}.{fixture}.one-sided"].Days).Total);
 
+                var processAt = DateTimeOffset.UtcNow;
+                var processComponent = $"mx.{fixture}.impact";
+                await lease.RecordMonitoringSampleAsync("mx", processComponent, $"{fixture}-process-failed",
+                    processAt, false, default, ComponentStatus.Degraded);
+                await lease.RecordMonitoringSampleAsync("mx", processComponent, $"{fixture}-process-recovered",
+                    processAt.AddMilliseconds(1), true, default, ComponentStatus.Operational);
+                await lease.RecordMonitoringSampleAsync("mx", processComponent, $"{fixture}-process-recovered",
+                    processAt.AddMilliseconds(1), true, default, ComponentStatus.Operational);
+                var processDay = Assert.Single((await database.ReadHistoryAsync(catalog.Get("mx"), default))
+                    .ComponentsById[processComponent].Days);
+                Assert.Equal(2, processDay.Total);
+                Assert.Equal(1, processDay.Failed);
+                Assert.Equal(ComponentStatus.Degraded, processDay.Status);
+
                 var queuedPath = Path.Combine(_directory, "queued-catalog.json");
                 await File.WriteAllTextAsync(queuedPath, JsonSerializer.Serialize(catalog.Sites.Select(site => site with
                 {
@@ -718,16 +733,18 @@ public sealed partial class IndependentServiceTests : IDisposable
             cleanup.Parameters.AddWithValue($"{fixture}.");
             await cleanup.ExecuteNonQueryAsync();
             await using var counters = source.CreateCommand("""
-                WITH buckets AS (DELETE FROM status_monitoring_buckets WHERE component_id IN ($1,$2,$3,$4))
-                DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4)
+                WITH buckets AS (DELETE FROM status_monitoring_buckets WHERE component_id IN ($1,$2,$3,$4,$5)),
+                impacts AS (DELETE FROM status_monitoring_days WHERE component_id IN ($1,$2,$3,$4,$5))
+                DELETE FROM status_probe_days WHERE component_id IN ($1,$2,$3,$4,$5)
                 """);
             counters.Parameters.AddWithValue($"mx.{fixture}");
             counters.Parameters.AddWithValue($"xi.{fixture}");
             counters.Parameters.AddWithValue($"mx.{fixture}.one-sided");
             counters.Parameters.AddWithValue($"xi.{fixture}.one-sided");
+            counters.Parameters.AddWithValue($"mx.{fixture}.impact");
             await counters.ExecuteNonQueryAsync();
             await using var cursors = source.CreateCommand("DELETE FROM status_sample_cursors WHERE component_id=ANY($1)");
-            cursors.Parameters.AddWithValue(new[] { $"mx.{fixture}", $"xi.{fixture}", $"mx.{fixture}.one-sided", $"xi.{fixture}.one-sided" });
+            cursors.Parameters.AddWithValue(new[] { $"mx.{fixture}", $"xi.{fixture}", $"mx.{fixture}.one-sided", $"xi.{fixture}.one-sided", $"mx.{fixture}.impact" });
             await cursors.ExecuteNonQueryAsync();
         }
     }
