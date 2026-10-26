@@ -9,7 +9,7 @@ internal sealed record MonitoringBucket(string Component, DateTimeOffset At, int
 internal static class RecentHistory
 {
     internal static StatusApiResponse Apply(StatusApiResponse publication, IReadOnlyList<MonitoringBucket> buckets,
-        IReadOnlyList<Incident> incidents)
+        IReadOnlyList<Incident> incidents, ImpactPropagation? propagation = null)
     {
         var now = publication.GeneratedAt;
         var quarter = Floor(now, 15);
@@ -39,10 +39,16 @@ internal static class RecentHistory
                     var end = to < now ? to : now;
                     var observed = samples.Where(bucket => bucket.At >= from && bucket.At < to).ToArray();
                     var impacts = incidents.Select(incident => (incident.Id,
-                        Statuses: IncidentImpact.ForRange(incident, scope, from, end,
-                            publication.Maintenance.FirstOrDefault(window => window.Id == incident.Id)).ToArray()))
+                        Statuses: propagation is null
+                            ? IncidentImpact.ForRange(incident, scope, from, end,
+                                publication.Maintenance.FirstOrDefault(window => window.Id == incident.Id)).ToArray()
+                            : scope.SelectMany(id => IncidentImpact.ForRange(incident,
+                                new HashSet<string>([id], StringComparer.OrdinalIgnoreCase), from, end,
+                                publication.Maintenance.FirstOrDefault(window => window.Id == incident.Id))
+                                .Select(status => propagation.Contribute(component.Id, id, status))).ToArray()))
                         .Where(impact => impact.Statuses.Length > 0).ToArray();
-                    var statuses = observed.Select(bucket => bucket.Status).Concat(impacts.SelectMany(impact => impact.Statuses));
+                    var statuses = observed.Select(bucket => propagation?.Contribute(component.Id, bucket.Component, bucket.Status)
+                        ?? bucket.Status).Concat(impacts.SelectMany(impact => impact.Statuses));
                     if (leaves.Any(leaf => !observed.Any(bucket => bucket.Component == leaf)))
                         statuses = statuses.Append("unknown");
                     return new HistoryBucketDto(from, to, IncidentImpact.Worst(statuses),

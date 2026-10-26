@@ -61,6 +61,7 @@ public static class HealthDiagnostics
             var source = configured.Any(check => check.Monitoring is not null)
                 ? "Sitewatch monitoring via Application Insights"
                 : "Telemetry checks and declared incidents";
+            if (configured.Any(check => check.Process is not null)) source = "Process monitoring via Application Insights";
             if (component.Kind == "group") source = "Service aggregate from components";
             return new ComponentHealth(component.Id, component.Name, published?.Status ?? "unknown",
                 source,

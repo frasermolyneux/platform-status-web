@@ -87,6 +87,31 @@ HTTP targets and unsupported collection fields; generic ingestion cannot overwri
 monitoring-owned inputs. The US$15/month incremental normal-operation allowance is
 planning guidance, not a hard cap or permission to silently remove coverage.
 
+## Process observations and supporting impact
+
+Server Agent, Ban Synchronisation and Portal Synchronisation consume typed
+`ProcessHealthSnapshot` events from approved identities and exact cloud roles in
+the existing Portal Application Insights resource. The mirrored
+`src/contract/process-health-policy.json` belongs to platform-monitoring. Workloads
+own complete-inventory/outcome evaluation; status does not calculate business job
+deadlines or create workload probes. Process queries are independent of native
+availability queries, so one feed cannot prevent the other refreshing.
+
+Original assessment timestamps and deduplicated observation identities survive
+repolls and missing queries; stale evidence becomes Unknown. Generic ingestion
+cannot overwrite either monitoring source type. Producer-first
+`--refresh-monitoring` requires fresh current-query coverage for both types.
+
+Supporting process leaves declare `maximumParentImpact: degraded`: their own
+confirmed capability failure or declared incident may be Outage, but contribution
+to Portal is at most Degraded. Essential website/API failures and explicitly
+declared Portal outages remain Outage. Caps apply to live, daily, granular and
+incident aggregation and never alter measured success/failure counts or turn
+Unknown/maintenance into another state. Process daily history stores worst actual
+measured impact transactionally alongside existing counters, rather than turning
+a day of Degraded observations red through availability percentages. Initial
+unobserved periods stay Unknown; no public history import is performed.
+
 ## Legacy Azure architecture
 
 The remaining sections describe the preserved, inactive Azure implementation,

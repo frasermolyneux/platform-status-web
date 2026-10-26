@@ -15,6 +15,49 @@ namespace MX.Platform.Status.Tests;
 public sealed class MonitoringAvailabilityTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessObservationsDecodeThroughTheRealSdkAndRejectRestampedAssessments(bool restamped)
+    {
+        var check = new StatusCatalog(Path.Combine(AppContext.BaseDirectory, "catalog.json"))
+            .Get("xi").Checks.Single(check => check.Id == "xi.process.server-agent.fleet");
+        var source = check.Process!;
+        var now = DateTimeOffset.UtcNow;
+        using var http = new HttpClient(new LogsResponseHandler(JsonSerializer.Serialize(new
+        {
+            tables = new[]
+            {
+                new
+                {
+                    name = "PrimaryResult",
+                    columns = new[]
+                    {
+                        new { name = "siteId", type = "string" }, new { name = "componentId", type = "string" },
+                        new { name = "checkId", type = "string" }, new { name = "role", type = "string" },
+                        new { name = "timestamp", type = "datetime" }, new { name = "measuredAt", type = "datetime" },
+                        new { name = "status", type = "string" }, new { name = "expected", type = "int" },
+                        new { name = "healthy", type = "int" }, new { name = "failed", type = "int" },
+                        new { name = "unknown", type = "int" }
+                    },
+                    rows = new object[][] { [source.SiteId, source.ComponentId, source.CheckId, source.Role, now,
+                        restamped ? now.AddMinutes(-10) : now, "degraded", 2, 1, 1, 0] }
+                }
+            }
+        })));
+        var query = ProcessMonitoring.QueryAsync(OutcomeClient(http),
+            "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/fixture/providers/Microsoft.Insights/components/fixture",
+            [source], default);
+        if (restamped) await Assert.ThrowsAsync<InvalidDataException>(() => query);
+        else
+        {
+            var row = Assert.Single(await query);
+            Assert.Equal(ComponentStatus.Degraded, row.Status);
+            Assert.Equal(now, row.ObservedAt);
+            Assert.Equal(2, row.Expected);
+        }
+    }
+
+    [Theory]
     [InlineData("string", "1", true)]
     [InlineData("string", "0", false)]
     [InlineData("bool", true, true)]
@@ -71,7 +114,8 @@ public sealed class MonitoringAvailabilityTests
         var regions = fixture.RootElement.GetProperty("regions").Deserialize<string[]>()!;
         var expected = fixture.RootElement.GetProperty("checks").Deserialize<MonitoringReference[]>(StatusJson.Options)!;
         var catalog = new StatusCatalog(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
-        var actual = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Monitoring!).ToArray();
+        var actual = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Monitoring)
+            .OfType<MonitoringReference>().ToArray();
         Assert.Equal(expected.Select(reference => reference.Identity).Order(),
             actual.Select(reference => reference.Identity).Distinct().Order());
         foreach (var reference in actual)

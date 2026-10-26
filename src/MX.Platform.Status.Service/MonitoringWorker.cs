@@ -9,7 +9,7 @@ public sealed class MonitoringWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Publisher || !catalog.Sites.Any(site => site.Checks.Any(check => check.Monitoring is not null))) return;
+        if (!options.Publisher || !catalog.Sites.Any(site => site.Checks.Any(check => check.Monitoring is not null || check.Process is not null))) return;
         if (options.AzureCertificatePath is null)
         {
             logger.LogError("Monitoring collection has no reader certificate; cached observations will become stale. No workload probing fallback is available.");
@@ -44,47 +44,77 @@ public sealed class MonitoringWorker(
         var client = new LogsQueryClient(credential);
         var references = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Monitoring)
             .OfType<MonitoringReference>().DistinctBy(reference => reference.Identity).ToArray();
-        var requiredAliases = references.SelectMany(reference => reference.Resources).ToHashSet();
+        var processReferences = catalog.Sites.SelectMany(site => site.Checks).Select(check => check.Process)
+            .OfType<ProcessReference>().DistinctBy(reference => reference.Identity).ToArray();
+        var requiredAliases = references.SelectMany(reference => reference.Resources)
+            .Concat(processReferences.Select(reference => reference.Resource)).ToHashSet();
         if (requiredAliases.Any(alias => !options.AzureMonitoringResources.ContainsKey(alias)))
             throw new InvalidOperationException("Monitoring resource bindings are incomplete.");
         var resources = options.AzureMonitoringResources.Where(pair => requiredAliases.Contains(pair.Key))
-            .GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        var batches = await Task.WhenAll(resources.Select(async resource =>
+            .GroupBy(pair => pair.Value, StringComparer.OrdinalIgnoreCase).ToArray();
+        var availabilityTask = QueryResourceBatchesAsync<MonitoringObservation>(
+            resources.Where(resource => resource.Any(pair => references.Any(reference => reference.Resources.Contains(pair.Key)))),
+            "Availability", (resource, aliases, token) => MonitoringAvailability.QueryAsync(client, resource,
+                references.Where(reference => reference.Resources.Any(aliases.Contains)), token), ct);
+        var processTask = QueryResourceBatchesAsync<ProcessObservation>(
+            resources.Where(resource => resource.Any(pair => processReferences.Any(reference => reference.Resource == pair.Key))),
+            "Process", (resource, aliases, token) => ProcessMonitoring.QueryAsync(client, resource,
+                processReferences.Where(reference => aliases.Contains(reference.Resource)).ToArray(), token), ct);
+        var batches = await availabilityTask;
+        var processBatches = await processTask;
+        var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
+        var observations = batches.SelectMany(batch => batch.Rows).ToArray();
+        var processObservations = processBatches.SelectMany(batch => batch.Rows).ToArray();
+        var cached = new Dictionary<string, CheckResult>();
+        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
+            foreach (var result in await database.ReadChecksAsync(siteId, ct))
+                cached[$"{siteId}/{result.CheckId}"] = result;
+        var now = DateTimeOffset.UtcNow;
+        var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null || check.Process is not null)
+            .Select(check => check.Process is not null
+                ? ProcessMonitoring.Project(site.Site.Id, check, processObservations, now,
+                    cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))
+                : MonitoringAvailability.Project(site.Site.Id, check,
+                    observations, now, cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))))
+            .OfType<CheckResult>().ToArray();
+        await database.SaveMonitoringChecksAsync(results, ct);
+        if (requireCompleteRegionalCoverage)
+        {
+            ValidateCoverage(unavailable, observations, now);
+            if (processBatches.Any(batch => !batch.Succeeded))
+                throw new InvalidOperationException("Process preflight could not query every required source.");
+            var missing = processReferences.FirstOrDefault(source => !processObservations.Any(observation =>
+                observation.Source.Identity == source.Identity
+                && now - observation.ObservedAt <= TimeSpan.FromSeconds(ProcessReference.FreshnessSeconds)));
+            if (missing is not null)
+                throw new InvalidOperationException($"Fresh process monitoring coverage is incomplete for {missing.CheckId}.");
+        }
+        return results.Length;
+    }
+
+    internal static X509Certificate2 LoadReaderCertificate(string path) => X509Certificate2.CreateFromPemFile(path);
+
+    private Task<(HashSet<string> Aliases, bool Succeeded, IReadOnlyList<T> Rows)[]> QueryResourceBatchesAsync<T>(
+        IEnumerable<IGrouping<string, KeyValuePair<string, string>>> resources, string kind,
+        Func<string, HashSet<string>, CancellationToken, Task<IReadOnlyList<T>>> query, CancellationToken ct) =>
+        Task.WhenAll(resources.Select(async resource =>
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(30));
             var aliases = resource.Select(pair => pair.Key).ToHashSet();
             try
             {
-                var rows = await MonitoringAvailability.QueryAsync(client, resource.Key,
-                    references.Where(reference => reference.Resources.Any(aliases.Contains)), timeout.Token);
+                var rows = await query(resource.Key, aliases, timeout.Token);
                 return (Aliases: aliases, Succeeded: true, Rows: rows);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Monitoring query failed for resource aliases {Aliases}; retaining their cached measurements.",
-                    string.Join(", ", aliases));
-                return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<MonitoringObservation>)[]);
+                logger.LogError(exception, "{Kind} monitoring query failed for aliases {Aliases}; retaining original assessment timestamps.",
+                    kind, string.Join(", ", aliases));
+                return (Aliases: aliases, Succeeded: false, Rows: (IReadOnlyList<T>)[]);
             }
         }));
-        var unavailable = batches.Where(batch => !batch.Succeeded).SelectMany(batch => batch.Aliases).ToHashSet();
-        var observations = batches.SelectMany(batch => batch.Rows).ToArray();
-        var cached = new Dictionary<string, CheckResult>();
-        foreach (var siteId in catalog.Sites.Select(site => site.Site.Id))
-            foreach (var result in await database.ReadChecksAsync(siteId, ct))
-                cached[$"{siteId}/{result.CheckId}"] = result;
-        var now = DateTimeOffset.UtcNow;
-        var results = catalog.Sites.SelectMany(site => site.Checks.Where(check => check.Monitoring is not null)
-            .Select(check => MonitoringAvailability.Project(site.Site.Id, check,
-                observations, now, cached.GetValueOrDefault($"{site.Site.Id}/{check.Id}"))))
-            .OfType<CheckResult>().ToArray();
-        await database.SaveMonitoringChecksAsync(results, ct);
-        if (requireCompleteRegionalCoverage) ValidateCoverage(unavailable, observations, now);
-        return results.Length;
-    }
-
-    internal static X509Certificate2 LoadReaderCertificate(string path) => X509Certificate2.CreateFromPemFile(path);
 
     private void ValidateCoverage(IReadOnlyCollection<string> unavailable,
         IReadOnlyList<MonitoringObservation> observations, DateTimeOffset now)

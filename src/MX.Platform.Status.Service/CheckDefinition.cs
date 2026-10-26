@@ -16,6 +16,7 @@ public sealed record CheckDefinition
     public string? Target { get; init; }
     public int ExpectedIntervalSeconds { get; init; } = 60;
     public MonitoringReference? Monitoring { get; init; }
+    public ProcessReference? Process { get; init; }
 
     public string PublicId(SiteDefinition site) => SharedId
         ?? (site.SharedComponents.ContainsKey(Component) ? $"{site.Site.Id}/{Id}" : Id);
@@ -27,6 +28,7 @@ public sealed record CheckResult(string Site, string CheckId, [property: JsonReq
     public string? Component { get; init; }
     public string? Name { get; init; }
     public MonitoringReference? Monitoring { get; init; }
+    public ProcessReference? Process { get; init; }
     public string? ObservationKey { get; init; }
     internal string HistoryKey => ObservationKey ?? $"{ObservedAt:O}/{Status}";
     public IReadOnlyList<RegionAvailabilityTelemetry> Regions { get; init; } = [];
@@ -57,6 +59,7 @@ public static class ComponentChecks
         { Checks = checks };
 
     internal static bool MatchesMonitoringSource(CheckDefinition check, CheckResult signal) =>
+        check.Process is { } process ? signal.Process?.Identity == process.Identity :
         check.Monitoring is null
         || (signal.Monitoring?.Identity == check.Monitoring.Identity && signal.Regions.Count > 0);
 
@@ -69,7 +72,9 @@ public static class ComponentChecks
         var status = check.Kind == "telemetry" ? signal?.Status ?? ComponentStatus.Unknown : ComponentStatus.Unknown;
         if (check.Monitoring is { } source && signal is { Regions.Count: > 0 })
             status = MonitoringAvailability.CurrentStatus(source, signal.Regions, now);
-        if (at is null || now - at > TimeSpan.FromSeconds(check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3)
+        var freshness = check.Process is not null ? ProcessReference.FreshnessSeconds
+            : check.Monitoring?.FreshnessSeconds ?? check.ExpectedIntervalSeconds * 3;
+        if (at is null || now - at > TimeSpan.FromSeconds(freshness)
             || at > now.AddMinutes(5))
             status = ComponentStatus.Unknown;
         return new(check.PublicId(site), check.Name, check.Kind, status, at);
