@@ -1,4 +1,6 @@
 resource "azurerm_storage_account" "sa" {
+  # checkov:skip=CKV2_AZURE_41:Retained legacy Function host uses this account's access key; preserve the previously accepted exception on this account only.
+  # checkov:skip=CKV2_AZURE_38:Retained legacy cache/content blobs are regenerated; preserve the previously accepted no-soft-delete exception on this account only.
   name                = "sa${random_id.environment_id.hex}"
   resource_group_name = data.azurerm_resource_group.rg.name
   location            = data.azurerm_resource_group.rg.location
