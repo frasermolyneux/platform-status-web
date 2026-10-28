@@ -417,9 +417,10 @@ The managed `.checkov.yml` is generated from the approved platform-devex catalog
 Previously accepted legacy storage exceptions remain local to
 `azurerm_storage_account.sa` in `terraform/storage.tf`: shared-key access for the
 retained Function host, SAS expiry when that host uses an account key, and no blob
-soft-delete for its regenerable cache/content. The existing public-blob-access
-prohibition retains a pinned-scanner compatibility waiver. These comments do not
-exempt other storage accounts or alter retained Azure resources.
+soft-delete for its regenerable cache/content. The retained Function host, history
+and cache require this account's authenticated public endpoints without private
+connectivity; its `CKV_AZURE_59` waiver does not permit anonymous blob access.
+These comments do not exempt other storage accounts or alter retained Azure resources.
 
 ```powershell
 Set-Location src
