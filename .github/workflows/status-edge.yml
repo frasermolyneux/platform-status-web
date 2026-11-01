@@ -55,7 +55,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: frasermolyneux/actions/terraform-setup@terraform-setup/v1.0.0
+      - uses: frasermolyneux/actions/terraform-setup@terraform-setup/v1.1.0
         with:
           terraform-folder: edge
           terraform_wrapper: "false"

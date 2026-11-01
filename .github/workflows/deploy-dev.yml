@@ -58,7 +58,7 @@ jobs:
       static_web_app: ${{ steps.terraform-output.outputs.static_web_app }}
       static_web_app_name: ${{ steps.terraform-output.outputs.static_web_app_name }}
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.0
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.1
         with:
           terraform-folder: "terraform"
           terraform-var-file: "tfvars/dev.tfvars"
