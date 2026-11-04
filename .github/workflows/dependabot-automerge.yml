@@ -65,6 +65,7 @@ jobs:
               (
                 .author.login == "app/dependabot" or
                 .author.login == "dependabot[bot]" or
+                .author.login == "app/mx-io-idp-bot" or
                 .author.login == "mx-io-idp-bot" or
                 .author.login == "mx-io-idp-bot[bot]"
               ) and
