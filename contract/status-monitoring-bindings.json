@@ -11,7 +11,6 @@
     {"siteId":"mx","componentId":"mx.probe.dm-electrical-services","checkId":"mx.probe.dm-electrical-services","resources":["platform"],"intervalSeconds":300},
     {"siteId":"mx","componentId":"mx.probe.craftpledge","checkId":"mx.probe.craftpledge","resources":["platform"],"intervalSeconds":300},
     {"siteId":"mx","componentId":"mx.probe.talkwithtiles","checkId":"mx.probe.talkwithtiles","resources":["platform"],"intervalSeconds":300},
-    {"siteId":"mx","componentId":"mx.probe.travel-itinerary","checkId":"mx.probe.travel-itinerary","resources":["platform"],"intervalSeconds":300},
     {"siteId":"mx","componentId":"mx.probe.twenty-one","checkId":"mx.probe.twenty-one","resources":["platform"],"intervalSeconds":300},
     {"siteId":"mx","componentId":"mx.probe.trip-side-kick-website","checkId":"mx.probe.trip-side-kick-website","resources":["platform"],"intervalSeconds":300},
     {"siteId":"mx","componentId":"mx.probe.trip-side-kick-app","checkId":"mx.probe.trip-side-kick-app","resources":["platform"],"intervalSeconds":300},

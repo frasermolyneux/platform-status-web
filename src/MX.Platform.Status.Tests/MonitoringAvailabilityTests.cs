@@ -130,6 +130,24 @@ public sealed class MonitoringAvailabilityTests
             parameter => parameter.ParameterType == typeof(HttpClient) || parameter.ParameterType == typeof(IHttpClientFactory));
     }
 
+    [Fact]
+    public void DecommissionedTravelItineraryIsAbsentFromActiveStatusConfiguration()
+    {
+        var catalog = new StatusCatalog(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
+        var site = catalog.Get("mx");
+        Assert.DoesNotContain(StatusCatalog.Flatten(site.Components.Components),
+            component => component.Id is "mx.service.travel-itinerary" or "mx.probe.travel-itinerary");
+        Assert.DoesNotContain("travel-itinerary", site.Workloads.Keys);
+        Assert.DoesNotContain(site.Checks, check => check.Id == "mx.probe.travel-itinerary");
+
+        using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "contract", "status-monitoring-bindings.json")));
+        var bindings = fixture.RootElement.GetProperty("checks")
+            .Deserialize<MonitoringReference[]>(StatusJson.Options)!;
+        Assert.DoesNotContain(bindings,
+            binding => binding.Identity == "mx/mx.probe.travel-itinerary/mx.probe.travel-itinerary");
+    }
+
     private static readonly DateTimeOffset Now = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
     private static readonly CheckDefinition Check = new()
     {
