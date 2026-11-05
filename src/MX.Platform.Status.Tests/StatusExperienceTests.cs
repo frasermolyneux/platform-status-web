@@ -280,8 +280,8 @@ public sealed class StatusExperienceTests
     public void PublicCoverageContainsOnlyMonitoringBindingsAndPreservesSharedCanonicalIdentities()
     {
         var checks = Catalogue().Sites.SelectMany(site => site.EffectiveChecks).ToArray();
-        Assert.Equal(38, checks.Length);
-        Assert.Equal(32, checks.Where(check => check.Monitoring is not null).Select(check => check.Monitoring!.Identity).Distinct().Count());
+        Assert.Equal(37, checks.Length);
+        Assert.Equal(31, checks.Where(check => check.Monitoring is not null).Select(check => check.Monitoring!.Identity).Distinct().Count());
         Assert.All(checks, check =>
         {
             Assert.Equal("telemetry", check.Kind);

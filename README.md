@@ -180,12 +180,12 @@ and endpoint targets, including targets disguised as telemetry.
 ### Bounded-cost observability coverage
 
 MX additionally covers BQBA, DM Electrical Services, CraftPledge, Talk With Tiles,
-Travel Itinerary, Twenty One, and Trip Side Kick's website and application.
+Twenty One, and Trip Side Kick's website and application.
 XI adds the CDN under Community Forums, Maps Manager under XI Redirect,
 Community Games & Points (Arcade, Casino, Daily Games, Powerball and Wallet),
 and the published FreezeTag statistics page.
 
-Sitewatch owns 21 additional baselines: 20 at five-minute intervals and Server
+Sitewatch owns 20 additional baselines: 19 at five-minute intervals and Server
 Events at one minute. GeoLocation Website and Portal Website
 combine origin liveness with public-hostname routing; Repository APIs combine
 liveness with database readiness. Existing Sitewatch targets retain their request

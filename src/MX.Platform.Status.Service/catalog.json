@@ -31,9 +31,6 @@
         {"id": "mx.service.talkwithtiles", "name": "Talk With Tiles", "kind": "group", "children": [
           {"id": "mx.probe.talkwithtiles", "name": "Talk With Tiles Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
-        {"id": "mx.service.travel-itinerary", "name": "Travel Itinerary", "kind": "group", "children": [
-          {"id": "mx.probe.travel-itinerary", "name": "Travel Itinerary Website", "kind": "leaf", "source": {"kind": "monitoring"}}
-        ]},
         {"id": "mx.service.twenty-one", "name": "Twenty One", "kind": "group", "children": [
           {"id": "mx.probe.twenty-one", "name": "Twenty One Website", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
@@ -52,7 +49,6 @@
       "dm-electrical-services": ["mx.probe.dm-electrical-services"],
       "craftpledge": ["mx.probe.craftpledge"],
       "talkwithtiles": ["mx.probe.talkwithtiles"],
-      "travel-itinerary": ["mx.probe.travel-itinerary"],
       "twenty-one": ["mx.probe.twenty-one"],
       "trip-side-kick": ["mx.probe.trip-side-kick-website", "mx.probe.trip-side-kick-app"]
     },
@@ -66,7 +62,6 @@
       {"id": "mx.probe.dm-electrical-services", "component": "mx.probe.dm-electrical-services", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.dm-electrical-services", "checkId": "mx.probe.dm-electrical-services", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
       {"id": "mx.probe.craftpledge", "component": "mx.probe.craftpledge", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.craftpledge", "checkId": "mx.probe.craftpledge", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
       {"id": "mx.probe.talkwithtiles", "component": "mx.probe.talkwithtiles", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.talkwithtiles", "checkId": "mx.probe.talkwithtiles", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
-      {"id": "mx.probe.travel-itinerary", "component": "mx.probe.travel-itinerary", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.travel-itinerary", "checkId": "mx.probe.travel-itinerary", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
       {"id": "mx.probe.twenty-one", "component": "mx.probe.twenty-one", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.twenty-one", "checkId": "mx.probe.twenty-one", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
       {"id": "mx.probe.trip-side-kick-website", "component": "mx.probe.trip-side-kick-website", "name": "Public website availability", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.trip-side-kick-website", "checkId": "mx.probe.trip-side-kick-website", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}},
       {"id": "mx.probe.trip-side-kick-app", "component": "mx.probe.trip-side-kick-app", "name": "Public application liveness", "kind": "telemetry", "expectedIntervalSeconds": 300, "monitoring": {"siteId": "mx", "componentId": "mx.probe.trip-side-kick-app", "checkId": "mx.probe.trip-side-kick-app", "resources": ["platform"], "regions": ["uksouth", "eastus", "westeurope"], "intervalSeconds": 300}}
