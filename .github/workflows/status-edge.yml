@@ -55,9 +55,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: frasermolyneux/actions/terraform-setup@terraform-setup/v1.1.0
+      - uses: frasermolyneux/actions/terraform-setup@594500f81ee7fdb65616bba793f8cdf9025d57b2 # terraform-setup/v1.1.0
         with:
           terraform-folder: edge
+          terraform-version: "1.17.0"
           terraform_wrapper: "false"
       - name: Check edge formatting
         run: terraform -chdir=edge fmt -check -recursive

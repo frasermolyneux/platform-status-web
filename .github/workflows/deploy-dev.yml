@@ -13,7 +13,7 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - uses: frasermolyneux/actions/dotnet-func-ci@dotnet-func-ci/v2.1
+      - uses: frasermolyneux/actions/dotnet-func-ci@a6271c58ed8e8f3b6fbdb738ac7566863fdc38c8 # dotnet-func-ci/v2.1.2
         with:
           test-reporting: "true"
           dotnet-project: "MX.Platform.Status.App"
@@ -58,9 +58,10 @@ jobs:
       static_web_app: ${{ steps.terraform-output.outputs.static_web_app }}
       static_web_app_name: ${{ steps.terraform-output.outputs.static_web_app_name }}
     steps:
-      - uses: frasermolyneux/actions/terraform-plan-and-apply@terraform-plan-and-apply/v2.0.1
+      - uses: frasermolyneux/actions/terraform-plan-and-apply@027d7e31bb32b734090aaed01b36d74f1d658b61 # terraform-plan-and-apply/v5.0.0
         with:
           terraform-folder: "terraform"
+          terraform-version: "1.17.0"
           terraform-var-file: "tfvars/dev.tfvars"
           terraform-backend-file: "backends/dev.backend.hcl"
           terraform-additional-args: '-var="github_app_id=${{ vars.GH_APP_ID }}" -var="github_app_installation_id=${{ vars.GH_APP_INSTALLATION_ID }}"'
@@ -99,7 +100,7 @@ jobs:
       matrix:
         func_app: ${{ fromJSON(needs.terraform-plan-and-apply-dev.outputs.func_apps) }}
     steps:
-      - uses: frasermolyneux/actions/deploy-function-app@deploy-function-app/v1.2
+      - uses: frasermolyneux/actions/deploy-function-app@027d7e31bb32b734090aaed01b36d74f1d658b61 # deploy-function-app/v1.2.7
         with:
           function-app-artifact-name: "MX.Platform.Status.App"
           function-app-name: ${{ matrix.func_app.name }}

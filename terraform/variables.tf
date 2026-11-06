@@ -38,6 +38,16 @@ variable "subscription_id" {
   type        = string
 }
 
+variable "terraform_backend_resource_group_name" {
+  description = "Resource group containing the Azure Storage backend used for Terraform state and saved plans"
+  type        = string
+}
+
+variable "terraform_backend_storage_account_name" {
+  description = "Azure Storage account used for Terraform state and saved plans"
+  type        = string
+}
+
 variable "platform_workloads_state" {
   description = "Backend coordinates for the platform-workloads remote state"
   type = object({
