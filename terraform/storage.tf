@@ -41,3 +41,9 @@ resource "azurerm_storage_container" "func_content" {
   storage_account_id    = azurerm_storage_account.sa.id
   container_access_type = "private"
 }
+
+resource "azurerm_storage_container" "terraform_plans" {
+  name                  = "tfplan"
+  storage_account_id    = azurerm_storage_account.sa.id
+  container_access_type = "private"
+}
