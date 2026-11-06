@@ -11,7 +11,7 @@ resource "azurerm_role_assignment" "app_to_storage_blob" {
 }
 
 resource "azurerm_role_assignment" "terraform_oidc_to_storage_blob" {
-  scope                = azurerm_storage_account.sa.id
+  scope                = data.azurerm_storage_account.terraform_backend.id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = data.azurerm_client_config.current.object_id
 }

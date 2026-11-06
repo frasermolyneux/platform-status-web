@@ -1,3 +1,8 @@
+data "azurerm_storage_account" "terraform_backend" {
+  name                = var.terraform_backend_storage_account_name
+  resource_group_name = var.terraform_backend_resource_group_name
+}
+
 resource "azurerm_storage_account" "sa" {
   # checkov:skip=CKV2_AZURE_40:Retained legacy Function host uses this account's access key; preserve the previously accepted exception on this account only.
   # checkov:skip=CKV2_AZURE_41:Retained legacy Function uses an account key rather than SAS; preserve the previously accepted SAS-expiry exception on this account only.
@@ -44,6 +49,6 @@ resource "azurerm_storage_container" "func_content" {
 
 resource "azurerm_storage_container" "terraform_plans" {
   name                  = "tfplan"
-  storage_account_id    = azurerm_storage_account.sa.id
+  storage_account_id    = data.azurerm_storage_account.terraform_backend.id
   container_access_type = "private"
 }
