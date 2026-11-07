@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://frasermolyneux.com/schemas/status-pages/api-contract.schema.json",
   "title": "Status API response (GET /api/status)",
-  "description": "Merged payload returned by the status-api Function. Cached server-side ~30s. Resolved per host header → site.",
+  "description": "Merged, site-specific status payload.",
   "type": "object",
   "additionalProperties": false,
   "required": ["site", "generatedAt", "schemaVersion", "components", "incidents", "maintenance", "summary"],
@@ -36,7 +36,7 @@
       "properties": {
         "appInsightsAt": { "type": "string", "format": "date-time" },
         "historyAt": { "type": "string", "format": "date-time" },
-        "stale": { "type": "boolean", "description": "True if served from blob fallback because live query failed." }
+        "stale": { "type": "boolean", "description": "True if fallback data was used because live data was unavailable." }
       }
     },
     "summary": {

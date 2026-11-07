@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://frasermolyneux.com/schemas/status-pages/history.schema.json",
-  "title": "Per-site daily history (blob: history/{site}.json)",
-  "description": "Written nightly by status-rollup. Source of truth for any day older than 'today'. 3-year horizon, no lifecycle policy.",
+  "title": "Per-site daily history",
+  "description": "Historical daily component samples for a site.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "site", "generatedAt", "componentsById"],
@@ -27,7 +27,7 @@
           "parentId": { "type": ["string", "null"] },
           "days": {
             "type": "array",
-            "description": "Oldest first. Each entry sealed once written; the last 3 entries may be re-written each night to absorb late-arriving data.",
+            "description": "Oldest first; recent entries may be updated to incorporate late-arriving data.",
             "items": {
               "type": "object",
               "additionalProperties": false,

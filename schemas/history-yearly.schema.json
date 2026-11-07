@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://frasermolyneux.com/schemas/status-pages/history-yearly.schema.json",
-  "title": "Per-site annual summary (blob: history/{site}-yearly.json)",
-  "description": "Written nightly alongside the daily history. Lightweight summary suitable for headline figures like 'Q1 2024: 99.97%' or 'last 12 months'.",
+  "title": "Per-site annual summary",
+  "description": "Availability summary suitable for headline figures like 'Q1 2024: 99.97%' or 'last 12 months'.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "site", "generatedAt", "componentsById"],

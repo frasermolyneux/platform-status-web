@@ -3,7 +3,7 @@
 This stack owns one Cloudflare load balancer, one two-origin pool, one HTTPS
 readiness monitor, and hostname-scoped strict TLS configuration entrypoints for
 the two status zones. It does not own the subscription, existing DNS records,
-global zone settings, or retained Azure resources. The scoped Production API token is
+or global zone settings. The scoped Production API token is
 provided as `CLOUDFLARE_API_TOKEN`; its environment secret is named
 `CLOUDFLARE_API_KEY`.
 
@@ -59,7 +59,6 @@ execution accepts an already-converged entrypoint without changing routing.
 
 `Status Edge` plans same-repository pull requests with Production OIDC. It applies
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
-It never invokes the retained legacy Azure stack.
 
 Pull requests and the main-only `activate` operation use a refresh-only preflight:
 the five staged resources must already exist, with no managed changes or
@@ -96,15 +95,14 @@ Provider error codes are surfaced without credentials. If health is unavailable,
 the workflow fails explicitly; a successful Terraform apply is not health
 acceptance and must not be repeated merely to retry verification.
 
-The edge backend reuses the approved storage location, **not its state key**.
-Both backend files must be passed in this order:
+The edge backend uses the approved storage location and the isolated
+`status-edge-prd.tfstate` key. Initialize it with the edge backend configuration:
 
 ```powershell
-terraform -chdir=edge init -lockfile=readonly -backend-config=..\terraform\backends\prd.backend.hcl -backend-config=backends\prd.backend.hcl
+terraform -chdir=edge init -lockfile=readonly -backend-config=backends\prd.backend.hcl
 ```
 
-The second file selects `status-edge-prd.tfstate`; CI checks that effective key
-before planning. Never initialize this stack using only the legacy backend file.
+CI checks the effective storage account, container and state key before planning.
 Do not run local state-backed plans or applies. For local schema validation:
 
 ```powershell
@@ -113,5 +111,6 @@ terraform -chdir=edge validate
 terraform -chdir=edge fmt -check -recursive
 ```
 
-Generated lock files remain ignored. Resource deletion is deliberately protected;
-retirement requires an explicit reviewed change.
+The committed provider lock file remains authoritative; do not commit local
+`.terraform/` directories or saved plans. Resource deletion is deliberately
+protected and requires an explicit reviewed change.

@@ -36,29 +36,6 @@ jobs:
           terraform -chdir="$TF_ROOT" init -backend=false -input=false -lockfile=readonly
           terraform -chdir="$TF_ROOT" validate
           git diff --exit-code -- "$TF_ROOT/.terraform.lock.hcl" "$TF_ROOT/.terraform-version"
-  verify-terraform:
-    name: Verify terraform toolchain
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: frasermolyneux/actions/terraform-setup@594500f81ee7fdb65616bba793f8cdf9025d57b2 # terraform-setup/v1.1.0
-        with:
-          terraform-folder: terraform
-          terraform-version: "1.17.0"
-          terraform_wrapper: "false"
-      - name: Check formatting and validate without backend access
-        shell: bash
-        env:
-          TF_ROOT: terraform
-        run: |
-          set -euo pipefail
-          terraform -chdir="$TF_ROOT" fmt -check -recursive
-          terraform -chdir="$TF_ROOT" init -backend=false -input=false -lockfile=readonly
-          terraform -chdir="$TF_ROOT" validate
-          git diff --exit-code -- "$TF_ROOT/.terraform.lock.hcl" "$TF_ROOT/.terraform-version"
-
   observe-edge:
     name: Observe edge binary toolchain
     if: github.ref == 'refs/heads/main'
@@ -71,18 +48,4 @@ jobs:
       - uses: frasermolyneux/actions/terraform-validate@594500f81ee7fdb65616bba793f8cdf9025d57b2 # terraform-validate/v1.0.0
         with:
           terraform-folder: edge
-          terraform-version: "1.17.0"
-
-  observe-terraform:
-    name: Observe terraform binary toolchain
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: frasermolyneux/actions/terraform-validate@594500f81ee7fdb65616bba793f8cdf9025d57b2 # terraform-validate/v1.0.0
-        with:
-          terraform-folder: terraform
           terraform-version: "1.17.0"

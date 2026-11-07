@@ -7,27 +7,27 @@ Execution brief for coding agents. For architecture detail beyond this file, rea
 
 Multi-site public status page: Astro frontend served by an independent ASP.NET Core
 service, with durable local publications and PostgreSQL primary/standby persistence.
-Legacy Azure Functions and Terraform remain for shared domain reuse and retained
-Azure state; they are not the new runtime or an approved retirement operation.
+The service references the App assembly for shared domain logic.
 
 ## Archetype: mixed .NET + frontend/static + Terraform
 
 | Area | Path | Toolchain | Notes |
 |---|---|---|---|
-| Backend | `src/MX.Platform.Status.App/` | .NET 10 (`src/global.json` pins SDK `10.0.100`) | Isolated worker; `status-api` (HTTP) + `status-rollup` (Timer) |
+| Shared domain | `src/MX.Platform.Status.App/` | .NET 10 (`src/global.json` pins SDK `10.0.100`) | Contracts, domain types, regional classifiers and merger reused by the service |
 | Independent service | `src/MX.Platform.Status.Service/` | .NET 10 | Host-isolated public files, publisher, private evidence, Entra operations |
 | Container runtime | `Dockerfile`, `deployment/` | Docker + Python integration test | Non-root service and PostgreSQL images; local publications must survive database loss |
 | Tests | `src/MX.Platform.Status.Tests/` | .NET 10 via `dotnet test` | Backend only |
 | Frontend | `src/MX.Platform.Status.Web/` | Node 22.x, Astro 7 + vanilla TS | Maintained source: `src/pages/`, `src/client/`, `src/components/`. `dist/` is generated — gitignored, never hand-edit |
-| Infrastructure | `terraform/` | Terraform >= 1.15, AzureRM | SWA, Linux Function App, Storage, Key Vault, App Insights; remote-state from `platform-monitoring`/`platform-hosting` |
+| Edge | `edge/` | Terraform (pinned in `edge/.terraform-version`) | Cloudflare load balancer, origin pool, monitor and scoped TLS rules |
 
 ## Commands (exact)
 
 ```powershell
 cd src; dotnet build; dotnet test                       # backend + tests
 cd src/MX.Platform.Status.Web; npm ci; npm run build     # frontend
-terraform -chdir=terraform fmt -check -recursive         # terraform (format/validate only)
-terraform -chdir=terraform validate
+terraform -chdir=edge fmt -check -recursive              # Terraform (format/validate only)
+terraform -chdir=edge init -backend=false -input=false -lockfile=readonly
+terraform -chdir=edge validate
 ```
 
 ## Boundaries and ownership
@@ -60,10 +60,9 @@ terraform -chdir=terraform validate
   history/cursor transaction, in order, without skipping a pending backlog.
 - Backend KQL/telemetry conventions are documented in `docs/architecture.md` — read it
   before touching `src/MX.Platform.Status.App/`.
-- `staticwebapp.config.json` and `src/MX.Platform.Status.Web/dist/` are frontend build
-  artifacts, not hand-maintained files.
-- `terraform/tfvars/*.tfvars` and `terraform/backends/*.backend.hcl` are environment
-  config affecting real Azure deployment behavior.
+- `src/MX.Platform.Status.Web/dist/` is a frontend build artifact, not a
+  hand-maintained directory.
+- `edge/backends/*.backend.hcl` configures the isolated Terraform state location.
 - Commit each root's `.terraform-version` and `.terraform.lock.hcl`. Select the exact root CLI pin before invoking Terraform; normal initialization uses `-lockfile=readonly`. Regenerate provider selections only in a reviewed dependency-update PR; never commit state, plans, or `.terraform/`.
 
 ## Do NOT

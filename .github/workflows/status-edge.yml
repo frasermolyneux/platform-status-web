@@ -66,9 +66,13 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir=edge init -lockfile=readonly -input=false \
-            -backend-config=../terraform/backends/prd.backend.hcl \
             -backend-config=backends/prd.backend.hcl
-          jq -e '.backend.config.key == "status-edge-prd.tfstate"' edge/.terraform/terraform.tfstate
+          jq -e '
+            .backend.config.resource_group_name == "rg-tf-platform-status-web-prd-uksouth-01" and
+            .backend.config.storage_account_name == "sa163be00143b6" and
+            .backend.config.container_name == "tfstate" and
+            .backend.config.key == "status-edge-prd.tfstate"
+          ' edge/.terraform/terraform.tfstate
       - name: Validate edge configuration
         run: terraform -chdir=edge validate
       - name: Plan only Cloudflare edge resources
