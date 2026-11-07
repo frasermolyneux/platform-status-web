@@ -8,7 +8,7 @@ resource "cloudflare_ruleset" "status_tls" {
 
   zone_id     = each.value.zone_id
   name        = "platform-status-origin-tls"
-  description = each.key == "xtremeidiots.com" ? "Strict origin TLS for status sites and the maps manager." : "Strict origin TLS only for the public status hostname."
+  description = each.key == "xtremeidiots.com" ? "Strict origin TLS for status, maps, www and cdn." : "Strict origin TLS only for the public status hostname."
   kind        = "zone"
   phase       = "http_config_settings"
   rules = concat([{
@@ -24,6 +24,24 @@ resource "cloudflare_ruleset" "status_tls" {
     ref         = "maps_origin_strict_tls"
     description = "Validate the maps manager origin certificate."
     expression  = "http.host eq \"maps.xtremeidiots.com\""
+    action      = "set_config"
+    enabled     = true
+    action_parameters = {
+      ssl = "strict"
+    }
+    }, {
+    ref         = "www_origin_strict_tls"
+    description = "Validate the www origin certificate."
+    expression  = "http.host eq \"www.xtremeidiots.com\""
+    action      = "set_config"
+    enabled     = true
+    action_parameters = {
+      ssl = "strict"
+    }
+    }, {
+    ref         = "cdn_origin_strict_tls"
+    description = "Validate the cdn origin certificate."
+    expression  = "http.host eq \"cdn.xtremeidiots.com\""
     action      = "set_config"
     enabled     = true
     action_parameters = {
