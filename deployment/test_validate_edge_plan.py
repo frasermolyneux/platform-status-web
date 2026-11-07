@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from validate_edge_plan import validate_maps_tls, validate_plan, validate_preflight
+from validate_edge_plan import validate_maps_tls, validate_plan, validate_preflight, validate_web_tls
 
 
 def staged_plan():
@@ -87,7 +87,75 @@ def maps_tls_plan():
     return plan
 
 
+def web_tls_plan():
+    plan = maps_tls_plan()
+    change = plan["resource_changes"][-1]["change"]
+    change["before"] = copy.deepcopy(change["after"])
+    change["after"]["description"] = "Strict origin TLS for status, maps, www and cdn."
+    for name in ("www", "cdn"):
+        change["after"]["rules"].append({
+            "ref": f"{name}_origin_strict_tls", "description": f"Validate the {name} origin certificate.",
+            "action": "set_config", "enabled": True,
+            "expression": f'http.host eq "{name}.xtremeidiots.com"',
+            "action_parameters": {"ssl": "strict"},
+        })
+    return plan
+
+
 class EdgePlanTests(unittest.TestCase):
+    def test_web_tls_only_appends_exact_rules_and_allows_idempotent_reconciliation(self):
+        plan = web_tls_plan()
+        self.assertEqual(validate_web_tls(plan), 1)
+        change = plan["resource_changes"][-1]["change"]
+        change["actions"] = ["no-op"]
+        change["before"] = copy.deepcopy(change["after"])
+        self.assertEqual(validate_web_tls(plan), 0)
+        self.assertEqual(validate_maps_tls(plan), 0)
+        self.assertEqual(validate_preflight(plan), 0)
+
+    def test_web_tls_rejects_changes_to_existing_rules_resources_and_scope(self):
+        for mutation in ("status", "maps", "other", "wildcard", "parameter", "import",
+                         "replace", "identity", "missing", "unknown", "logging"):
+            with self.subTest(mutation=mutation):
+                plan = web_tls_plan()
+                change = plan["resource_changes"][-1]["change"]
+                if mutation in ("status", "maps"):
+                    change["after"]["rules"][0 if mutation == "status" else 1]["expression"] = "true"
+                elif mutation == "other":
+                    plan["resource_changes"][1]["change"]["actions"] = ["update"]
+                elif mutation == "wildcard":
+                    change["after"]["rules"][2]["expression"] = 'http.host contains "xtremeidiots.com"'
+                elif mutation == "parameter":
+                    change["after"]["rules"][3]["action_parameters"]["ssl"] = "full"
+                elif mutation == "import":
+                    change["importing"] = {"id": "existing"}
+                elif mutation == "replace":
+                    change["actions"] = ["delete", "create"]
+                elif mutation == "identity":
+                    change["after"]["id"] = "another"
+                elif mutation == "missing":
+                    change["after"]["rules"].pop()
+                elif mutation == "unknown":
+                    change["after_unknown"] = {"rules": [{}, {}, {"expression": True}, {}]}
+                else:
+                    change["after"]["rules"][3]["logging"] = {"enabled": True}
+                with self.assertRaises(ValueError):
+                    validate_web_tls(plan)
+
+    def test_web_tls_allows_only_new_rule_generated_metadata_and_logging_defaults(self):
+        plan = web_tls_plan()
+        change = plan["resource_changes"][-1]["change"]
+        change["after_unknown"] = {"version": True, "rules": [
+            {}, {}, {"id": True, "logging": True}, {"version": True, "logging": True}]}
+        self.assertEqual(validate_web_tls(plan), 1)
+        change["after_unknown"]["rules"][1]["logging"] = True
+        with self.assertRaises(ValueError):
+            validate_web_tls(plan)
+
+    def test_maps_mode_cannot_apply_web_tls(self):
+        with self.assertRaises(ValueError):
+            validate_maps_tls(web_tls_plan())
+
     def test_maps_tls_appends_only_the_exact_rule_and_allows_idempotent_reconciliation(self):
         plan = maps_tls_plan()
         self.assertEqual(validate_maps_tls(plan), 1)

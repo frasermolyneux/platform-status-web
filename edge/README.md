@@ -31,7 +31,9 @@ set `ssl = "strict"` for `mxstatus.io` and `status.xtremeidiots.com`; both globa
 zone SSL modes remain unchanged. Configuration Rules are available on the free
 plan. The XtremeIdiots entrypoint additionally owns one exact-host strict TLS
 rule for `maps.xtremeidiots.com`, preserving its existing status rule and all
-zone-wide settings. DNS remains owned by `platform-connectivity`; no competing
+zone-wide settings. Two additional exact-host rules set strict TLS for
+`www.xtremeidiots.com` and `cdn.xtremeidiots.com`; their origins must present
+unexpired trusted certificates matching their respective hostnames. DNS remains owned by `platform-connectivity`; no competing
 configuration entrypoint may be created there. Confirm existing apex/CNAME
 compatibility before activation.
 
@@ -56,6 +58,19 @@ permits only appending the exact maps TLS rule and updating the entrypoint
 description in place. It rejects status-rule changes, other resource updates,
 drift, imports, replacements, and unknown non-metadata settings. Repeated
 execution accepts an already-converged entrypoint without changing routing.
+
+For the www and cdn migration, `web-tls-plan` produces a normal saved plan and
+publishes it for review. Each run deletes its saved plan during cleanup;
+`web-tls` creates, validates and applies a fresh saved plan on approved main,
+not the earlier artifact. Its separate boundary permits only
+appending these two exact-host rules to the existing status and maps entrypoint
+and updating its description in place. It rejects changes to existing rules,
+other resources, drift, imports, replacements and unknown non-metadata settings.
+Before applying, verify public trust, hostname coverage and expiry for both
+origin certificates, including each configured origin. If validation fails
+after rollout, restore the previous two-rule configuration through a separately
+reviewed change; preserve the status and maps strict rules and do not weaken the
+zone-wide SSL setting.
 
 `Status Edge` plans same-repository pull requests with Production OIDC. It applies
 only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
