@@ -60,7 +60,9 @@ drift, imports, replacements, and unknown non-metadata settings. Repeated
 execution accepts an already-converged entrypoint without changing routing.
 
 For the www and cdn migration, `web-tls-plan` produces a normal saved plan and
-`web-tls` applies it on approved main. Its separate boundary permits only
+publishes it for review. Each run deletes its saved plan during cleanup;
+`web-tls` creates, validates and applies a fresh saved plan on approved main,
+not the earlier artifact. Its separate boundary permits only
 appending these two exact-host rules to the existing status and maps entrypoint
 and updating its description in place. It rejects changes to existing rules,
 other resources, drift, imports, replacements and unknown non-metadata settings.
