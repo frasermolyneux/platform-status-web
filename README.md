@@ -414,13 +414,6 @@ through normal reviewed source changes.
 ## Development and release
 
 The managed `.checkov.yml` is generated from the approved platform-devex catalog.
-Previously accepted legacy storage exceptions remain local to
-`azurerm_storage_account.sa` in `terraform/storage.tf`: shared-key access for the
-retained Function host, SAS expiry when that host uses an account key, and no blob
-soft-delete for its regenerable cache/content. The retained Function host, history
-and cache require this account's authenticated public endpoints without private
-connectivity; its `CKV_AZURE_59` waiver does not permit anonymous blob access.
-These comments do not exempt other storage accounts or alter retained Azure resources.
 
 ```powershell
 Set-Location src
@@ -468,9 +461,6 @@ valid certificates until the final 30 days and never changing DNS or routing.
 Platform-owned proxy reconciliation installs the bundle atomically and restarts
 Caddy after validation. Old certificates are not revoked during a rolling update.
 
-The old Functions project and `terraform\` are retained as shared domain code and
-the existing Azure state definition. Automatic legacy deployment and development
-destruction are disabled. Legacy deploy/destroy workflows require explicit
-approval variables; existing Azure resources are not retired by this change.
-Azure retirement requires separate approval, as does any Cloudflare configuration
-above the agreed US$5/month baseline.
+The service reuses domain code from `src/MX.Platform.Status.App`. Cloudflare edge
+configuration and its isolated Terraform state are described in
+[`edge/README.md`](edge/README.md).
