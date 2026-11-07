@@ -6,9 +6,6 @@ static_web_app_sku      = "Standard"
 
 subscription_id = "7760848c-794d-4a19-8cb2-52f71a21ac2b"
 
-terraform_backend_resource_group_name  = "rg-tf-platform-status-web-prd-uksouth-01"
-terraform_backend_storage_account_name = "sa163be00143b6"
-
 app_insights_resources = [
   {
     subscription_id     = "7760848c-794d-4a19-8cb2-52f71a21ac2b"
