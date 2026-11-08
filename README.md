@@ -281,7 +281,7 @@ an explicitly authorised administrator can still use Cloudflare's dashboard.
 
 `TrafficConfigurationFile` and `TrafficTokenFile` are read-only secret mounts
 supplied by `platform-baremetal`; `TrafficTokenFile` points to
-`/run/secrets/cloudflare-maintenance-traffic-token`. Its Key Vault secret and
+`/run/secrets/cloudflare-traffic-control-token`. Its Key Vault secret and
 host file use the same name. The approved registry and Worker names come from
 connectivity's remote-state output. The token may manage routes and read DNS and
 account analytics, but cannot change DNS, Worker code, zone plans or billing.

@@ -8,7 +8,7 @@ class MaintenanceTokenContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / "workload.json").read_text())
         policy = json.loads((root / ".github" / "validation" / "policy.json").read_text())
-        name = "cloudflare-maintenance-traffic-token"
+        name = "cloudflare-traffic-control-token"
 
         service = next(item for item in manifest["services"] if item["name"] == "platform-status-service")
         self.assertIn({"id": name, "target": name}, service["secrets"])

@@ -47,10 +47,10 @@
       "mode": "0640"
     },
     {
-      "id": "cloudflare-maintenance-traffic-token",
-      "hostPath": "/etc/platform-workloads/platform-status-web/cloudflare-maintenance-traffic-token",
+      "id": "cloudflare-traffic-control-token",
+      "hostPath": "/etc/platform-workloads/platform-status-web/cloudflare-traffic-control-token",
       "vaultName": "kv-platform-prd-0b924e",
-      "vaultSecret": "cloudflare-maintenance-traffic-token",
+      "vaultSecret": "cloudflare-traffic-control-token",
       "groupId": 10001,
       "mode": "0640"
     },
