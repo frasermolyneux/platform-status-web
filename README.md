@@ -280,7 +280,9 @@ with operators. Audit unavailability disables application controls;
 an explicitly authorised administrator can still use Cloudflare's dashboard.
 
 `TrafficConfigurationFile` and `TrafficTokenFile` are read-only secret mounts
-supplied by `platform-baremetal`; the approved registry and Worker names come from
+supplied by `platform-baremetal`; `TrafficTokenFile` points to
+`/run/secrets/cloudflare-maintenance-traffic-token`. Its Key Vault secret and
+host file use the same name. The approved registry and Worker names come from
 connectivity's remote-state output. The token may manage routes and read DNS and
 account analytics, but cannot change DNS, Worker code, zone plans or billing.
 Workers Free has an account-wide allowance of 100,000 requests/day. The workspace
@@ -453,13 +455,10 @@ never prints or stores values in GitHub, and never rotates an existing password.
 Disabled or expiring credentials fail explicitly and require an operator-led
 database/secret recovery or rotation. The same vault serves both origins.
 
-**Renew Status Origin TLS** issues a 365-day Cloudflare Origin CA certificate
-for both public names using the narrowly scoped edge token. The private key
-stays local to the protected runner until the validated key/certificate pair is
-stored as the single `origin-tls` Key Vault secret. It runs weekly, retaining
-valid certificates until the final 30 days and never changing DNS or routing.
-Platform-owned proxy reconciliation installs the bundle atomically and restarts
-Caddy after validation. Old certificates are not revoked during a rolling update.
+The `platform-baremetal` ingress on each origin uses Caddy-managed DNS-01
+certificates for `mxstatus.io` and `status.xtremeidiots.com`. The platform owns
+the shared DNS token and certificate lifecycle; the status edge retains strict
+origin TLS and its separate Cloudflare edge token.
 
 The service reuses domain code from `src/MX.Platform.Status.App`. Cloudflare edge
 configuration and its isolated Terraform state are described in

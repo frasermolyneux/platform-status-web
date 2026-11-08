@@ -24,7 +24,7 @@
         {"id": "github-incidents-private-key", "target": "github-incidents-private-key"},
         {"id": "app-password", "target": "app-password"},
         {"id": "traffic-configuration", "target": "traffic-configuration"},
-        {"id": "traffic-api-token", "target": "traffic-api-token"}
+        {"id": "cloudflare-maintenance-traffic-token", "target": "cloudflare-maintenance-traffic-token"}
       ],
       "tmpfs": ["/tmp"],
       "resources": {"cpus": 0.5, "memoryMb": 512, "pids": 128},
