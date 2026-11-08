@@ -2,7 +2,7 @@
 
 ## Independent service
 
-The new runtime is `src\MX.Platform.Status.Service`: ASP.NET Core serves the Astro
+The runtime is `src\MX.Platform.Status.Service`: ASP.NET Core serves the Astro
 assets and host-isolated local JSON publications. PostgreSQL holds incidents,
 audit events, daily availability counters, private monitoring evidence, and publications.
 A single publisher projects cached monitoring signals; a standby copies replicated
@@ -23,7 +23,8 @@ Status owns public signal aggregation/history, service presentation and operator
 publishing. No workload probe engine, scheduler or monitoring sidecar belongs here.
 An approved cost constraint never permits bypassing this boundary.
 
-Sitewatch contract version 2 emits `siteId`, `componentId`, `checkId` and `region`.
+Sitewatch emits `siteId`, `componentId`, `checkId` and `region`; the
+[telemetry contract](../contract/availability-telemetry-contract.json) defines the schema.
 The mirrored `contract/status-monitoring-bindings.json` declares consumed canonical
 identities, telemetry aliases, regions and intervals without workload URLs.
 Producer Terraform input validation fails if a consumed production binding loses
@@ -32,9 +33,9 @@ use canonical MX measurements and project to both brands without recollection.
 
 `MonitoringWorker` polls Application Insights independently, batching by resource
 and selecting `arg_max(timestamp, success, message)` per identity and region.
-It authenticates with a dedicated certificate reader restricted to the five
-required App Insights resources, not deployment credentials or workspace-wide
-access. Each query explicitly filters owning site/component/check identities;
+It authenticates with a dedicated certificate reader restricted to the required
+App Insights resources, not deployment credentials or workspace-wide access.
+Each query explicitly filters owning site/component/check identities;
 cross-brand catalogue references require an explicitly shared component.
 
 Fresh regional failures are projected immediately: all reporting regions failing

@@ -8,8 +8,8 @@ GitHub, Entra, or PostgreSQL. The service reuses domain logic from the App assem
 
 ## Architecture
 
-- **Frontend**: Astro static shell with vanilla TypeScript (~200 lines). No React/Preact/Vue. Target <10KB JS gzipped.
-- **Backend**: .NET 10 ASP.NET Core in `MX.Platform.Status.Service`; reuse domain logic from the App assembly.
+- **Frontend**: Astro static shell with vanilla TypeScript. No React/Preact/Vue. Target <10KB JS gzipped.
+- **Backend**: ASP.NET Core in `MX.Platform.Status.Service`; reuse domain logic from the App assembly. See `src/global.json` for the SDK.
 - **Infrastructure**: Cloudflare edge configuration lives in `edge/`; host/runtime policies belong to `platform-baremetal`, DNS ownership to `platform-connectivity`.
 - **Multi-site**: The independent service uses actual `Host`, never arbitrary forwarded-host headers. Preserve Host at the reverse proxy.
 - **Persistence**: Single publisher, asynchronous PostgreSQL standby, atomic local publications. No automatic promotion without fencing.
