@@ -460,7 +460,7 @@ certificates for `mxstatus.io` and `status.xtremeidiots.com`. The platform owns
 the shared DNS token and certificate lifecycle; the status edge retains strict
 origin TLS and its separate Cloudflare edge token. See the platform's
 [status hosting runbook](https://github.com/frasermolyneux/platform-baremetal/blob/main/docs/status-hosting.md)
-for certificate cutover and verification on both origins.
+for certificate operations and verification on both origins.
 
 The service reuses domain code from `src/MX.Platform.Status.App`. Cloudflare edge
 configuration and its isolated Terraform state are described in
