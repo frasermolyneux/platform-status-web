@@ -3,18 +3,20 @@ from pathlib import Path
 import unittest
 
 
-class MaintenanceTokenContractTests(unittest.TestCase):
-    def test_workload_and_policy_bind_the_maintenance_token(self):
+class TrafficControlTokenContractTests(unittest.TestCase):
+    def test_workload_and_policy_bind_the_traffic_control_token(self):
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / "workload.json").read_text())
         policy = json.loads((root / ".github" / "validation" / "policy.json").read_text())
         name = "cloudflare-traffic-control-token"
 
-        service = next(item for item in manifest["services"] if item["name"] == "platform-status-service")
+        service = next((item for item in manifest["services"] if item["name"] == "platform-status-service"), None)
+        self.assertIsNotNone(service, "Workload manifest is missing platform-status-service")
         self.assertIn({"id": name, "target": name}, service["secrets"])
         self.assertNotIn("traffic-api-token", [item["id"] for item in service["secrets"]])
 
-        binding = next(item for item in policy["allowedSecrets"] if item["id"] == name)
+        binding = next((item for item in policy["allowedSecrets"] if item["id"] == name), None)
+        self.assertIsNotNone(binding, f"Validation policy is missing {name}")
         self.assertEqual(binding["vaultSecret"], name)
         self.assertEqual(binding["hostPath"], f"/etc/platform-workloads/platform-status-web/{name}")
         self.assertEqual(binding["groupId"], 10001)
