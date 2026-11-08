@@ -13,19 +13,32 @@ The service references the App assembly for shared domain logic.
 
 | Area | Path | Toolchain | Notes |
 |---|---|---|---|
-| Shared domain | `src/MX.Platform.Status.App/` | .NET 10 (`src/global.json` pins SDK `10.0.100`) | Contracts, domain types, regional classifiers and merger reused by the service |
-| Independent service | `src/MX.Platform.Status.Service/` | .NET 10 | Host-isolated public files, publisher, private evidence, Entra operations |
+| Shared domain | `src/MX.Platform.Status.App/` | .NET, see `src/global.json` | Contracts, domain types, regional classifiers and merger reused by the service |
+| Independent service | `src/MX.Platform.Status.Service/` | .NET, see `src/global.json` | Host-isolated public files, publisher, private evidence, Entra operations |
 | Container runtime | `Dockerfile`, `deployment/` | Docker + Python integration test | Non-root service and PostgreSQL images; local publications must survive database loss |
-| Tests | `src/MX.Platform.Status.Tests/` | .NET 10 via `dotnet test` | Backend only |
-| Frontend | `src/MX.Platform.Status.Web/` | Node 22.x, Astro 7 + vanilla TS | Maintained source: `src/pages/`, `src/client/`, `src/components/`. `dist/` is generated — gitignored, never hand-edit |
+| Tests | `src/MX.Platform.Status.Tests/` | .NET via `dotnet test` | Backend only |
+| Frontend | `src/MX.Platform.Status.Web/` | Node and Astro; see `package.json` and CI | Maintained source: `src/pages/`, `src/client/`, `src/components/`. `dist/` is generated — gitignored, never hand-edit |
 | Edge | `edge/` | Terraform (pinned in `edge/.terraform-version`) | Cloudflare load balancer, origin pool, monitor and scoped TLS rules |
 
-## Commands (exact)
+## Commands
+
+Run each group from the repository root.
 
 ```powershell
-cd src; dotnet build; dotnet test                       # backend + tests
-cd src/MX.Platform.Status.Web; npm ci; npm run build     # frontend
-terraform -chdir=edge fmt -check -recursive              # Terraform (format/validate only)
+cd src
+dotnet build MX.Platform.Status.slnx
+dotnet test MX.Platform.Status.slnx
+```
+
+```powershell
+cd src/MX.Platform.Status.Web
+npm ci; npm test; npm run build; npx tsc --noEmit
+```
+
+Select the Terraform version in `edge/.terraform-version`, then run:
+
+```powershell
+terraform -chdir=edge fmt -check -recursive
 terraform -chdir=edge init -backend=false -input=false -lockfile=readonly
 terraform -chdir=edge validate
 ```

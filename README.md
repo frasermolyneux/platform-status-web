@@ -30,10 +30,11 @@ not complete Azure or subscription health. Secure Azure common-schema alert
 ingestion stores private evidence; it does not create public incidents.
 
 The producer and consumer share versioned telemetry/binding contracts. Production
-producer validation and status catalogue tests enforce the 32 canonical inputs
-(34 brand projections). Legacy endpoint/HTTP-check configuration is rejected at
-startup. Existing identifiers containing `.probe.` remain stable identifiers,
-not permission for status-owned collection.
+producer validation and status catalogue tests enforce the canonical inputs in
+[`contract/status-monitoring-bindings.json`](contract/status-monitoring-bindings.json).
+Legacy endpoint/HTTP-check configuration is rejected at startup. Existing
+identifiers containing `.probe.` remain stable identifiers, not permission for
+status-owned collection.
 
 ## Runtime
 
@@ -88,9 +89,10 @@ workspace-wide read access. The reader loads PEM explicitly, rather than relying
 on a filename extension on the approved secret mount. Azure/credential failures retain cached observations
 without changing their measurement timestamps, then age them to unknown.
 Deploy the producer first and run the new image's `--refresh-monitoring` command
-against the writable database before cutover. It fails unless every configured
-check has fresh observations from every expected region; real measured failures
-remain valid coverage rather than being replaced by healthy defaults.
+against the writable database before cutover. It requires fresh current-query
+coverage for process checks and every expected region of availability checks;
+real measured failures remain valid coverage rather than being replaced by
+healthy defaults.
 
 ## Operations and identity
 
@@ -131,8 +133,8 @@ GeoLocation Website is listed on both brands. Approved incidents affecting it
 appear on both sites through explicit shared-component mappings, including when
 declared on only one brand. Other services and private evidence remain isolated.
 Shared incidents are managed on their originating site, or in their source GitHub
-issue. XI also includes Servers Integration API and Server Events. Server Agent
-is omitted until it has a suitable availability signal.
+issue. XI also includes Servers Integration API, Server Events, and process
+health components such as Server Agent.
 
 ### Services, components and checks
 
@@ -167,8 +169,8 @@ service. Explicit shared identities retain the same GeoLocation status and incid
 across those different presentations. `sharedId` identifies the same logical check
 on both brands without changing existing private evidence IDs.
 
-`checks` supports monitoring-backed and authenticated `telemetry` definitions,
-each with its own ID, component, name and expected interval. A permitted
+`checks` supports monitoring-backed availability, process health and authenticated
+`telemetry` definitions, each with its own ID, component, name and expected interval. A permitted
 `Status.Ingest` application can POST `{site, checkId, status, observedAt, detail}`
 to `/api/integrations/checks/{siteId}/{checkId}` for a configured telemetry check.
 Scope must match the definition; older observations cannot replace newer results.
@@ -185,29 +187,19 @@ XI adds the CDN under Community Forums, Maps Manager under XI Redirect,
 Community Games & Points (Arcade, Casino, Daily Games, Powerball and Wallet),
 and the published FreezeTag statistics page.
 
-Sitewatch owns 20 additional baselines: 19 at five-minute intervals and Server
-Events at one minute. GeoLocation Website and Portal Website
-combine origin liveness with public-hostname routing; Repository APIs combine
-liveness with database readiness. Existing Sitewatch targets retain their request
-semantics and cadence. Shared GeoLocation measurements are projected to both brands,
-not collected separately by each status view.
+Sitewatch owns the regional availability baselines and their cadence.
+GeoLocation Website and Portal Website combine origin liveness with
+public-hostname routing; Repository APIs combine liveness with database readiness.
+Shared GeoLocation measurements are projected to both brands, not collected
+separately by each status view.
 
 The status reader queries existing Application Insights resources independently of
 public publication. Cache refresh atomically queues a full history snapshot.
 History consumes and acknowledges snapshots transactionally, retaining an outage
 through rollback even if a later refresh has already observed recovery. Repeated
 polls and restarts do not recount unchanged source vectors.
-New baselines use headers-only requests, no redirects and no retries.
-Trip Side Kick Application uses its dependency-free liveness endpoint, not its
-database-backed readiness endpoint or an authenticated application page.
-
-Existing host limits, workspaces and compute remain unchanged. The additional
-Sitewatch observations and 21 availability alert rules have metered ingestion and
-alert-series costs within the approved US$15/month incremental normal-operation
-planning allowance, not a hard cap. Request and telemetry estimates are not an
-invoice guarantee; observe actual usage after release. Cost or coverage conflicts
-must be raised explicitly, never solved by moving active collection into status.
-No paid delivery canaries, MaxMind lookups or serverless-SQL readiness probes are added.
+Collection configuration belongs to Sitewatch. Cost or coverage conflicts must
+be raised explicitly, never solved by moving active collection into status.
 
 These are availability baselines, not transaction monitoring: login redirects
 are accepted without following them; CDN liveness does not prove every asset is
@@ -215,8 +207,8 @@ available; a published statistics page does not prove updater freshness. Those
 signals, scheduled-job freshness, queue depth and private host/backup evidence
 remain strategic monitoring concerns owned by `platform-monitoring` and workload
 producers. Raw alerts remain private until an operator publishes an incident.
-Server Agent, protocol-aware TeamSpeak checks and weekly-job missed-run state
-remain deferred pending meaningful strategic monitoring signals and cost review.
+Server Agent and synchronisation process health are consumed separately from
+regional availability; see [the architecture](docs/architecture.md#process-observations-and-supporting-impact).
 
 Declared component or service impact overrides healthy checks and aggregates upward.
 Observed impact, scope and maintenance windows are retained separately from public

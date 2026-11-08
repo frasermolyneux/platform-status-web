@@ -7,30 +7,18 @@ or global zone settings. The scoped Production API token is
 provided as `CLOUDFLARE_API_TOKEN`; its environment secret is named
 `CLOUDFLARE_API_KEY`.
 
-The reviewed baseline is two origins, 60-second checks, one region (`ENAM`), no
-session affinity, and no paid traffic steering. Both brands share this one load
-balancer. Origins deliberately have no Host override, preserving brand isolation.
-The monitor alone sends `Host: mxstatus.io`, validates origin TLS, and requires the
-actual local-publication readiness response.
+Both brands share the load balancer. See `main.tf` for the configured origins
+and health-check settings. Origins deliberately have no Host override, preserving
+brand isolation. The monitor sends `Host: mxstatus.io`, validates origin TLS,
+and requires the local-publication readiness response.
 
-The load balancer was staged **disabled**, with its enabled pool monitored
-without replacing public routing. The separate activation change enables only
-that existing MX load balancer. Before applying activation,
-verify both origins' Cloudflare health, fresh non-bootstrap publications for both
-brands, protected-operation authentication boundaries, replication, disk-cache
-survival, and existing services. Complete browser-based Entra operator sign-in
-after public HTTPS routing is active.
-Disabling the load balancer restores precedence to any retained matching DNS
-record. The initial preflight found no matching routing records for either status
-hostname, so no previous DNS route existed to restore.
-
-`status.xtremeidiots.com` must subsequently be a CNAME to `mxstatus.io` in the
+`status.xtremeidiots.com` uses a CNAME to `mxstatus.io` in the
 existing `platform-connectivity` zone configuration, not a second load balancer.
 Both zones must belong to the same account. The existing status configuration rules
 set `ssl = "strict"` for `mxstatus.io` and `status.xtremeidiots.com`; both global
 zone SSL modes remain unchanged. Configuration Rules are available on the free
 plan. The XtremeIdiots entrypoint additionally owns one exact-host strict TLS
-rule for `maps.xtremeidiots.com`, preserving its existing status rule and all
+rule for `maps.xtremeidiots.com`, preserving its status rule and all
 zone-wide settings. Two additional exact-host rules set strict TLS for
 `www.xtremeidiots.com` and `cdn.xtremeidiots.com`; their origins must present
 unexpired trusted certificates matching their respective hostnames. DNS remains owned by `platform-connectivity`; no competing
@@ -52,44 +40,31 @@ expressions. Never change the entire XtremeIdiots zone blindly.
 
 ## State and delivery
 
-For the maps hostname migration, `maps-tls-plan` produces a normal saved plan
-and `maps-tls` applies it on approved main. Its separate validation boundary
-permits only appending the exact maps TLS rule and updating the entrypoint
-description in place. It rejects status-rule changes, other resource updates,
-drift, imports, replacements, and unknown non-metadata settings. Repeated
-execution accepts an already-converged entrypoint without changing routing.
-
-For the www and cdn migration, `web-tls-plan` produces a normal saved plan and
-publishes it for review. Each run deletes its saved plan during cleanup;
-`web-tls` creates, validates and applies a fresh saved plan on approved main,
-not the earlier artifact. Its separate boundary permits only
-appending these two exact-host rules to the existing status and maps entrypoint
-and updating its description in place. It rejects changes to existing rules,
-other resources, drift, imports, replacements and unknown non-metadata settings.
-Before applying, verify public trust, hostname coverage and expiry for both
-origin certificates, including each configured origin. If validation fails
-after rollout, restore the previous two-rule configuration through a separately
-reviewed change; preserve the status and maps strict rules and do not weaken the
-zone-wide SSL setting.
-
-`Status Edge` plans same-repository pull requests with Production OIDC. It applies
-only through an explicit `workflow_dispatch` selecting `apply` on reviewed `main`.
-
-Pull requests and the main-only `activate` operation use a refresh-only preflight:
+`Status Edge` uses Production OIDC for eligible same-repository pull requests
+and main-only manual operations. Pull requests and the `activate` operation use
+a refresh-only preflight:
 the five staged resources must already exist, with no managed changes or
 unreviewed drift. A retry may accept only a known, verified false-to-true
 enablement change and its modification timestamp from an interrupted approved
 activation; all other resource drift remains blocked.
 The check retains exact-host strict TLS, exactly the two approved enabled
 equal-weight origins without Host overrides, one monitoring region, and strict
-60-second HTTPS checks. This plan is never applied to enable routing.
+60-second HTTPS checks. A pull request's refresh-only plan checks live drift,
+not the proposed configuration changes; a passing check is not a proposed-change
+plan. The preflight plan is never applied to enable routing.
 
-Provider 5.22 makes optional routing fields unknown during a Terraform enablement
-update, so activation uses the separately approved API path instead of relaxing
-unknown-routing checks. After checking current Cloudflare readiness for both
-origins, `activate` sends only `PATCH {"enabled": true}` to the existing MX load
-balancer. It reads the result back and requires every other setting except its
-modification timestamp to be unchanged. Already-enabled retries recheck health
+For an approved activation, first verify both origins' Cloudflare health, fresh
+non-bootstrap publications for both brands, authentication boundaries,
+replication, disk-cache survival, and existing services. Confirm DNS and
+apex/CNAME compatibility; disabling the load balancer only restores a retained
+matching DNS route if one exists. Complete browser-based Entra operator sign-in
+after public HTTPS routing is active.
+
+The activation API path avoids relaxing checks when optional routing fields are
+unknown in a Terraform enablement update. After checking Cloudflare readiness for
+both origins, `activate` sends only `PATCH {"enabled": true}` to the existing MX
+load balancer. It reads the result back and requires every other setting except
+its modification timestamp to be unchanged. Already-enabled retries recheck health
 without repeating the PATCH. Unexpected post-activation changes fail explicitly
 and require operator review; failure does not imply routing stayed disabled.
 
@@ -98,6 +73,16 @@ reviewed enabled configuration, checks its saved plan, and reconciles state.
 No optional defaults are ignored or adopted. Imports, creations, replacements,
 deletes, unrelated changes, and unknown routing values remain blocked.
 Transient saved plans are removed even when a step fails.
+
+The `plan`, `maps-tls-plan` and `web-tls-plan` operations render normal plans in
+the workflow summary; they do not publish downloadable plan artifacts. The
+corresponding `apply`, `maps-tls` and `web-tls` operations create, validate and
+apply a fresh plan from reviewed `main`. The maps and web operations enforce
+their respective exact-host TLS migration boundaries in
+`deployment/validate_edge_plan.py`; they reject unrelated changes and drift.
+Before any TLS change, verify public trust, hostname coverage and expiry for
+each configured origin certificate. If recovery is needed, use a separately
+reviewed change, preserve unrelated strict rules, and do not weaken zone-wide TLS.
 
 The `verify` operation only initializes the isolated state and reads the live
 Cloudflare pool-health report; it does not plan or apply resources. Both `apply`
@@ -126,6 +111,7 @@ terraform -chdir=edge validate
 terraform -chdir=edge fmt -check -recursive
 ```
 
-The committed provider lock file remains authoritative; do not commit local
-`.terraform/` directories or saved plans. Resource deletion is deliberately
-protected and requires an explicit reviewed change.
+Select the Terraform CLI version from `edge/.terraform-version` before running
+these commands. The committed provider lock file remains authoritative; do not
+commit local `.terraform/` directories or saved plans. Resource deletion is
+deliberately protected and requires an explicit reviewed change.
