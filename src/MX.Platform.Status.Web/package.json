@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@azure/msal-browser": "^5.28.0",
-    "astro": "^7.4.5",
+    "astro": "^7.4.7",
     "dompurify": "^3.4.17"
   },
   "devDependencies": {
