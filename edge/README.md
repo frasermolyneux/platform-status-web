@@ -10,7 +10,10 @@ provided as `CLOUDFLARE_API_TOKEN`; its environment secret is named
 Both brands share the load balancer. See `main.tf` for the configured origins
 and health-check settings. Origins deliberately have no Host override, preserving
 brand isolation. The monitor sends `Host: mxstatus.io`, validates origin TLS,
-and requires the local-publication readiness response.
+and requires `200` with `{"status":"ready"}` from `/health/ready`. Readiness
+requires fresh local publications for both brands; the Docker serving check
+is separate so that stale incident and maintenance information remains
+available even if an origin is no longer ready for normal edge steering.
 
 `status.xtremeidiots.com` uses a CNAME to `mxstatus.io` in the
 existing `platform-connectivity` zone configuration, not a second load balancer.
