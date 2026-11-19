@@ -76,10 +76,27 @@ Vault-materialized files `postgres-password`, `app-password`, and
 database port to the two origins over Tailscale; it is never a public listener.
 
 Platform-owned ingress must preserve the actual HTTP `Host`. Arbitrary
-`X-Forwarded-Host` values are ignored. `/health/live` and `/health/ready` are
-host-independent. Readiness checks local publication readability, not monitored
-service health or Azure/database reachability. An initial origin can serve an
-explicit unknown bootstrap publication before its first observation.
+`X-Forwarded-Host` values are ignored. Health endpoints are host-independent and
+not cached:
+
+- `/health/live` checks only that the process responds.
+- `/health/serving` is the Docker `--healthcheck` target. It checks the local
+  disk-serving path, which can return a cached stale publication or an explicit
+  unknown bootstrap publication before the first successful write.
+- `/health/ready` is the existing Cloudflare probe. It returns `200` with
+  `{"status":"ready"}` only if every configured site's local publication is
+  readable and its `generatedAt` is no older than `Status:StaleAfterSeconds`
+  (default 180 seconds). The publisher refreshes unchanged publications at
+  `Status:RefreshSeconds` intervals (default 60 seconds); the same interval
+  bounds permitted future clock skew. The probe returns `503` with
+  `{"status":"not-ready","reason":"stale-publication"}` when publications have
+  aged out, or `reason: "publication-unavailable"` when a publication is
+  missing, invalid or unreadable.
+
+Readiness measures local publication freshness, not monitored workload health
+or current Azure/database reachability. Public API and feed reads still serve
+cached incidents and maintenance during replication loss; the status API
+continues to mark stale live data unknown.
 
 Monitoring configuration adds `AzureCollectorClientId`, `AzureCertificatePath` and
 `AzureMonitoringResources` (logical aliases to exact Application Insights resource

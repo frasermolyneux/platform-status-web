@@ -489,12 +489,13 @@ def main():
                 assert {record["id"], maintenance_record["id"]}.issubset(
                     {item["id"] for item in publication["incidents"]})
                 assert "RESTRICTED_DRAFT_MARKER" not in json.dumps(publication)
+                assert request(url, "/health/ready") == (200, {"status": "ready"})
             snapshots = {label: request(url, "/api/status")[1]["generatedAt"] for label, url in urls.items()}
             docker("stop", f"{name}-primary", f"{name}-standby")
             for label, url in urls.items():
                 docker("restart", f"{name}-{label}")
                 urls[label] = url = origin_url(f"{name}-{label}")
-                wait_for(lambda: request(url, "/health/ready")[0] == 200, f"{label} independent restart", seconds=30)
+                wait_for(lambda: request(url, "/health/serving")[0] == 200, f"{label} independent restart", seconds=30)
                 publication = request(url, "/api/status")[1]
                 assert any(item["title"] == "Integration incident" for item in publication["incidents"])
                 assert publication["generatedAt"] >= snapshots[label]
@@ -502,10 +503,13 @@ def main():
                 assert request(url, "/feed.xml")[0] == 200
             time.sleep(max(65, (banner_expiry - datetime.now(timezone.utc)).total_seconds() + 1))
             for url in urls.values():
+                assert request(url, "/health/ready") == (503, {"status": "not-ready", "reason": "stale-publication"})
+                assert request(url, "/health/serving")[0] == 200
                 stale = request(url, "/api/status")[1]
                 assert stale["dataFreshness"]["stale"]
                 assert stale["summary"]["status"] == "unknown"
                 assert "Integration incident" in request(url, "/feed.xml")[1]
+                assert any(item["id"] == maintenance_record["id"] for item in stale["incidents"])
                 assert [banner["title"] for banner in stale["banners"]] == ["Cached notice"]
             print("Publisher fencing, historic SLA thresholds, primary/standby publishing, draft privacy, "
                   "standby writes, and database-independent restart passed.")
@@ -536,9 +540,10 @@ def request(url, path, host="mxstatus.io"):
     try:
         with urlopen(Request(url + path, headers={"Host": host}), timeout=5) as response:
             text = response.read().decode()
-            return response.status, json.loads(text) if path == "/api/status" else text
+            return response.status, json.loads(text) if path in {"/api/status", "/health/ready"} else text
     except HTTPError as error:
-        return error.code, error.read().decode()
+        text = error.read().decode()
+        return error.code, json.loads(text) if path == "/health/ready" and error.headers.get_content_type() == "application/json" else text
     except (URLError, TimeoutError, ConnectionError):
         return 0, {}
 
