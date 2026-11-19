@@ -145,6 +145,7 @@ public sealed partial class IndependentServiceTests : IDisposable
     [InlineData("{\"site\":{\"id\":\"xi\"}}")]
     [InlineData("{\"site\":{\"id\":\"mx\"},\"generatedAt\":\"2099-01-01T00:00:00Z\"}")]
     [InlineData("{\"site\":{\"id\":\"xi\"},\"generatedAt\":\"2099-01-01T00:00:00Z\"}")]
+    [InlineData("{\"site\":{\"id\":\"xi\"},\"generatedAt\":\"FRESH_TIMESTAMP\",\"banners\":[null]}")]
     public async Task InvalidPublicationDoesNotReportReady(string contents)
     {
         await using var app = Build();
@@ -155,7 +156,8 @@ public sealed partial class IndependentServiceTests : IDisposable
             Site = new SiteInfo { Id = "mx" },
             GeneratedAt = DateTimeOffset.UtcNow
         });
-        await File.WriteAllTextAsync(Path.Combine(_directory, "xi.json"), contents);
+        await File.WriteAllTextAsync(Path.Combine(_directory, "xi.json"),
+            contents.Replace("FRESH_TIMESTAMP", DateTimeOffset.UtcNow.ToString("O"), StringComparison.Ordinal));
         await AssertReadinessAsync(client, "publication-unavailable");
     }
 

@@ -72,7 +72,7 @@ public sealed class PublicationStore(StatusCatalog catalog, RuntimeOptions optio
         var publication = await JsonSerializer.DeserializeAsync<StatusApiResponse>(stream, StatusJson.Options, ct);
         if (publication is null || publication.Site?.Id != site || publication.Summary is null
             || publication.Components is null || publication.Incidents is null
-            || publication.Maintenance is null || publication.Banners is null)
+            || publication.Maintenance is null || publication.Banners is null || publication.Banners.Any(banner => banner is null))
             throw new InvalidDataException("Invalid status publication or publication site does not match its catalogue.");
         return publication;
     }
