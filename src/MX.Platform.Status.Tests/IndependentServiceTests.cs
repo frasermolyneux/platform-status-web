@@ -152,7 +152,8 @@ public sealed partial class IndependentServiceTests : IDisposable
         using var client = app.GetTestClient();
         await app.Services.GetRequiredService<PublicationStore>().WriteAsync(new StatusApiResponse
         {
-            Site = new SiteInfo { Id = "mx" }, GeneratedAt = DateTimeOffset.UtcNow
+            Site = new SiteInfo { Id = "mx" },
+            GeneratedAt = DateTimeOffset.UtcNow
         });
         await File.WriteAllTextAsync(Path.Combine(_directory, "xi.json"), contents);
         await AssertReadinessAsync(client, "publication-unavailable");
