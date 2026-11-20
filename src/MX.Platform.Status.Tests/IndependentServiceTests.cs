@@ -55,8 +55,10 @@ public sealed partial class IndependentServiceTests : IDisposable
         Assert.Equal("mx", publication.Site.Id);
         Assert.Equal("unknown", publication.Summary.Status);
         Assert.True(publication.DataFreshness!.Stale);
+        Assert.Equal(DateTimeOffset.UnixEpoch, publication.GeneratedAt);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/feed.xml")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/ready")).StatusCode);
+        await AssertReadinessAsync(client, "publication-unavailable");
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/serving")).StatusCode);
         Assert.Equal("static-shell", await client.GetStringAsync("/component/mx.sitewatch.molyneux-me"));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/evidence")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/health")).StatusCode);
@@ -96,11 +98,78 @@ public sealed partial class IndependentServiceTests : IDisposable
         client.DefaultRequestHeaders.Host = "mxstatus.io";
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
             Token("Status.Operator", "Status.Access", _ingestor, "expired"));
-        foreach (var path in new[] { "/api/status", "/feed.xml", "/health/ready", "/", "/api/auth/config" })
+        foreach (var path in new[] { "/api/status", "/feed.xml", "/health/serving", "/", "/api/auth/config" })
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(path)).StatusCode);
+        await AssertReadinessAsync(client, "publication-unavailable");
         Assert.Equal(0, bearerRequests);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/ops/runtime")).StatusCode);
         Assert.Equal(1, bearerRequests);
+    }
+
+    [Fact]
+    public async Task ReadinessRequiresFreshPublicationsForBothBrandsRegardlessOfWorkloadStatus()
+    {
+        await using var app = Build(configure: builder => builder.Configuration.AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Status:RefreshSeconds"] = "30", ["Status:StaleAfterSeconds"] = "60" }));
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        var files = app.Services.GetRequiredService<PublicationStore>();
+        var fresh = new StatusApiResponse
+        {
+            Site = new SiteInfo { Id = "mx" },
+            GeneratedAt = DateTimeOffset.UtcNow.AddSeconds(-20),
+            Summary = new Summary { Status = "unknown" },
+            Components = [new ComponentDto { Id = "web", Status = "unknown" }]
+        };
+        await files.WriteAsync(fresh);
+        await AssertReadinessAsync(client, "publication-unavailable");
+        var standbySite = fresh with { Site = new SiteInfo { Id = "xi" } };
+        await files.WriteAsync(standbySite);
+        await AssertReadinessAsync(client);
+        await files.WriteAsync(standbySite with { GeneratedAt = DateTimeOffset.UtcNow.AddSeconds(-75) });
+        await AssertReadinessAsync(client, "stale-publication");
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/live")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/serving")).StatusCode);
+
+        client.DefaultRequestHeaders.Host = "status.xtremeidiots.com";
+        var result = JsonSerializer.Deserialize<StatusApiResponse>(await client.GetStringAsync("/api/status"), StatusJson.Options)!;
+        Assert.True(result.DataFreshness!.Stale);
+        Assert.Equal("unknown", result.Summary.Status);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/feed.xml")).StatusCode);
+        await files.WriteAsync(standbySite);
+        await AssertReadinessAsync(client);
+    }
+
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("{\"site\":{\"id\":\"xi\"}}")]
+    [InlineData("{\"site\":{\"id\":\"mx\"},\"generatedAt\":\"2099-01-01T00:00:00Z\"}")]
+    [InlineData("{\"site\":{\"id\":\"xi\"},\"generatedAt\":\"2099-01-01T00:00:00Z\"}")]
+    [InlineData("{\"site\":{\"id\":\"xi\"},\"generatedAt\":\"FRESH_TIMESTAMP\",\"banners\":[null]}")]
+    public async Task InvalidPublicationDoesNotReportReady(string contents)
+    {
+        await using var app = Build();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        await app.Services.GetRequiredService<PublicationStore>().WriteAsync(new StatusApiResponse
+        {
+            Site = new SiteInfo { Id = "mx" },
+            GeneratedAt = DateTimeOffset.UtcNow
+        });
+        await File.WriteAllTextAsync(Path.Combine(_directory, "xi.json"),
+            contents.Replace("FRESH_TIMESTAMP", DateTimeOffset.UtcNow.ToString("O"), StringComparison.Ordinal));
+        await AssertReadinessAsync(client, "publication-unavailable");
+    }
+
+    private static async Task AssertReadinessAsync(HttpClient client, string? reason = null)
+    {
+        using var response = await client.GetAsync("/health/ready");
+        Assert.Equal(reason is null ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(reason is null ? "ready" : "not-ready", body.RootElement.GetProperty("status").GetString());
+        if (reason is not null)
+            Assert.Equal(reason, body.RootElement.GetProperty("reason").GetString());
     }
 
     [Fact]

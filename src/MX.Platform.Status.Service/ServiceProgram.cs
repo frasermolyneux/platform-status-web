@@ -69,7 +69,7 @@ public static class ServiceProgram
     private static async Task<int> HealthcheckAsync()
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-        var healthUri = new UriBuilder(Uri.UriSchemeHttp, IPAddress.Loopback.ToString(), 8080, "/health/ready").Uri;
+        var healthUri = new UriBuilder(Uri.UriSchemeHttp, IPAddress.Loopback.ToString(), 8080, "/health/serving").Uri;
         try { return (await client.GetAsync(healthUri)).IsSuccessStatusCode ? 0 : 1; }
         catch (HttpRequestException) { return 1; }
         catch (TaskCanceledException) { return 1; }
@@ -133,10 +133,16 @@ public static class ServiceProgram
         app.UseAuthentication();
         app.UseAuthorization();
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
-        app.MapGet("/health/ready", async (PublicationStore files, CancellationToken ct) =>
+        app.MapGet("/health/serving", async (PublicationStore files, CancellationToken ct) =>
         {
             foreach (var site in catalog.Sites) await files.ReadAsync(site.Site.Id, ct);
-            return Results.Ok(new { status = "ready" });
+            return Results.Ok(new { status = "serving" });
+        });
+        app.MapGet("/health/ready", async (PublicationStore files, ILogger<PublicationStore> logger, CancellationToken ct) =>
+        {
+            var reason = await files.GetNotReadyReasonAsync(logger, ct);
+            return reason is null ? Results.Ok(new { status = "ready" })
+                : Results.Json(new { status = "not-ready", reason }, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
         app.MapGet("/api/status", async (HttpContext context, PublicationStore files, CancellationToken ct) =>
         {
