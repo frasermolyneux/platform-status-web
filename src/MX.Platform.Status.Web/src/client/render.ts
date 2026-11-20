@@ -123,8 +123,9 @@ export function renderOverview(data: StatusResponse): void {
   });
 }
 
-function renderComponentRow(c: ComponentDto): string {
-  const uptime = c.uptimeRatio !== null ? `${(c.uptimeRatio * 100).toFixed(2)}%` : '—';
+function renderComponentRow(c: ComponentDto, range: HistoryRange = '90d'): string {
+  const ratio = availabilityRatio(c, range);
+  const uptime = ratio !== null ? `${(ratio * 100).toFixed(2)}%` : '—';
   return `<div class="component-row${c.kind === 'group' ? ' component-group' : ''}">
     <a href="/component/${escapeHtml(c.id)}" data-component-id="${escapeHtml(c.id)}" class="component-name">${escapeHtml(c.name)}</a>
     <span class="component-uptime" title="Observed check availability; declared incident impact is shown separately in history">${escapeHtml(uptime)}</span>
@@ -172,12 +173,23 @@ function recoveryMessage(incident: IncidentDto, data: StatusResponse): string {
   return `<p class="recovery-message">${recovered ? 'Service restored — monitoring.' : 'Monitoring recovery; current availability is shown below.'}</p>`;
 }
 
+function recentBuckets(component: ComponentDto, range: HistoryRange) {
+  return component.recentHistory?.[range === '24h' ? 'last24Hours' : 'last3Days'] ?? [];
+}
+
+function availabilityRatio(component: ComponentDto, range: HistoryRange): number | null {
+  if (range === '90d') return component.uptimeRatio;
+  const observations = recentBuckets(component, range).reduce((sum, bucket) => ({
+    total: sum.total + bucket.total, failed: sum.failed + bucket.failed,
+  }), { total: 0, failed: 0 });
+  return observations.total ? 1 - observations.failed / observations.total : null;
+}
+
 function renderDetailedHistory(component: ComponentDto, range: HistoryRange): string {
-  if (range === '90d' || !component.recentHistory) return renderHistoryBars(component);
-  const buckets = range === '24h' ? component.recentHistory.last24Hours : component.recentHistory.last3Days;
-  const total = buckets.reduce((sum, bucket) => sum + bucket.total, 0);
-  const failed = buckets.reduce((sum, bucket) => sum + bucket.failed, 0);
-  const availability = total ? `${((1 - failed / total) * 100).toFixed(2)}% check availability` : 'No observations';
+  if (range === '90d') return renderHistoryBars(component);
+  const buckets = recentBuckets(component, range);
+  const ratio = availabilityRatio(component, range);
+  const availability = ratio !== null ? `${(ratio * 100).toFixed(2)}% check availability` : 'No observations';
   return `<div class="history-component">
     <div class="history-label">${escapeHtml(component.name)}<span class="history-uptime">${availability}</span></div>
     <div class="history-bars recent-history-bars">${buckets.map(bucket => {
@@ -211,7 +223,7 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     return;
   }
   const info = getStatusInfo(component.status);
-  const range = historyRanges.get(componentId) ?? (component.recentHistory ? '24h' : '90d');
+  const range = component.recentHistory ? historyRanges.get(componentId) ?? '24h' : '90d';
   const descendants = flattenComponents([component]);
   const affectedIds = new Set(descendants.map(item => item.id));
   const historicalIncidents = new Set(descendants.flatMap(item => item.history.flatMap(day => day.incidentIds ?? [])));
@@ -229,7 +241,7 @@ export function renderComponent(data: StatusResponse, componentId: string): void
     <p class="muted history-intro">${range === '90d' ? 'Daily' : range === '24h' ? '15-minute' : 'Hourly'} periods. Times use your local timezone. Grey means missing observations; marked bars include declared incident impact. Detailed observations are retained from collection onward, not reconstructed from daily totals.</p>
     ${renderDetailedHistory(component, range)}
     ${component.children?.length ? `<section class="panel"><h3>Components</h3>${component.children.map(child =>
-      renderComponentRow(child) + renderDetailedHistory(child, range)).join('')}</section>` : ''}
+      renderComponentRow(child, range) + renderDetailedHistory(child, range)).join('')}</section>` : ''}
     ${component.checks?.length ? `<section class="panel"><h3>Checks</h3>${component.checks.map(check =>
       `<article class="component-row check-row"><span class="check-name">${escapeHtml(check.name)}</span>${getStatusBadgeHtml(check.status)}<span>${check.observedAt ? formatRelative(check.observedAt) : 'Awaiting first observation'}</span></article>`).join('')}</section>` : ''}
     <section class="incidents-section"><h3>Incidents affecting this ${component.kind === 'group' ? 'service' : 'component'}</h3>
