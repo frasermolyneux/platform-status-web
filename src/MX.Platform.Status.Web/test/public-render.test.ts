@@ -2,7 +2,98 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { affectedComponents, evidenceCards, incidentSeed } from '../src/client/evidence';
-import type { StatusResponse } from '../src/client/api';
+import type { ComponentDto, StatusResponse } from '../src/client/api';
+
+test('component headings and charts use count-weighted availability for the selected range', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderComponent } = await import('../src/client/render');
+  const bucket = { start: '2026-11-20T12:00:00Z', end: '2026-11-20T12:15:00Z',
+    status: 'operational', total: 10, failed: 0, incidentIds: [] };
+  const child: ComponentDto = {
+    id: 'period-website', name: 'Portal Website', kind: 'leaf', status: 'operational',
+    uptimeWindowDays: 90, uptimeRatio: 0.9983,
+    history: [{ date: '2026-11-20', status: 'outage', total: 10000, failed: 17 }],
+    recentHistory: {
+      last24Hours: [bucket, { ...bucket, status: 'unknown', total: 0 }],
+      last3Days: [{ ...bucket, status: 'outage', total: 1, failed: 1 }, { ...bucket, total: 99 }],
+    },
+  };
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'xi', displayName: 'XI status' }, generatedAt: bucket.end,
+    summary: { status: 'operational' }, incidents: [], maintenance: [],
+    components: [{ ...child, id: 'period-service', name: 'Portal', kind: 'group', children: [child] }],
+  };
+  const original = JSON.stringify(data);
+  const selectRange = (range: string) =>
+    document.querySelector<HTMLButtonElement>(`[data-history-range="${range}"]`)!.click();
+
+  for (const kind of ['leaf', 'group'] as const) {
+    child.kind = kind;
+    renderComponent(data, 'period-service');
+    for (const [range, percentage] of [['24h', '100.00%'], ['3d', '99.00%'], ['90d', '99.83%'], ['24h', '100.00%']]) {
+      selectRange(range);
+      assert.equal(document.querySelector('.component-uptime')?.textContent, percentage);
+      assert.deepEqual([...document.querySelectorAll('.history-uptime')].map(el => el.textContent),
+        [`${percentage} check availability`, `${percentage} check availability`]);
+      assert.equal(document.querySelector(`[data-history-range="${range}"]`)?.getAttribute('aria-pressed'), 'true');
+    }
+    renderComponent(data, 'period-website');
+    for (const [range, percentage] of [['24h', '100.00%'], ['3d', '99.00%'], ['90d', '99.83%']]) {
+      selectRange(range);
+      assert.equal(document.querySelector('.history-uptime')?.textContent, `${percentage} check availability`);
+    }
+    renderComponent(data, 'period-website');
+    assert.equal(document.querySelector('[data-history-range="90d"]')?.getAttribute('aria-pressed'), 'true');
+  }
+  child.kind = 'leaf';
+  assert.equal(JSON.stringify(data), original);
+});
+
+test('short ranges do not substitute daily history or healthy percentages for missing observations', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderComponent } = await import('../src/client/render');
+  const child: ComponentDto = {
+    id: 'missing-child', name: 'Website', kind: 'leaf', status: 'unknown',
+    uptimeWindowDays: 90, uptimeRatio: 0.9,
+    history: [{ date: '2026-11-20', status: 'degraded', total: 10, failed: 1 }],
+    recentHistory: { last24Hours: [{
+      start: '2026-11-20T12:00:00Z', end: '2026-11-20T12:15:00Z',
+      status: 'unknown', total: 0, failed: 0, incidentIds: [],
+    }], last3Days: [] },
+  };
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'xi', displayName: 'XI status' }, generatedAt: '2026-11-20T12:15:00Z',
+    summary: { status: 'unknown' }, incidents: [], maintenance: [],
+    components: [{ ...child, id: 'missing-service', name: 'Portal', kind: 'group', children: [
+      child, { ...child, id: 'legacy-child', recentHistory: undefined },
+    ] }],
+  };
+  for (const range of ['24h', '3d']) {
+    renderComponent(data, 'missing-service');
+    document.querySelector<HTMLButtonElement>(`[data-history-range="${range}"]`)!.click();
+    assert.deepEqual([...document.querySelectorAll('.component-uptime')].map(el => el.textContent), ['—', '—']);
+    assert.deepEqual([...document.querySelectorAll('.history-uptime')].map(el => el.textContent),
+      ['No observations', 'No observations', 'No observations']);
+    assert.equal(document.querySelectorAll('.history-bar:not(.status-unknown)').length, 0);
+  }
+  document.querySelector<HTMLButtonElement>('[data-history-range="90d"]')!.click();
+  assert.deepEqual([...document.querySelectorAll('.component-uptime')].map(el => el.textContent), ['90.00%', '90.00%']);
+  child.uptimeRatio = null;
+  child.history = [];
+  renderComponent(data, 'missing-service');
+  assert.equal(document.querySelector('.component-uptime')?.textContent, '—');
+
+  renderComponent(data, 'missing-child');
+  document.querySelector<HTMLButtonElement>('[data-history-range="3d"]')!.click();
+  child.recentHistory = undefined;
+  renderComponent(data, 'missing-child');
+  assert.equal(document.querySelector('[data-history-range="90d"]')?.getAttribute('aria-pressed'), 'true');
+  assert.equal(document.querySelector<HTMLButtonElement>('[data-history-range="3d"]')?.disabled, true);
+});
 
 test('overview shows only the latest 30 days and matching observed availability without shortening detailed history', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://mxstatus.io/' });
