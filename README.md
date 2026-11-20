@@ -173,6 +173,10 @@ Service and component detail pages offer 24-hour (15-minute), 3-day (hourly) and
 monitoring buckets committed with daily counters and history acknowledgements.
 No earlier granular observations are fabricated from daily totals. Declared
 incident periods overlay measured availability without changing its percentages.
+Component heading percentages follow the selected history range: short windows
+use observation counts, while 90 days uses the published daily-history aggregate.
+Missing observations are not counted as healthy; components without short-window
+data show no observations rather than substituting their daily history.
 
 Community Forums includes its Website, Background Tasks and Community CDN.
 Background Tasks consumes Sitewatch's existing scheduled-task endpoint result,
