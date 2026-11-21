@@ -19,7 +19,8 @@ public static class IncidentImpact
         IReadOnlyDictionary<int, Incident> records, IReadOnlyList<string> ancestors, ImpactPropagation? propagation)
     {
         var children = component.Children?.Select(child => Apply(child, publication, records, [.. ancestors, component.Id], propagation)).ToArray();
-        var ids = Descendants(component).Concat(ancestors).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ids = Descendants(component).Concat(ancestors)
+            .Concat(propagation?.RetiredDescendants(component.Id) ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var incidents = publication.Incidents.Where(incident => incident.Components.Any(ids.Contains)).ToArray();
         return component with
         {

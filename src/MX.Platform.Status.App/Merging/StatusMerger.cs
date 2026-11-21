@@ -15,15 +15,18 @@ public sealed class StatusMerger
         bool stale = false)
     {
         var publicIds = PublicIds(snapshot.Components.Components).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var incidentList = incidents.Where(item => item.Components.All(publicIds.Contains))
+        var retiredIds = RetiredIds(snapshot.Components.Components).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var incidentList = incidents.Where(item => item.Components.All(publicIds.Contains)
+                && (!item.Components.Any(retiredIds.Contains) || item.State == IncidentState.Resolved && item.ResolvedAt.HasValue))
             .Select(item => item with { Components = ExpandAffected(snapshot.Components.Components, item.Components) })
             .OrderByDescending(item => item.CreatedAt).ToArray();
-        var maintenanceList = maintenance.Where(item => item.Components.All(publicIds.Contains))
+        var maintenanceList = maintenance.Where(item => item.Components.All(publicIds.Contains)
+                && !item.Components.Any(retiredIds.Contains))
             .Select(item => item with { Components = ExpandAffected(snapshot.Components.Components, item.Components) })
             .OrderBy(item => item.ScheduledStart).ToArray();
         var nowDate = DateOnly.FromDateTime(DateTime.UtcNow);
         var propagation = new ImpactPropagation(snapshot.Components);
-        var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate, propagation)).ToArray();
+        var componentDtos = snapshot.Components.Components.Where(component => !component.Hidden && !component.Retired).Select(component => BuildComponent(component, history, liveData, incidentList, maintenanceList, nowDate, propagation)).ToArray();
         var summaryStatus = Summarize(componentDtos.Select(component => ParseStatus(component.Status)));
 
         return IncidentImpact.Apply(new StatusApiResponse
@@ -61,7 +64,7 @@ public sealed class StatusMerger
         IReadOnlyList<MaintenanceWindow> maintenance,
         DateOnly today, ImpactPropagation propagation)
     {
-        var children = component.Children.Where(child => !child.Hidden).Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today, propagation)).ToArray();
+        var children = component.Children.Where(child => !child.Hidden && !child.Retired).Select(child => BuildComponent(child, history, liveData, incidents, maintenance, today, propagation)).ToArray();
         var windowDays = Math.Max(1, component.Sla.WindowDays);
         var historicalDays = BuildHistoricalWindow(component, history, today, windowDays);
         var todayHistory = historicalDays[^1];
@@ -247,6 +250,14 @@ public sealed class StatusMerger
         components.Where(component => !component.Hidden)
             .SelectMany(component => new[] { component.Id }.Concat(PublicIds(component.Children)));
 
+    private static IEnumerable<string> RetiredIds(IEnumerable<Component> components) =>
+        components.Where(component => !component.Hidden).SelectMany(component =>
+            (component.Retired ? new[] { component.Id } : []).Concat(RetiredIds(component.Children)));
+
+    private static IEnumerable<string> ActiveIds(IEnumerable<Component> components) =>
+        components.Where(component => !component.Hidden && !component.Retired)
+            .SelectMany(component => new[] { component.Id }.Concat(ActiveIds(component.Children)));
+
     private static ComponentStatus Summarize(IEnumerable<ComponentStatus> statuses)
     {
         var values = statuses.ToArray();
@@ -262,7 +273,8 @@ public sealed class StatusMerger
     {
         var ids = affected.ToHashSet(StringComparer.OrdinalIgnoreCase);
         return components.Where(component => !component.Hidden).SelectMany(component =>
-            ids.Contains(component.Id) ? PublicIds([component]) : ExpandAffected(component.Children, ids))
+            ids.Contains(component.Id) ? component.Retired ? [component.Id] : ActiveIds([component])
+                : ExpandAffected(component.Children, ids))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
