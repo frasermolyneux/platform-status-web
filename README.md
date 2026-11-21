@@ -178,11 +178,7 @@ use observation counts, while 90 days uses the published daily-history aggregate
 Missing observations are not counted as healthy; components without short-window
 data show no observations rather than substituting their daily history.
 
-Community Forums includes its Website, Background Tasks and Community CDN.
-Background Tasks consumes Sitewatch's existing scheduled-task endpoint result,
-independently of homepage availability, and affects the service's aggregate status.
-This reports the task runner's HTTP outcome, not delivery confirmation for each
-email or notification.
+Community Forums includes its Website and Community CDN.
 
 XtremeIdiots Portal groups its Website, Repository APIs v1/v2, Servers Integration
 API, Server Events and GeoLocation Website. GeoLocation remains a top-level MX

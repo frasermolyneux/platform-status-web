@@ -38,7 +38,7 @@ public sealed class StatusExperienceTests
     {
         var catalog = Catalogue();
         string[] labels = ["status:incident", "status:published", "site:xi",
-            "component:xi.sitewatch.forums-tasks", "severity:outage", "state:identified"];
+            "component:xi.sitewatch.forums-web", "severity:outage", "state:identified"];
         var initial = Assert.Single(GitHubIssueParser.Parse(Issue(labels), [], catalog, new()));
         initial = initial.ObserveImpact(null, Created);
         var monitoringLabels = labels.Where(label => label != "severity:outage")
@@ -52,12 +52,12 @@ public sealed class StatusExperienceTests
         var site = catalog.Get("xi");
         var live = site.EffectiveChecks.GroupBy(check => check.Component).ToDictionary(group => group.Key,
             group => new ComponentLiveTelemetry(
-                group.Key == "xi.sitewatch.forums-tasks" && measured == ComponentStatus.Unknown ? 0 : 1,
-                group.Key == "xi.sitewatch.forums-tasks" && measured == ComponentStatus.Outage ? 1 : 0,
+                group.Key == "xi.sitewatch.forums-web" && measured == ComponentStatus.Unknown ? 0 : 1,
+                group.Key == "xi.sitewatch.forums-web" && measured == ComponentStatus.Outage ? 1 : 0,
                 DateTimeOffset.UtcNow, null));
         var publication = new StatusMerger().Merge(site.Snapshot, live, null, [recovered.ToPublicIncident()], []);
-        Assert.Equal(expected, Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-tasks").Status);
-        var scopes = new HashSet<string> { "xi.sitewatch.forums-tasks" };
+        Assert.Equal(expected, Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-web").Status);
+        var scopes = new HashSet<string> { "xi.sitewatch.forums-web" };
         Assert.Equal("outage", Assert.Single(IncidentImpact.ForRange(recovered.ToPublicIncident(), scopes,
             Created, Created.AddMinutes(20))));
         Assert.Empty(IncidentImpact.ForRange(recovered.ToPublicIncident(), scopes,
@@ -72,10 +72,10 @@ public sealed class StatusExperienceTests
         Assert.NotNull(resolved.ResolvedAt);
         Assert.Throws<InvalidDataException>(() => GitHubIssueParser.Parse(
             Issue([.. monitoringLabels, "severity:outage", "severity:degraded"]), [], catalog, new(), [recovered]));
-        var task = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-tasks");
+        var website = Flatten(publication.Components).Single(component => component.Id == "xi.sitewatch.forums-web");
         var historical = IncidentImpact.Apply(publication with
         {
-            Components = [task with
+            Components = [website with
         {
             History = [new() { Date = DateOnly.FromDateTime(Created.UtcDateTime), Status = "operational" }]
         }]
@@ -280,8 +280,8 @@ public sealed class StatusExperienceTests
     public void PublicCoverageContainsOnlyMonitoringBindingsAndPreservesSharedCanonicalIdentities()
     {
         var checks = Catalogue().Sites.SelectMany(site => site.EffectiveChecks).ToArray();
-        Assert.Equal(37, checks.Length);
-        Assert.Equal(31, checks.Where(check => check.Monitoring is not null).Select(check => check.Monitoring!.Identity).Distinct().Count());
+        Assert.Equal(36, checks.Length);
+        Assert.Equal(30, checks.Where(check => check.Monitoring is not null).Select(check => check.Monitoring!.Identity).Distinct().Count());
         Assert.All(checks, check =>
         {
             Assert.Equal("telemetry", check.Kind);
@@ -296,7 +296,7 @@ public sealed class StatusExperienceTests
     [InlineData(true, true, true, "operational")]
     [InlineData(true, false, true, "degraded")]
     [InlineData(false, false, false, "outage")]
-    public void ForumBackgroundTasksAffectTheirServiceIndependentlyOfTheHealthyWebsite(
+    public void ForumWebsiteRegionalAvailabilityStillAffectsTheService(
         bool uk, bool us, bool eu, string expected)
     {
         var site = Catalogue().Get("xi");
@@ -305,15 +305,15 @@ public sealed class StatusExperienceTests
         var observations = site.EffectiveChecks.Where(check => check.Monitoring is not null).Select(check => MonitoringAvailability.Project("xi", check,
             check.Monitoring!.Regions.Select((region, index) => new MonitoringObservation(
                 check.Monitoring.SiteId, check.Monitoring.ComponentId, check.Monitoring.CheckId, region, now,
-                check.Id != "xi.sitewatch.forums-tasks" || regionSuccess[index], null)), now)!).ToArray();
+                check.Id != "xi.sitewatch.forums-web" || regionSuccess[index], null)), now)!).ToArray();
         var live = ComponentChecks.Build(site, [], observations);
         var publication = new StatusMerger().Merge(site.Snapshot, live, null, [], []);
         var forums = Assert.Single(publication.Components, component => component.Id == "xi.service.forums");
-        var tasks = Assert.Single(forums.Children!, component => component.Id == "xi.sitewatch.forums-tasks");
-        Assert.Equal(expected, tasks.Status);
-        Assert.Equal(expected, Assert.Single(tasks.Checks!).Status);
+        var website = Assert.Single(forums.Children!, component => component.Id == "xi.sitewatch.forums-web");
+        Assert.Equal(expected, website.Status);
+        Assert.Equal(expected, Assert.Single(website.Checks!).Status);
         Assert.Equal(expected, forums.Status);
-        Assert.All(forums.Children!.Where(component => component.Id != tasks.Id),
+        Assert.All(forums.Children!.Where(component => component.Id != website.Id),
             component => Assert.Equal("operational", component.Status));
     }
 
@@ -1397,7 +1397,7 @@ public sealed class StatusExperienceTests
             author: "maintainer"), [], Catalogue(), new() { GitHubTrustedAuthors = ["maintainer"] });
         Assert.Equal(2, records.Count);
         Assert.Equal(["mx.sitewatch.molyneux-me"], records.Single(record => record.SiteId == "mx").Components);
-        Assert.Equal(["xi.sitewatch.forums-web", "xi.sitewatch.forums-tasks"],
+        Assert.Equal(["xi.sitewatch.forums-web"],
             records.Single(record => record.SiteId == "xi").Components);
     }
 

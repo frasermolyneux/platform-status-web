@@ -148,6 +148,28 @@ public sealed class MonitoringAvailabilityTests
             binding => binding.Identity == "mx/mx.probe.travel-itinerary/mx.probe.travel-itinerary");
     }
 
+    [Fact]
+    public void RetiredForumTaskProbeIsAbsentWhileWebsiteAndCdnRemainMonitored()
+    {
+        var catalog = new StatusCatalog(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
+        var site = catalog.Get("xi");
+        var forums = Assert.Single(site.Components.Components, component => component.Id == "xi.service.forums");
+        Assert.Equal(["xi.sitewatch.forums-web", "xi.probe.cdn"], forums.Children.Select(component => component.Id));
+        Assert.Equal(["xi.sitewatch.forums-web"], site.Workloads["xi-forums"]);
+        Assert.DoesNotContain(site.Checks, check => check.Id == "xi.sitewatch.forums-tasks");
+        Assert.Contains(site.Checks, check => check.Id == "xi.sitewatch.forums-web" && check.Monitoring is not null);
+        Assert.Contains(site.Checks, check => check.Id == "xi.probe.cdn" && check.Monitoring is not null);
+
+        using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "contract", "status-monitoring-bindings.json")));
+        var bindings = fixture.RootElement.GetProperty("checks")
+            .Deserialize<MonitoringReference[]>(StatusJson.Options)!;
+        Assert.DoesNotContain(bindings,
+            binding => binding.Identity == "xi/xi.sitewatch.forums-tasks/xi.sitewatch.forums-tasks");
+        Assert.Contains(bindings,
+            binding => binding.Identity == "xi/xi.sitewatch.forums-web/xi.sitewatch.forums-web");
+    }
+
     private static readonly DateTimeOffset Now = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
     private static readonly CheckDefinition Check = new()
     {
