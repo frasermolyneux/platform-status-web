@@ -5,6 +5,7 @@ namespace MX.Platform.Status.App.Merging;
 public sealed class ImpactPropagation
 {
     private readonly Dictionary<string, (string? Parent, string Maximum)> components = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> retired = new(StringComparer.OrdinalIgnoreCase);
 
     public ImpactPropagation(ComponentsDocument document)
     {
@@ -14,8 +15,20 @@ public sealed class ImpactPropagation
     private void Add(Component component, string? parent)
     {
         components.Add(component.Id, (parent, component.MaximumParentImpact));
+        if (component.Retired && !component.Hidden) retired.Add(component.Id);
         foreach (var child in component.Children) Add(child, component.Id);
     }
+
+    public IEnumerable<string> RetiredDescendants(string target) => retired.Where(id =>
+    {
+        var current = id;
+        while (components.TryGetValue(current, out var component) && component.Parent is { } parent)
+        {
+            if (parent.Equals(target, StringComparison.OrdinalIgnoreCase)) return true;
+            current = parent;
+        }
+        return false;
+    });
 
     public string Contribute(string target, string source, string status)
     {

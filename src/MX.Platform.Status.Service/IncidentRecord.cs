@@ -150,7 +150,7 @@ public sealed record IncidentCommand(
     DateTimeOffset? ScheduledStart = null, DateTimeOffset? ScheduledEnd = null, IncidentEvidence? Evidence = null,
     string Delivery = "local", Guid? OperationId = null)
 {
-    public string? Validate(SiteDefinition site)
+    public string? Validate(SiteDefinition site, bool allowRetiredResolved = false)
     {
         var known = StatusCatalog.Flatten(site.Components.Components).Select(c => c.Id).ToHashSet();
         if (Delivery is not ("local" or "github") || Delivery == "github" && (!OperationId.HasValue || OperationId == Guid.Empty))
@@ -160,6 +160,9 @@ public sealed record IncidentCommand(
         if (Components is null || Components.Length == 0 || Components.Any(id => !known.Contains(id))
             || Components.Distinct().Count() != Components.Length)
             return "Select one or more distinct components from this site.";
+        var retired = StatusCatalog.Flatten(site.Components.Components).Where(c => c.Retired).Select(c => c.Id).ToHashSet();
+        if (Components.Any(retired.Contains) && (!allowRetiredResolved || State != IncidentState.Resolved))
+            return "Retired components can only be imported for resolved historical incidents.";
         if (!Enum.IsDefined(Severity) || !Enum.IsDefined(State))
             return "Invalid incident severity or state.";
         if (HasInvalidEvidence())

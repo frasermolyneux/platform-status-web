@@ -16,6 +16,7 @@ public sealed record Component
     public string? Link { get; init; }
     public string Kind { get; init; } = "leaf";
     public bool Hidden { get; init; }
+    public bool Retired { get; init; }
     public string MaximumParentImpact { get; init; } = "outage";
     public string HistoryClassification { get; init; } = "availability";
     public List<string> Tags { get; init; } = [];

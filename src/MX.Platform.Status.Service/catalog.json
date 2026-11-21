@@ -79,6 +79,7 @@
       "components": [
         {"id": "xi.service.forums", "name": "Community Forums", "kind": "group", "children": [
           {"id": "xi.sitewatch.forums-web", "name": "Community Forums Website", "kind": "leaf", "source": {"kind": "monitoring"}},
+          {"id": "xi.sitewatch.forums-tasks", "name": "Background Tasks", "kind": "leaf", "retired": true},
           {"id": "xi.probe.cdn", "name": "Community CDN", "kind": "leaf", "source": {"kind": "monitoring"}}
         ]},
         {"id": "xi.service.portal", "name": "XtremeIdiots Portal", "kind": "group", "children": [

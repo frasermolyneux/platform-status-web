@@ -154,7 +154,9 @@ public sealed class MonitoringAvailabilityTests
         var catalog = new StatusCatalog(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
         var site = catalog.Get("xi");
         var forums = Assert.Single(site.Components.Components, component => component.Id == "xi.service.forums");
-        Assert.Equal(["xi.sitewatch.forums-web", "xi.probe.cdn"], forums.Children.Select(component => component.Id));
+        Assert.Equal(["xi.sitewatch.forums-web", "xi.probe.cdn"],
+            forums.Children.Where(component => !component.Retired).Select(component => component.Id));
+        Assert.True(Assert.Single(forums.Children, component => component.Id == "xi.sitewatch.forums-tasks").Retired);
         Assert.Equal(["xi.sitewatch.forums-web"], site.Workloads["xi-forums"]);
         Assert.DoesNotContain(site.Checks, check => check.Id == "xi.sitewatch.forums-tasks");
         Assert.Contains(site.Checks, check => check.Id == "xi.sitewatch.forums-web" && check.Monitoring is not null);

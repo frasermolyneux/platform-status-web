@@ -179,6 +179,8 @@ Missing observations are not counted as healthy; components without short-window
 data show no observations rather than substituting their daily history.
 
 Community Forums includes its Website and Community CDN.
+The retired Background Tasks component remains available as historical incident
+attribution only; it has no live status or monitoring check.
 
 XtremeIdiots Portal groups its Website, Repository APIs v1/v2, Servers Integration
 API, Server Events and GeoLocation Website. GeoLocation remains a top-level MX

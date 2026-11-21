@@ -20,7 +20,8 @@ internal static class RecentHistory
         ComponentDto Build(ComponentDto component, string[] ancestors)
         {
             var children = component.Children?.Select(child => Build(child, [.. ancestors, component.Id])).ToArray();
-            var scope = Descendants(component).Concat(ancestors).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var scope = Descendants(component).Concat(ancestors)
+                .Concat(propagation?.RetiredDescendants(component.Id) ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var leaves = Leaves(component).ToArray();
             var samples = leaves.SelectMany(leaf => indexed[leaf]).ToArray();
             return component with
