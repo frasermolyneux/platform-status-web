@@ -62,7 +62,7 @@ public static class GitHubIssueParser
             }
             var command = new IncidentCommand(title, components, severity, state, sourceBody.Text, published,
                 ScheduledStart: schedule?.ScheduledStart, ScheduledEnd: schedule?.ScheduledEnd);
-            if (command.Validate(site) is { } error) throw new InvalidDataException(error);
+            if (command.Validate(site, allowRetiredResolved: true) is { } error) throw new InvalidDataException(error);
             records.Add(new()
             {
                 SiteId = site.Site.Id,

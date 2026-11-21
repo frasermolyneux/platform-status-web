@@ -43,7 +43,7 @@ public static class HealthDiagnostics
             .ToDictionary(group => group.Key, group => group.MaxBy(probe => probe.ObservedAt)!);
         var publicComponents = Flatten(publication.Components).ToDictionary(component => component.Id);
         var observations = projectedTelemetry ?? ComponentChecks.Build(site, siteProbes, signals ?? []);
-        return StatusCatalog.PublicComponents(site.Components.Components).Select(component =>
+        return StatusCatalog.PublicComponents(site.Components.Components).Where(component => !component.Retired).Select(component =>
         {
             publicComponents.TryGetValue(component.Id, out var published);
             byId.TryGetValue(component.Id, out var probe);

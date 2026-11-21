@@ -4,6 +4,28 @@ import { JSDOM } from 'jsdom';
 import { affectedComponents, evidenceCards, incidentSeed } from '../src/client/evidence';
 import type { ComponentDto, StatusResponse } from '../src/client/api';
 
+test('retired incident scope remains visible without presenting a live component', async () => {
+  const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
+  for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)
+    Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
+  const { renderIncident, renderComponent } = await import('../src/client/render');
+  const data: StatusResponse = {
+    schemaVersion: 1, site: { id: 'xi', displayName: 'XI status' }, generatedAt: '2026-10-26T00:00:00Z',
+    summary: { status: 'operational' }, maintenance: [],
+    components: [{ id: 'forums', name: 'Community Forums', kind: 'group', status: 'operational',
+      uptimeWindowDays: 90, uptimeRatio: 1, history: [{ date: '2026-10-25', status: 'outage', incidentIds: [3] }],
+      children: [{ id: 'web', name: 'Website', kind: 'leaf', status: 'operational', uptimeWindowDays: 90, uptimeRatio: 1, history: [] }] }],
+    incidents: [{ id: 3, title: 'Background tasks outage', components: ['xi.sitewatch.forums-tasks'],
+      severity: 'outage', state: 'resolved', url: '/incident/3', createdAt: '2026-10-25T08:12:00Z', updates: [] }],
+  };
+  renderIncident(data, '3');
+  assert.match(document.querySelector('.affected-services')?.textContent || '', /forums tasks \(retired\)/);
+  assert.doesNotMatch(document.querySelector('.affected-services')?.textContent || '', /Website/);
+  renderComponent(data, 'forums');
+  assert.match(document.querySelector('.incidents-section')?.textContent || '', /Background tasks outage/);
+  assert.equal(document.querySelectorAll('.panel .component-row').length, 1);
+});
+
 test('component headings and charts use count-weighted availability for the selected range', async () => {
   const dom = new JSDOM('<main id="app"></main>', { url: 'https://status.xtremeidiots.com/' });
   for (const name of ['window', 'document', 'location', 'history', 'HTMLElement'] as const)

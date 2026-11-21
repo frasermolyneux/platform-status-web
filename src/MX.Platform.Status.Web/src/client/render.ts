@@ -137,8 +137,12 @@ function affectedServices(ids: string[], data: StatusResponse): string {
   const components = flattenComponents(data.components).filter(component => ids.includes(component.id));
   const leaves = components.filter(component => component.kind === 'leaf');
   const affected = leaves.length ? leaves : components;
-  return `<p class="affected-services"><strong>Affected components:</strong> ${affected.map(component =>
-    `<a href="/component/${escapeHtml(component.id)}">${escapeHtml(component.name)}</a>`).join(', ') || 'See incident updates'}</p>`;
+  const known = new Set(components.map(component => component.id));
+  const retired = ids.filter(id => !known.has(id)).map(id => `${id.split('.').pop()?.replaceAll('-', ' ') ?? id} (retired)`);
+  const names = affected.map(component =>
+    `<a href="/component/${escapeHtml(component.id)}">${escapeHtml(component.name)}</a>`);
+  names.push(...retired.map(escapeHtml));
+  return `<p class="affected-services"><strong>Affected components:</strong> ${names.join(', ') || 'See incident updates'}</p>`;
 }
 
 function issueLink(incident: IncidentDto): string {

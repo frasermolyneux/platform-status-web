@@ -70,9 +70,7 @@ public sealed class PublicationWorker(
         await RecordHistoryAsync(publisherLock, ct);
         foreach (var site in catalog.Sites)
         {
-            var publicIds = StatusCatalog.PublicComponents(site.Components.Components).Select(c => c.Id).ToHashSet();
-            var incidents = (await database.ReadIncidentsAsync(catalog, site, true, ct))
-                .Where(i => i.Published && i.Components.All(publicIds.Contains)).ToArray();
+            var incidents = PublicIncidents(site, await database.ReadIncidentsAsync(catalog, site, true, ct));
             var live = catalog.ProjectTelemetry(site, telemetry);
             var history = await database.ReadHistoryAsync(site, ct);
             var publication = new StatusMerger().Merge(site.Snapshot, live, history,
@@ -97,6 +95,16 @@ public sealed class PublicationWorker(
                 RememberPublication(publication);
             }
         }
+    }
+
+    internal static IncidentRecord[] PublicIncidents(SiteDefinition site, IEnumerable<IncidentRecord> records)
+    {
+        var components = StatusCatalog.PublicComponents(site.Components.Components).ToArray();
+        var publicIds = components.Select(component => component.Id).ToHashSet();
+        var retiredIds = components.Where(component => component.Retired).Select(component => component.Id).ToHashSet();
+        return records.Where(incident => incident.Published && incident.Components.All(publicIds.Contains)
+            && (!incident.Components.Any(retiredIds.Contains)
+                || incident.State == IncidentState.Resolved && incident.ResolvedAt.HasValue)).ToArray();
     }
 
     private static string Fingerprint(StatusApiResponse publication) => Convert.ToHexString(SHA256.HashData(

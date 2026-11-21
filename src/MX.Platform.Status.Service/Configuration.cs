@@ -112,6 +112,7 @@ public sealed class StatusCatalog
             throw new InvalidOperationException("Status component IDs must be unique within a site.");
         if (components.Any(component => component.Kind is not ("group" or "leaf")
             || component.Kind == "leaf" && component.Children.Count > 0
+            || component.Retired && (component.Kind != "leaf" || component.Hidden)
             || component.MaximumParentImpact is not ("outage" or "degraded")
             || component.HistoryClassification is not ("availability" or "impact")))
             throw new InvalidOperationException("Services contain components; leaf components cannot contain children.");
@@ -119,7 +120,7 @@ public sealed class StatusCatalog
         ValidateSharedComponents(definition);
         if (definition.Workloads.Any(workload => string.IsNullOrWhiteSpace(workload.Key)
             || workload.Value.Length == 0 || workload.Value.Distinct().Count() != workload.Value.Length
-            || workload.Value.Any(id => !PublicComponents(definition.Components.Components).Any(c => c.Id == id))))
+            || workload.Value.Any(id => !PublicComponents(definition.Components.Components).Any(c => c.Id == id && !c.Retired))))
             throw new InvalidOperationException("Workload mappings must name distinct public components from their own site.");
     }
 
@@ -148,7 +149,7 @@ public sealed class StatusCatalog
         if (check.SharedId is not null && (string.IsNullOrWhiteSpace(check.SharedId)
             || !definition.SharedComponents.ContainsKey(check.Component)))
             throw new InvalidOperationException("A shared check identity requires an explicitly shared component.");
-        if (!components.Any(c => c.Id == check.Component && c.Kind == "leaf") || string.IsNullOrWhiteSpace(check.Id)
+        if (!components.Any(c => c.Id == check.Component && c.Kind == "leaf" && !c.Retired) || string.IsNullOrWhiteSpace(check.Id)
             || string.IsNullOrWhiteSpace(check.Name) || check.ExpectedIntervalSeconds is < 30 or > 86400
             || check.Kind != "telemetry" || check.Method != "GET")
             throw new InvalidOperationException("Checks require a unique identity, component, name, supported kind and observation interval.");
