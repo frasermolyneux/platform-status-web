@@ -8,7 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MX.Platform.Status.App\MX.Platform.Status.App.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.15" />
-    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="Npgsql" Version="11.0.0" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="MX.Platform.Status.Tests" />
