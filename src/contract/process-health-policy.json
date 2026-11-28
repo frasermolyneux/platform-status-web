@@ -19,9 +19,11 @@
     { "name": "GenerateLatestBansFile", "maximumAgeSeconds": 1200, "checkId": "xi.process.ban-sync.generation" },
     { "name": "RunConnectedPlayerTagReconciliationSync", "maximumAgeSeconds": 900, "checkId": "xi.process.portal-sync.jobs" },
     { "name": "RunMapRotationCleanup", "maximumAgeSeconds": 7200, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunServerObservedRotationSync", "maximumAgeSeconds": 7200, "checkId": "xi.process.portal-sync.jobs" },
     { "name": "RunUserProfileForumsSync", "maximumAgeSeconds": 7200, "checkId": "xi.process.portal-sync.jobs" },
     { "name": "RunMapRedirectSync", "maximumAgeSeconds": 93600, "checkId": "xi.process.portal-sync.jobs" },
     { "name": "RunRedirectToGameServerMapSync", "maximumAgeSeconds": 93600, "checkId": "xi.process.portal-sync.jobs" },
+    { "name": "RunServerObservedRotationCleanup", "maximumAgeSeconds": 93600, "checkId": "xi.process.portal-sync.jobs" },
     { "name": "RunMapImageSync", "maximumAgeSeconds": 691200, "checkId": "xi.process.portal-sync.jobs" }
   ]
 }
