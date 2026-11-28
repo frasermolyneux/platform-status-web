@@ -7,7 +7,8 @@ const dom = new JSDOM('<h1 id="site-title"></h1><main id="app"></main>', { url: 
 for (const name of ['window', 'document', 'location', 'history', 'Event'] as const)
   Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true });
 Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-await new Promise(resolve => setTimeout(resolve, 0));
+if (document.readyState !== 'complete')
+  await new Promise<void>(resolve => dom.window.addEventListener('load', () => resolve(), { once: true }));
 const routes = new Map<string, (params: Record<string, string>) => unknown>();
 const rendered: string[] = [];
 let markup: string | undefined;
